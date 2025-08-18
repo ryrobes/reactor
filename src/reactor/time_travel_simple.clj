@@ -34,7 +34,8 @@
                prev-entry (nth history-vec (- (count history-vec) 2))]
            (swap! (:history this) pop)
            (swap! (:future this) conj current-entry)
-           ;; Don't update internal state - just return the previous state
+           ;; Update internal state AND return the previous state
+           (reset! (:state this) (:state prev-entry))
            (:state prev-entry))))))
   
   (redo!
@@ -43,7 +44,8 @@
      (when-let [next-entry (last @(:future this))]
        (swap! (:future this) pop)
        (swap! (:history this) conj next-entry)
-       ;; Don't update internal state - just return the next state
+       ;; Update internal state AND return the next state
+       (reset! (:state this) (:state next-entry))
        (:state next-entry))))
   
   (jump-to! [this target]
@@ -51,6 +53,7 @@
       ;; Jump to checkpoint
       (keyword? target)
       (when-let [checkpoint (get @(:checkpoints this) target)]
+        (reset! (:state this) (:state checkpoint))
         (:state checkpoint))
       
       ;; Jump to index
@@ -69,8 +72,10 @@
                 (let [entry (last @(:history this))]
                   (swap! (:history this) pop)
                   (swap! (:future this) conj entry))))
-            ;; Return the state at target position
-            (:state (nth @(:history this) target)))
+            ;; Update and return the state at target position
+            (let [target-state (:state (nth @(:history this) target))]
+              (reset! (:state this) target-state)
+              target-state))
           
           ;; Target is in future
           (>= target history-count)
@@ -81,8 +86,10 @@
               (when-let [entry (last @(:future this))]
                 (swap! (:future this) pop)
                 (swap! (:history this) conj entry)))
-            ;; Return the state at the new position
-            (:state (last @(:history this))))
+            ;; Update and return the state at the new position
+            (let [new-state (:state (last @(:history this)))]
+              (reset! (:state this) new-state)
+              new-state))
           
           :else nil))))
   

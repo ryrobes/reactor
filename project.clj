@@ -9,7 +9,12 @@
                  [ring/ring-core "1.10.0"]
                  [ring/ring-defaults "0.4.0"]
                  [compojure "1.7.0"]
-                 [cheshire "5.12.0"]]
+                 [cheshire "5.12.0"]
+                 ;; XTDB dependencies
+                 [com.xtdb/xtdb-core "1.24.4"]
+                 [com.xtdb/xtdb-rocksdb "1.24.4"]
+                 ;; SQL query support
+                 [honeysql "1.0.461"]]
   :plugins [[lein-cloverage "1.0.13"]
             [lein-shell "0.5.0"]
             [lein-ancient "0.6.15"]
