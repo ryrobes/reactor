@@ -54,16 +54,27 @@
 (reg-sub :history-info (fn [_ _] @history-info))
 (reg-sub :connected? (fn [_ _] @connected?))
 
+;; Forward declarations
+(declare get-history-info!)
+(declare get-sessions!)
+
 ;; Dispatch (async but looks sync!)
 (defn dispatch!
   "Dispatch an event - automatically handles server communication"
   [event]
+  (js/console.log "[CLIENT] dispatch! called with event:" (clj->js event))
   (-> (js/fetch (str (:server-url @config) "/api/dispatch?session=" (:session-id @config))
                 #js {:method "POST"
                      :headers #js {"Content-Type" "application/json"}
                      :body (js/JSON.stringify (clj->js event))})
       (.then #(.json %))
-      (.then #(reset! app-db (js->clj % :keywordize-keys true)))
+      (.then #(do
+                (js/console.log "[CLIENT] dispatch! response received")
+                (reset! app-db (js->clj % :keywordize-keys true))
+                ;; Update history info and sessions after dispatch
+                (get-history-info!)
+                ;; Update sessions to reflect new todo count
+                (get-sessions!)))
       (.catch #(js/console.error "Dispatch failed:" %))))
 
 (defn dispatch-sync!
@@ -78,18 +89,40 @@
                 (reset! app-db new-state)
                 new-state))))
 
+;; History/Time Travel Info
+(defn get-history-info!
+  "Get information about the current session's history"
+  []
+  (js/console.log "[CLIENT] get-history-info! called")
+  (-> (js/fetch (str (:server-url @config) "/api/history-info?" 
+                     "session=" (:session-id @config)))
+      (.then #(.json %))
+      (.then #(do
+                (js/console.log "[CLIENT] history-info received:" (clj->js %))
+                (reset! history-info (js->clj % :keywordize-keys true))))))
+
 ;; Time travel API
 (defn undo! []
+  (js/console.log "[CLIENT] undo! called")
   (-> (js/fetch (str (:server-url @config) "/api/undo?session=" (:session-id @config))
                 #js {:method "POST"})
       (.then #(.json %))
-      (.then #(reset! app-db (js->clj % :keywordize-keys true)))))
+      (.then #(do
+                (js/console.log "[CLIENT] undo! response received, updating app-db")
+                (reset! app-db (js->clj % :keywordize-keys true))
+                ;; Update history info to reflect new position
+                (get-history-info!)))))
 
 (defn redo! []
+  (js/console.log "[CLIENT] redo! called")
   (-> (js/fetch (str (:server-url @config) "/api/redo?session=" (:session-id @config))
                 #js {:method "POST"})
       (.then #(.json %))
-      (.then #(reset! app-db (js->clj % :keywordize-keys true)))))
+      (.then #(do
+                (js/console.log "[CLIENT] redo! response received, updating app-db")
+                (reset! app-db (js->clj % :keywordize-keys true))
+                ;; Update history info to reflect new position
+                (get-history-info!)))))
 
 ;; SQL Queries (!!)
 (defn q
@@ -102,7 +135,6 @@
       (.then #(.json %))
       (.then #(js->clj % :keywordize-keys true))))
 
-;; Session Management
 ;; Forward declarations for functions defined later
 (declare init!)
 (declare disconnect!)
@@ -110,49 +142,55 @@
 (defn get-sessions!
   "Fetch all available sessions"
   []
+  (js/console.log "[CLIENT] get-sessions! called")
   (-> (js/fetch (str (:server-url @config) "/api/sessions"))
       (.then #(.json %))
-      (.then #(reset! sessions (js->clj % :keywordize-keys true)))))
+      (.then #(do
+                (js/console.log "[CLIENT] Sessions received:" (clj->js %))
+                (reset! sessions (js->clj % :keywordize-keys true))))
+      (.catch #(js/console.error "[CLIENT] Failed to get sessions:" %))))
 
 (defn switch-session!
   "Switch to a different session"
   [session-id]
+  (js/console.log "[CLIENT] Switching to session:" session-id)
   (disconnect!)
   (configure! {:session-id session-id})
-  (init!))
+  (init!)
+  ;; Update sessions list and history info for the new session
+  (get-sessions!)
+  (get-history-info!))
 
 (defn create-session!
   "Create a new session with optional initial state"
   ([session-id]
    (create-session! session-id {}))
   ([session-id initial-state]
+   (js/console.log "[CLIENT] Creating session:" session-id)
    (-> (js/fetch (str (:server-url @config) "/api/create-session")
                  #js {:method "POST"
                       :headers #js {"Content-Type" "application/json"}
                       :body (js/JSON.stringify (clj->js {:session-id session-id
                                                           :initial-state initial-state}))})
        (.then #(.json %))
-       (.then #(switch-session! session-id)))))
-
-;; History/Time Travel Info
-(defn get-history-info!
-  "Get information about the current session's history"
-  []
-  (-> (js/fetch (str (:server-url @config) "/api/history-info?" 
-                     "session=" (:session-id @config)))
-      (.then #(.json %))
-      (.then #(reset! history-info (js->clj % :keywordize-keys true)))))
+       (.then #(do
+                 (js/console.log "[CLIENT] Session created, switching to it")
+                 (switch-session! session-id))))))
 
 (defn jump-to-history!
   "Jump to a specific point in history"
   [index]
-  (-> (js/fetch (str (:server-url @config) "/api/jump-to-history")
+  (js/console.log "[CLIENT] jump-to-history! called with index:" index)
+  (-> (js/fetch (str (:server-url @config) "/api/jump-to-history?session=" (:session-id @config))
                 #js {:method "POST"
                      :headers #js {"Content-Type" "application/json"}
-                     :body (js/JSON.stringify (clj->js {:session-id (:session-id @config)
-                                                        :index index}))})
+                     :body (js/JSON.stringify (clj->js {:index index}))})
       (.then #(.json %))
-      (.then #(reset! app-db (js->clj % :keywordize-keys true)))))
+      (.then #(do
+                (js/console.log "[CLIENT] jump-to-history! response received, state:" (clj->js %))
+                (reset! app-db (js->clj % :keywordize-keys true))
+                ;; Update history info to reflect new position
+                (get-history-info!)))))
 
 ;; Initialize and connect
 (defn init! 
@@ -174,6 +212,7 @@
    (let [es (js/EventSource. (str (:server-url @config) "/api/subscribe?session=" (:session-id @config)))]
      (set! (.-onmessage es)
            (fn [e]
+             (js/console.log "[CLIENT] SSE message received:" (.-data e))
              (reset! app-db (js->clj (js/JSON.parse (.-data e)) :keywordize-keys true))
              (reset! connected? true)))
      (set! (.-onerror es)
@@ -190,4 +229,6 @@
   (when @event-source
     (.close @event-source)
     (reset! event-source nil)
-    (reset! connected? false)))
+    (reset! connected? false))
+  ;; Clear history info when disconnecting
+  (reset! history-info {}))

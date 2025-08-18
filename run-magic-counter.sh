@@ -116,7 +116,7 @@ while [ ! -f "resources/public/js/magic.js" ]; do
 done
 
 echo ""
-echo -e "${GREEN}✓ Client compiled!${NC}"
+echo -e "${GREEN}✓ Client compiling shortly...${NC}"
 echo ""
 echo -e "${GREEN}🎉 Open http://localhost:8080/magic-counter.html in your browser!${NC}"
 echo ""

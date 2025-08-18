@@ -101,7 +101,7 @@ while [ ! -f "resources/public/js/todo.js" ]; do
 done
 
 echo ""
-echo -e "${GREEN}✓ Client compiled!${NC}"
+echo -e "${GREEN}✓ Client compiling shortly...${NC}"
 echo ""
 echo -e "${GREEN}🎉 Open one of these in your browser:${NC}"
 echo -e "${GREEN}   Classic: http://localhost:8080/todo.html${NC}"

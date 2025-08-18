@@ -160,22 +160,48 @@
                         :height "24px"
                         :align-items "center"}}
            (doall
-            (for [i (range (min 20 (:total-states @history-info)))]
-              ^{:key i}
-              [:div {:style {:width "12px"
-                            :height (if (= i (:current-index @history-info)) "24px" "16px")
-                            :background (cond
-                                         (= i (:current-index @history-info)) "#2196f3"
-                                         (< i (:current-index @history-info)) "#90caf9"
-                                         :else "#e0e0e0")
-                            :border-radius "2px"
-                            :cursor "pointer"
-                            :transition "all 0.2s ease"}
-                     :title (str "Jump to state " (- (:total-states @history-info) i))
-                     :on-click #(r/jump-to-history! i)
-                     :on-mouse-enter #(set! (.-style.height ^js (.-currentTarget %)) "20px")
-                     :on-mouse-leave #(when-not (= i (:current-index @history-info))
-                                      (set! (.-style.height ^js (.-currentTarget %)) "16px"))}]))]])
+            (for [i (range 20)]
+              (let [;; i goes from 0 (leftmost) to 19 (rightmost)
+                    ;; We want: leftmost = oldest state, rightmost = newest state (index 0)
+                    total-states (:total-states @history-info)
+                    ;; How many ticks to actually show
+                    states-to-show (min 20 total-states)
+                    ;; Where do valid ticks start (for left-padding)
+                    start-offset (- 20 states-to-show)
+                    ;; Is this tick position valid?
+                    valid? (>= i start-offset)
+                    ;; Calculate the history index for this tick
+                    ;; The rightmost valid tick should be index 0 (newest)
+                    ;; As we go left, index increases (older states)
+                    ;; adjusted-pos is 0 for leftmost valid tick, states-to-show-1 for rightmost
+                    adjusted-pos (when valid? (- i start-offset))
+                    ;; Rightmost tick (highest adjusted-pos) = index 0
+                    ;; Leftmost tick (adjusted-pos 0) = index states-to-show-1
+                    history-index (when valid? (- (dec states-to-show) adjusted-pos))
+                    is-current? (and valid? (= history-index (:current-index @history-info)))
+                    ;; States with lower index than current are newer (can redo to them)
+                    is-future? (and valid? (< history-index (:current-index @history-info)))]
+                ^{:key i}
+                [:div {:style {:width "12px"
+                              :height (if is-current? "24px" "16px")
+                              :background (cond
+                                           (not valid?) "#ccc"
+                                           is-current? "#2196f3"
+                                           is-future? "#e0e0e0"  ;; Future states (can redo) are grey
+                                           :else "#90caf9")       ;; Past states (can undo) are light blue
+                              :border-radius "2px"
+                              :cursor (if valid? "pointer" "not-allowed")
+                              :opacity (if valid? 1 0.3)
+                              :transition "all 0.2s ease"}
+                       :title (when valid? (str "Jump to state " (- total-states history-index)))
+                       :on-click (when valid? 
+                                   #(do 
+                                      (js/console.log "Timeline tick clicked - jumping to index:" history-index)
+                                      (r/jump-to-history! history-index)))
+                       :on-mouse-enter (when valid? 
+                                        #(set! (.-style.height ^js (.-currentTarget %)) "20px"))
+                       :on-mouse-leave (when (and valid? (not is-current?))
+                                        #(set! (.-style.height ^js (.-currentTarget %)) "16px"))}])))]])
        
        ;; History list with preview
        (when-let [history (:history @history-info)]
@@ -278,8 +304,8 @@
 
 (defn ^:export init! []
   (r/init! {:server-url "http://localhost:4000"})
-  ;; Periodically update history info and sessions
-  (js/setInterval r/get-history-info! 2000)
-  (js/setInterval r/get-sessions! 3000)
+  ;; Get initial history info and sessions once
+  (r/get-history-info!)
+  (r/get-sessions!)
   ;; Use React 17 render for now as Reagent 1.2.0 doesn't fully support React 18
   (rdom/render [todo-app] (.getElementById js/document "app")))

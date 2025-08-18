@@ -41,10 +41,7 @@
     (let [path (:uri req)
           method (:request-method req)
           session-id (get-session-id req session-id-fn)
-          session (session/get-session session-id)
-          ;; Ensure initial state has computed filtered todos
-          _ (when (and session (not (:filtered-todos @session)))
-              (swap! session compute-initial-state))]
+          session (session/get-session session-id)]
       (wrap-cors
         (cond
           ;; CORS preflight

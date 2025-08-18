@@ -121,17 +121,26 @@
 (defn get-all-sessions
   "Get list of all active sessions"
   []
-  (let [node (or @default-node (xts/start-xtdb-node))
-        db (xt/db node)
-        ;; Query for all session entities
-        results (xt/q db '{:find [?id ?state]
-                           :where [[?e :session-id ?id]
-                                   [?e :state ?state]]})]
-    (mapv (fn [[id state]]
-            {:session-id id
-             :todo-count (count (:todos state {}))
-             :active true})
-          results)))
+  (let [;; Get sessions from memory first
+        active-sessions (for [[id session] @sessions]
+                         {:session-id id
+                          :todo-count (count (:todos @session {}))
+                          :active true})]
+    ;; If we have active sessions, return them
+    ;; Otherwise try to get from XTDB
+    (if (seq active-sessions)
+      (vec active-sessions)
+      (when-let [node @default-node]
+        (let [db (xt/db node)
+              ;; Query for all session entities
+              results (xt/q db '{:find [?id ?state]
+                                 :where [[?e :session-id ?id]
+                                         [?e :state ?state]]})]
+          (mapv (fn [[id state]]
+                  {:session-id id
+                   :todo-count (count (:todos state {}))
+                   :active true})
+                results))))))
 
 ;; Event Handlers
 ;; ==============
@@ -142,6 +151,8 @@
   "Register an event handler that receives and returns db"
   [event-id handler]
   (swap! event-handlers assoc event-id handler))
+
+(declare jump-to-history!)
 
 (defn dispatch
   "Dispatch an event to a session"
@@ -154,6 +165,9 @@
       (println "Found handler for" event-key)
       (when-let [session (get-session session-id)]
         (println "Current state before:" @session)
+        ;; Reset history index when new state is created
+        (swap! session-history-index assoc session-id 0)
+        ;; Now apply the new event
         (let [result (swap! session #(handler % (vec (rest event))))]
           (println "State after:" result)
           result)))))
@@ -164,16 +178,19 @@
 (defn jump-to-history!
   "Jump to a specific point in history"
   [session-id history-index]
+  (println "jump-to-history! called with session-id:" session-id "index:" history-index)
   (when-let [session (get-session session-id)]
     (let [entity-id (keyword "session" session-id)
           db (xt/db (:node session))
           history (vec (xt/entity-history db entity-id :desc))]
+      (println "History count:" (count history) "Requested index:" history-index)
       (when (and (>= history-index 0) (< history-index (count history)))
         (let [target-entry (nth history history-index)
               target-tx-time (::xt/tx-time target-entry)
               target-db (xt/db (:node session) target-tx-time)
               target-entity (xt/entity target-db entity-id)
               target-state (:state target-entity)]
+          (println "Jumping to history index" history-index "with state:" target-state)
           (when target-state
             (swap! session-history-index assoc session-id history-index)
             ;; Don't persist when jumping through history
@@ -185,12 +202,14 @@
   [session-id]
   (let [current-index (get @session-history-index session-id 0)
         new-index (inc current-index)]
+    (println "undo! current-index:" current-index "new-index:" new-index)
     (jump-to-history! session-id new-index)))
 
 (defn redo!
   "Redo to next state"
   [session-id]
   (let [current-index (get @session-history-index session-id 0)]
+    (println "redo! current-index:" current-index)
     (when (> current-index 0)
       (jump-to-history! session-id (dec current-index)))))
 
