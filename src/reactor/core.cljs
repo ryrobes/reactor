@@ -10,6 +10,8 @@
 (defonce app-db (r/atom {}))
 (defonce event-source (atom nil))
 (defonce connected? (r/atom false))
+(defonce sessions (r/atom []))
+(defonce history-info (r/atom {}))
 
 (defn configure! 
   "Set server URL and session ID"
@@ -46,11 +48,17 @@
 (reg-sub :db (fn [db _] db))
 (reg-sub :get (fn [db [path]] (get-in db path)))
 
+;; Built-in subscriptions for session management
+(reg-sub :session-id (fn [_ _] (:session-id @config)))
+(reg-sub :sessions (fn [_ _] @sessions))
+(reg-sub :history-info (fn [_ _] @history-info))
+(reg-sub :connected? (fn [_ _] @connected?))
+
 ;; Dispatch (async but looks sync!)
 (defn dispatch!
   "Dispatch an event - automatically handles server communication"
   [event]
-  (-> (js/fetch (str (:server-url @config) "/api/dispatch")
+  (-> (js/fetch (str (:server-url @config) "/api/dispatch?session=" (:session-id @config))
                 #js {:method "POST"
                      :headers #js {"Content-Type" "application/json"}
                      :body (js/JSON.stringify (clj->js event))})
@@ -72,13 +80,13 @@
 
 ;; Time travel API
 (defn undo! []
-  (-> (js/fetch (str (:server-url @config) "/api/undo")
+  (-> (js/fetch (str (:server-url @config) "/api/undo?session=" (:session-id @config))
                 #js {:method "POST"})
       (.then #(.json %))
       (.then #(reset! app-db (js->clj % :keywordize-keys true)))))
 
 (defn redo! []
-  (-> (js/fetch (str (:server-url @config) "/api/redo")
+  (-> (js/fetch (str (:server-url @config) "/api/redo?session=" (:session-id @config))
                 #js {:method "POST"})
       (.then #(.json %))
       (.then #(reset! app-db (js->clj % :keywordize-keys true)))))
@@ -94,6 +102,58 @@
       (.then #(.json %))
       (.then #(js->clj % :keywordize-keys true))))
 
+;; Session Management
+;; Forward declarations for functions defined later
+(declare init!)
+(declare disconnect!)
+
+(defn get-sessions!
+  "Fetch all available sessions"
+  []
+  (-> (js/fetch (str (:server-url @config) "/api/sessions"))
+      (.then #(.json %))
+      (.then #(reset! sessions (js->clj % :keywordize-keys true)))))
+
+(defn switch-session!
+  "Switch to a different session"
+  [session-id]
+  (disconnect!)
+  (configure! {:session-id session-id})
+  (init!))
+
+(defn create-session!
+  "Create a new session with optional initial state"
+  ([session-id]
+   (create-session! session-id {}))
+  ([session-id initial-state]
+   (-> (js/fetch (str (:server-url @config) "/api/create-session")
+                 #js {:method "POST"
+                      :headers #js {"Content-Type" "application/json"}
+                      :body (js/JSON.stringify (clj->js {:session-id session-id
+                                                          :initial-state initial-state}))})
+       (.then #(.json %))
+       (.then #(switch-session! session-id)))))
+
+;; History/Time Travel Info
+(defn get-history-info!
+  "Get information about the current session's history"
+  []
+  (-> (js/fetch (str (:server-url @config) "/api/history-info?" 
+                     "session=" (:session-id @config)))
+      (.then #(.json %))
+      (.then #(reset! history-info (js->clj % :keywordize-keys true)))))
+
+(defn jump-to-history!
+  "Jump to a specific point in history"
+  [index]
+  (-> (js/fetch (str (:server-url @config) "/api/jump-to-history")
+                #js {:method "POST"
+                     :headers #js {"Content-Type" "application/json"}
+                     :body (js/JSON.stringify (clj->js {:session-id (:session-id @config)
+                                                        :index index}))})
+      (.then #(.json %))
+      (.then #(reset! app-db (js->clj % :keywordize-keys true)))))
+
 ;; Initialize and connect
 (defn init! 
   "Initialize Reactor - sets up SSE and fetches initial state"
@@ -103,7 +163,7 @@
    (when opts (configure! opts))
    
    ;; Get initial state
-   (-> (js/fetch (str (:server-url @config) "/api/state"))
+   (-> (js/fetch (str (:server-url @config) "/api/state?session=" (:session-id @config)))
        (.then #(.json %))
        (.then #(reset! app-db (js->clj % :keywordize-keys true))))
    
@@ -111,7 +171,7 @@
    (when @event-source
      (.close @event-source))
    
-   (let [es (js/EventSource. (str (:server-url @config) "/api/subscribe"))]
+   (let [es (js/EventSource. (str (:server-url @config) "/api/subscribe?session=" (:session-id @config)))]
      (set! (.-onmessage es)
            (fn [e]
              (reset! app-db (js->clj (js/JSON.parse (.-data e)) :keywordize-keys true))

@@ -11,6 +11,28 @@
       (assoc-in [:headers "Access-Control-Allow-Methods"] "GET, POST, OPTIONS")
       (assoc-in [:headers "Access-Control-Allow-Headers"] "Content-Type")))
 
+(defn get-session-id 
+  "Extract session ID from request - checks query params first, then uses fallback fn"
+  [req session-id-fn]
+  (or (get-in req [:params :session])
+      (get-in req [:query-params "session"])
+      (when-let [query (:query-string req)]
+        (when-let [match (re-find #"session=([^&]+)" query)]
+          (second match)))
+      (session-id-fn req)))
+
+(defn compute-initial-state
+  "Compute initial state with filtered todos"
+  [state]
+  (let [todos (vals (:todos state {}))
+        filter-type (:filter state :all)]
+    (assoc state :filtered-todos
+           (case filter-type
+             :active (filter (complement :completed) todos)
+             :completed (filter :completed todos)
+             :all todos
+             todos))))
+
 (defn create-handler
   "Create a Ring handler with all the Reactor endpoints"
   [& {:keys [session-id-fn]
@@ -18,8 +40,11 @@
   (fn [req]
     (let [path (:uri req)
           method (:request-method req)
-          session-id (session-id-fn req)
-          session (session/get-session session-id)]
+          session-id (get-session-id req session-id-fn)
+          session (session/get-session session-id)
+          ;; Ensure initial state has computed filtered todos
+          _ (when (and session (not (:filtered-todos @session)))
+              (swap! session compute-initial-state))]
       (wrap-cors
         (cond
           ;; CORS preflight
@@ -30,13 +55,24 @@
           :else
           (case path
             "/api/state"
-            {:status 200 
-             :headers {"Content-Type" "application/json"}
-             :body (json/generate-string @session)}
+            (let [state @session]
+              (println "Sending state for session" session-id ":" state)
+              {:status 200 
+               :headers {"Content-Type" "application/json"}
+               :body (json/generate-string state)})
             
             "/api/dispatch" 
             (let [raw-event (json/parse-string (slurp (:body req)) true)
-                  event (vec (cons (keyword (first raw-event)) (rest raw-event)))]
+                  ;; Convert first element to keyword, and any filter keywords
+                  event-name (keyword (first raw-event))
+                  event-args (map (fn [x] 
+                                   (if (and (string? x) 
+                                           (contains? #{"all" "active" "completed"} x))
+                                     (keyword x)
+                                     x))
+                                 (rest raw-event))
+                  event (vec (cons event-name event-args))]
+              (println "Dispatching event:" event)
               (session/dispatch session-id event)
               {:status 200 
                :headers {"Content-Type" "application/json"}
@@ -74,15 +110,43 @@
                          (fn [_ _ _ new-state]
                            (http/send! channel (str "data: " (json/generate-string new-state) "\n\n") false))))
             
+            "/api/sessions"
+            {:status 200
+             :headers {"Content-Type" "application/json"}
+             :body (json/generate-string (session/get-all-sessions))}
+            
+            "/api/create-session"
+            (let [body (json/parse-string (slurp (:body req)) true)
+                  new-session-id (:session-id body)
+                  initial-state (:initial-state body {})]
+              (session/create-session! new-session-id initial-state)
+              {:status 200
+               :headers {"Content-Type" "application/json"}
+               :body (json/generate-string {:session-id new-session-id})})
+            
+            "/api/history-info"
+            {:status 200
+             :headers {"Content-Type" "application/json"}
+             :body (json/generate-string (session/get-history-info session-id))}
+            
+            "/api/jump-to-history"
+            (let [body (json/parse-string (slurp (:body req)) true)
+                  index (:index body)]
+              (session/jump-to-history! session-id index)
+              {:status 200
+               :headers {"Content-Type" "application/json"}
+               :body (json/generate-string @session)})
+            
             ;; 404
             {:status 404 :body "Not found"}))))))
 
 (defn start!
   "Start a Reactor server with your event handlers"
-  [& {:keys [port handlers session-id-fn init-fn]
+  [& {:keys [port handlers session-id-fn init-fn initial-state-fn]
       :or {port 4000
            handlers {}
-           session-id-fn (constantly "default")}}]
+           session-id-fn (constantly "default")
+           initial-state-fn (constantly {})}}]
   
   ;; Initialize XTDB
   (session/init!)

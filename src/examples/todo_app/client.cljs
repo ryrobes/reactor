@@ -1,171 +1,285 @@
 (ns examples.todo-app.client
-  (:require [reagent.core :as r]
+  "TODO app with the new clean Reactor API"
+  (:require [reactor.core :as r]
+            [reagent.core :as reagent]
             [reagent.dom :as rdom]
-            [clojure.string :as str]
-            [cljs.reader :as reader]))
+            [clojure.string :as str]))
 
-;; App state
-(defonce app-state (r/atom {:todos {}
-                             :filter :all
-                             :loading true}))
+;; Custom subscriptions
+(r/reg-sub :filtered-todos
+  (fn [db _]
+    ;; Use server-computed filtered todos if available, otherwise fallback to client computation
+    (if-let [filtered (:filtered-todos db)]
+      (do (js/console.log "Using server filtered todos:" (clj->js filtered))
+          filtered)
+      (let [todos (vals (:todos db {}))
+            filter-type (:filter db :all)]
+        (js/console.log "Client filtering - filter:" filter-type "todos:" (clj->js todos))
+        (case filter-type
+          :active (filter (complement :completed) todos)
+          :completed (filter :completed todos)
+          todos)))))
 
-;; Connect to server via SSE
-(defonce event-source 
-  (when (exists? js/EventSource)
-    (let [es (js/EventSource. "/subscribe?format=edn")]
-      (set! (.-onmessage es)
-            (fn [event]
-              (try
-                (let [data (reader/read-string (.-data event))
-                      old-state @app-state]
-                  (js/console.log "SSE data received:" (pr-str data))
-                  (js/console.log "Old state:" (pr-str old-state))
-                  (reset! app-state (assoc data :loading false))
-                  (js/console.log "New state after reset!:" (pr-str @app-state))
-                  ;; Force re-render
-                  (r/flush))
-                (catch :default e
-                  (js/console.error "Failed to parse SSE data:" e)))))
-      (set! (.-onerror es)
-            (fn [_]
-              (js/console.error "SSE connection error")))
-      (set! (.-onopen es)
-            (fn [_]
-              (js/console.log "Connected to server via SSE")))
-      es)))
+(r/reg-sub :todo-stats
+  (fn [db _]
+    (let [todos (vals (:todos db {}))]
+      {:total (count todos)
+       :active (count (filter (complement :completed) todos))
+       :completed (count (filter :completed todos))})))
 
-;; Forward declare
-(declare load-state!)
-
-;; Dispatch to server
-(defn dispatch! [event]
-  (js/console.log "Dispatching event:" (pr-str event))
-  (-> (js/fetch "/api/dispatch"
-                #js {:method "POST"
-                     :headers #js {"Content-Type" "application/edn"}
-                     :body (pr-str event)})
-      (.then (fn [response]
-               (if (.-ok response)
-                 (do
-                   (js/console.log "Event dispatched successfully:" (pr-str event))
-                   ;; Manually reload state after dispatch for now
-                   (js/console.log "Loading state after dispatch...")
-                   (load-state!))
-                 (js/console.error "Dispatch failed with status:" (.-status response)))))
-      (.catch (fn [error]
-                (js/console.error "Network error during dispatch:" error)))))
-
-;; Load initial state
-(defn load-state! []
-  (js/console.log "Loading state from server...")
-  (-> (js/fetch "/api/state")
-      (.then (fn [response] 
-               (if (.-ok response)
-                 (.text response)
-                 (throw (js/Error. (str "Failed to load state: " (.-status response)))))))
-      (.then (fn [text]
-               (js/console.log "Raw state text:" text)
-               (let [data (reader/read-string text)]
-                 (js/console.log "Parsed state data:" (pr-str data))
-                 (reset! app-state (assoc data :loading false))
-                 (js/console.log "App state after load:" (pr-str @app-state))
-                 (r/flush))))
-      (.catch (fn [error]
-                (js/console.error "Failed to load initial state:" error)
-                (swap! app-state assoc :loading false :error true)))))
+(r/reg-sub :all-completed?
+  (fn [db _]
+    (let [todos (vals (:todos db {}))]
+      (and (seq todos)
+           (every? :completed todos)))))
 
 ;; Components
 (defn todo-input []
-  (let [val (r/atom "")]
+  (let [value (reagent/atom "")]
     (fn []
-      [:div.todo-input
-       [:input.new-todo
-        {:type "text"
-         :placeholder "What needs to be done?"
-         :value @val
-         :on-change #(reset! val (-> % .-target .-value))
-         :on-key-down
-         (fn [e]
-           (when (= (.-key e) "Enter")
-             (when-not (str/blank? @val)
-               (dispatch! [:add-todo @val])
-               (reset! val ""))))}]])))
-
-(defn todo-item [{:keys [id text completed]}]
-  [:li {:class (when completed "completed")}
-   [:div.view
-    [:input.toggle
-     {:type "checkbox"
-      :checked completed
-      :on-change #(dispatch! [:toggle-todo id])}]
-    [:label text]
-    [:button.destroy
-     {:on-click #(dispatch! [:delete-todo id])}]]])
-
-(defn todo-list []
-  (let [{:keys [todos]} @app-state
-        current-filter (:filter @app-state)
-        visible-todos (case current-filter
-                        :active (into {} (filter #(not (:completed (val %))) todos))
-                        :completed (into {} (filter #(:completed (val %)) todos))
-                        :all todos)]
-    [:ul.todo-list
-     (for [[id todo] visible-todos]
-       ^{:key id}
-       [todo-item todo])]))
-
-(defn footer-controls []
-  (let [{:keys [todos]} @app-state
-        current-filter (:filter @app-state)
-        active-count (count (filter #(not (:completed (val %))) todos))
-        completed-count (count (filter #(:completed (val %)) todos))]
-    [:footer.footer
-     [:span.todo-count
-      [:strong active-count] " " (if (= active-count 1) "item" "items") " left"]
-     [:ul.filters
-      [:li [:a {:href "#"
-                :class (when (= current-filter :all) "selected")
-                :on-click #(dispatch! [:set-filter :all])} "All"]]
-      [:li [:a {:href "#"
-                :class (when (= current-filter :active) "selected")
-                :on-click #(dispatch! [:set-filter :active])} "Active"]]
-      [:li [:a {:href "#"
-                :class (when (= current-filter :completed) "selected")
-                :on-click #(dispatch! [:set-filter :completed])} "Completed"]]]
-     (when (pos? completed-count)
-       [:button.clear-completed
-        {:on-click #(dispatch! [:clear-completed])}
-        "Clear completed"])]))
-
-(defn todo-app []
-  (let [{:keys [loading error]} @app-state]
-    [:div
-     [:section.todoapp
       [:header.header
        [:h1 "todos"]
-       [todo-input]]
-      (cond
-        loading [:div {:style {:text-align "center" :padding "20px"}} 
-                 "Loading..."]
-        error [:div {:style {:text-align "center" :padding "20px" :color "red"}} 
-               "Failed to connect to server"]
-        :else
-        [:<>
-         [:section.main
-          [:input#toggle-all.toggle-all
-           {:type "checkbox"
-            :on-change #(dispatch! [:toggle-all])}]
-          [:label {:for "toggle-all"} "Mark all as complete"]
-          [todo-list]]
-         [footer-controls]])]
-     [:footer.info
-      [:p "Double-click to edit a todo"]
-      [:p "Created with Reactor - Server-side Re-frame"]
-      [:p "Part of " [:a {:href "http://todomvc.com"} "TodoMVC"]]]]))
+       [:input.new-todo
+        {:placeholder "What needs to be done?"
+         :value @value
+         :on-change #(reset! value (-> % .-target .-value))
+         :on-key-down #(when (= (.-which %) 13)
+                        (let [text (str/trim @value)]
+                          (when (seq text)
+                            (r/dispatch! [:add-todo {:id (random-uuid)
+                                                    :text text
+                                                    :completed false}])
+                            (reset! value ""))))}]])))
 
-(defn init! []
-  (js/console.log "Initializing Todo app...")
-  (load-state!)
-  (rdom/render [todo-app]
-               (js/document.getElementById "app"))
-  (js/console.log "Todo app initialized!"))
+(defn todo-item [{:keys [id text completed]}]
+  (let [editing (reagent/atom false)
+        edit-value (reagent/atom text)]
+    (fn [{:keys [id text completed]}]
+      [:li {:class (str (when completed "completed ")
+                          (when @editing "editing"))
+            :style {:position "relative"}}
+       [:div.view
+        [:input.toggle
+         {:type "checkbox"
+          :checked completed
+          :on-change #(r/dispatch! [:toggle-todo id])}]
+        [:label
+         {:on-double-click #(do (reset! editing true)
+                               (reset! edit-value text))}
+         text]
+        [:button.destroy
+         {:on-click #(r/dispatch! [:delete-todo id])}
+         "×"]]
+       (when @editing
+         [:input.edit
+          {:value @edit-value
+           :on-change #(reset! edit-value (-> % .-target .-value))
+           :on-blur #(do (r/dispatch! [:edit-todo id @edit-value])
+                        (reset! editing false))
+           :on-key-down #(case (.-which %)
+                          13 (do (r/dispatch! [:edit-todo id @edit-value])
+                                (reset! editing false))
+                          27 (reset! editing false)
+                          nil)}])])))
+
+(defn todo-list []
+  (let [todos (r/subscribe [:filtered-todos])
+        all-completed? (r/subscribe [:all-completed?])]
+    (fn []
+      [:section.main
+       [:input#toggle-all.toggle-all
+        {:type "checkbox"
+         :checked @all-completed?
+         :on-change #(r/dispatch! [:toggle-all (not @all-completed?)])}]
+       [:label {:for "toggle-all"} "Mark all as complete"]
+       [:ul.todo-list
+        (doall
+         (for [todo @todos]
+           ^{:key (:id todo)}
+           [todo-item todo]))]])))
+
+(defn footer []
+  (let [stats (r/subscribe [:todo-stats])
+        filter-type (r/subscribe [:get [:filter]])]
+    (fn []
+      (when (pos? (:total @stats))
+        [:footer.footer
+         [:span.todo-count
+          [:strong (:active @stats)]
+          (str " " (if (= (:active @stats) 1) "item" "items") " left")]
+         [:ul.filters
+          [:li [:a {:href "#"
+                   :class (when (= @filter-type :all) "selected")
+                   :on-click #(r/dispatch! [:set-filter :all])} "All"]]
+          [:li [:a {:href "#"
+                   :class (when (= @filter-type :active) "selected")
+                   :on-click #(r/dispatch! [:set-filter :active])} "Active"]]
+          [:li [:a {:href "#"
+                   :class (when (= @filter-type :completed) "selected")
+                   :on-click #(r/dispatch! [:set-filter :completed])} "Completed"]]]
+         (when (pos? (:completed @stats))
+           [:button.clear-completed
+            {:on-click #(r/dispatch! [:clear-completed])}
+            "Clear completed"])]))))
+
+(defn time-travel-controls []
+  (let [history-info (r/subscribe [:history-info])
+        current-session (r/subscribe [:session-id])
+        preview-state (reagent/atom nil)]
+    (fn []
+      [:div.time-travel-controls
+       {:style {:position "fixed"
+                :top "10px"
+                :right "10px"
+                :background "white"
+                :border "1px solid #ddd"
+                :padding "15px"
+                :border-radius "5px"
+                :box-shadow "0 2px 4px rgba(0,0,0,0.1)"
+                :max-width "350px"}}
+       [:h3 {:style {:margin-top 0}} "Time Travel"]
+       [:div {:style {:margin-bottom "10px"}}
+        [:button {:on-click #(r/undo!)
+                  :disabled (not (:can-undo @history-info))
+                  :style {:margin-right "5px"}}
+         "↶ Undo"]
+        [:button {:on-click #(r/redo!)
+                  :disabled (not (:can-redo @history-info))
+                  :style {:margin-right "5px"}}
+         "↷ Redo"]]
+       
+       ;; Visual timeline with clickable ticks
+       (when (> (:total-states @history-info 0) 0)
+         [:div {:style {:margin "15px 0"}}
+          [:label {:style {:display "block" :font-size "12px" :color "#666" :margin-bottom "8px"}}
+           (str "State " (- (:total-states @history-info) (:current-index @history-info 0))
+                " of " (:total-states @history-info))]
+          ;; Clickable timeline ticks
+          [:div {:style {:display "flex" 
+                        :gap "2px"
+                        :height "24px"
+                        :align-items "center"}}
+           (doall
+            (for [i (range (min 20 (:total-states @history-info)))]
+              ^{:key i}
+              [:div {:style {:width "12px"
+                            :height (if (= i (:current-index @history-info)) "24px" "16px")
+                            :background (cond
+                                         (= i (:current-index @history-info)) "#2196f3"
+                                         (< i (:current-index @history-info)) "#90caf9"
+                                         :else "#e0e0e0")
+                            :border-radius "2px"
+                            :cursor "pointer"
+                            :transition "all 0.2s ease"}
+                     :title (str "Jump to state " (- (:total-states @history-info) i))
+                     :on-click #(r/jump-to-history! i)
+                     :on-mouse-enter #(set! (.-style.height (.-currentTarget %)) "20px")
+                     :on-mouse-leave #(when-not (= i (:current-index @history-info))
+                                      (set! (.-style.height (.-currentTarget %)) "16px"))}]))]])
+       
+       ;; History list with preview
+       (when-let [history (:history @history-info)]
+         [:div {:style {:max-height "200px" 
+                       :overflow-y "auto"
+                       :border "1px solid #eee"
+                       :border-radius "3px"
+                       :padding "5px"
+                       :margin-top "10px"}}
+          [:div {:style {:font-size "11px" :color "#999" :margin-bottom "5px"}}
+           "Click to jump to state:"]
+          (doall
+           (for [{:keys [index tx-time state]} (take 20 history)]
+             ^{:key index}
+             [:div {:style {:padding "3px 5px"
+                           :cursor "pointer"
+                           :font-size "11px"
+                           :background (if (= index (:current-index @history-info))
+                                        "#e3f2fd"
+                                        (if (= @preview-state index)
+                                          "#f5f5f5"
+                                          "white"))
+                           :border-bottom "1px solid #f0f0f0"}
+                    :on-mouse-enter #(reset! preview-state index)
+                    :on-mouse-leave #(reset! preview-state nil)
+                    :on-click #(r/jump-to-history! index)}
+              [:div {:style {:font-weight (when (= index (:current-index @history-info)) "bold")}}
+               (str "State " (- (:total-states @history-info) index))]
+              [:div {:style {:color "#666" :font-size "10px"}}
+               (str (count (:todos state {})) " todos, "
+                    "filter: " (:filter state :all))]
+              (when tx-time
+                [:div {:style {:color "#999" :font-size "9px"}}
+                 (if (string? tx-time)
+                   tx-time
+                   (try (.toLocaleTimeString tx-time)
+                        (catch js/Error _ (str tx-time))))])]))])])))
+
+(defn session-selector []
+  (let [sessions (r/subscribe [:sessions])
+        current-session (r/subscribe [:session-id])
+        connected? (r/subscribe [:connected?])
+        new-session-name (reagent/atom "")]
+    (reagent/create-class
+     {:component-did-mount
+      (fn [] (r/get-sessions!))
+      
+      :reagent-render
+      (fn []
+        [:div.session-selector
+         {:style {:position "fixed"
+                  :top "10px"
+                  :left "10px"
+                  :background "white"
+                  :border "1px solid #ddd"
+                  :padding "15px"
+                  :border-radius "5px"
+                  :box-shadow "0 2px 4px rgba(0,0,0,0.1)"}}
+         [:div {:style {:display "flex" :align-items "center" :margin-bottom "10px"}}
+          [:h3 {:style {:margin 0 :flex 1}} "Sessions"]
+          [:div {:style {:width "8px" 
+                        :height "8px" 
+                        :border-radius "50%"
+                        :background (if @connected? "#4caf50" "#f44336")
+                        :margin-left "10px"
+                        :title (if @connected? "Connected" "Disconnected")}}]]
+         [:div {:style {:margin-bottom "10px"}}
+          [:select {:value (or @current-session "default")
+                    :on-change #(r/switch-session! (-> % .-target .-value))
+                    :style {:width "100%" :padding "4px"}}
+           (doall
+            (for [session @sessions]
+              ^{:key (:session-id session)}
+              [:option {:value (:session-id session)}
+               (str (:session-id session) 
+                    " (" (:todo-count session 0) " todos)")]))]
+          ]
+         [:div
+          [:input {:type "text"
+                   :placeholder "New session name"
+                   :value @new-session-name
+                   :on-change #(reset! new-session-name (-> % .-target .-value))
+                   :style {:width "120px" :margin-right "5px"}}]
+          [:button {:on-click #(when (seq @new-session-name)
+                                (r/create-session! @new-session-name)
+                                (reset! new-session-name ""))}
+           "Create"]]])})))
+
+(defn todo-app []
+  [:div
+   [session-selector]
+   [time-travel-controls]
+   [:section.todoapp
+    [todo-input]
+    [todo-list]
+    [footer]]
+   [:footer.info
+    [:p "Double-click to edit a todo"]
+    [:p "Created with " [:a {:href "https://github.com/ryrobes/reactor"} "Reactor"]]]])
+
+(defn ^:export init! []
+  (r/init! {:server-url "http://localhost:4000"})
+  ;; Periodically update history info and sessions
+  (js/setInterval r/get-history-info! 2000)
+  (js/setInterval r/get-sessions! 3000)
+  ;; Use React 17 render for now as Reagent 1.2.0 doesn't fully support React 18
+  (rdom/render [todo-app] (.getElementById js/document "app")))
