@@ -173,9 +173,9 @@
                             :transition "all 0.2s ease"}
                      :title (str "Jump to state " (- (:total-states @history-info) i))
                      :on-click #(r/jump-to-history! i)
-                     :on-mouse-enter #(set! (.-style.height (.-currentTarget %)) "20px")
+                     :on-mouse-enter #(set! (.-style.height ^js (.-currentTarget %)) "20px")
                      :on-mouse-leave #(when-not (= i (:current-index @history-info))
-                                      (set! (.-style.height (.-currentTarget %)) "16px"))}]))]])
+                                      (set! (.-style.height ^js (.-currentTarget %)) "16px"))}]))]])
        
        ;; History list with preview
        (when-let [history (:history @history-info)]
