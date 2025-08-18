@@ -5,22 +5,28 @@
   (:import [java.time Duration]))
 
 (defn start-xtdb-node
-  "Start an in-memory XTDB node with optional file persistence"
+  "Start an in-memory XTDB node with SQL support and optional file persistence"
   ([]
    (start-xtdb-node nil))
   ([data-dir]
-   (if data-dir
-     ;; With persistence using RocksDB
-     (xt/start-node
-      {:xtdb/tx-log {:kv-store {:xtdb/module 'xtdb.rocksdb/->kv-store
-                                 :db-dir (io/file data-dir "tx-log")
-                                 :sync? true}}
-       :xtdb/document-store {:kv-store {:xtdb/module 'xtdb.rocksdb/->kv-store
-                                         :db-dir (io/file data-dir "doc-store")}}
-       :xtdb/index-store {:kv-store {:xtdb/module 'xtdb.rocksdb/->kv-store
-                                      :db-dir (io/file data-dir "index-store")}}})
-     ;; Pure in-memory for testing
-     (xt/start-node {}))))
+   (start-xtdb-node data-dir 1501))
+  ([data-dir sql-port]
+   (let [base-config (if data-dir
+                      ;; With persistence using RocksDB
+                      {:xtdb/tx-log {:kv-store {:xtdb/module 'xtdb.rocksdb/->kv-store
+                                                :db-dir (io/file data-dir "tx-log")
+                                                :sync? true}}
+                       :xtdb/document-store {:kv-store {:xtdb/module 'xtdb.rocksdb/->kv-store
+                                                        :db-dir (io/file data-dir "doc-store")}}
+                       :xtdb/index-store {:kv-store {:xtdb/module 'xtdb.rocksdb/->kv-store
+                                                     :db-dir (io/file data-dir "index-store")}}}
+                      ;; Pure in-memory
+                      {})
+         ;; Add SQL server configuration
+         sql-config (if sql-port
+                     (assoc base-config :xtdb.calcite/server {:port sql-port})
+                     base-config)]
+     (xt/start-node sql-config))))
 
 (defn stop-xtdb-node [node]
   (.close node))

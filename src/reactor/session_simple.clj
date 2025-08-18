@@ -3,7 +3,9 @@
    Each session gets its own isolated state universe with time-travel."
   (:require [reactor.xtdb-store :as xts]
             [xtdb.api :as xt]
-            [clojure.string :as str]))
+            [xtdb.calcite :as calcite]
+            [clojure.string :as str])
+  (:import [java.sql DriverManager]))
 
 ;; Session Management
 ;; ==================
@@ -13,9 +15,9 @@
 (defonce default-node (atom nil))
 
 (defn init!
-  "Initialize the session system with XTDB"
+  "Initialize the session system with XTDB and SQL support"
   []
-  (reset! default-node (xts/start-xtdb-node)))
+  (reset! default-node (xts/start-xtdb-node nil 1501)))
 
 (defprotocol ISession
   (get-state [this])
@@ -234,6 +236,84 @@
                            :state (:state entity)}))
                       (range)
                       history)})))
+
+;; SQL Query Execution
+;; ====================
+
+(declare execute-sql-query-fallback)
+
+(defn execute-sql-query
+  "Execute a SQL query using XTDB's native SQL support via JDBC."
+  [node sql-string & [params as-of]]
+  (try
+    ;; Use XTDB's Calcite JDBC connection for proper SQL execution
+    (with-open [conn (calcite/jdbc-connection node)]
+      (let [;; Handle time travel with AS OF SYSTEM TIME
+            sql-with-time (if as-of
+                           ;; Add AS OF SYSTEM TIME clause to the query
+                           (let [timestamp (java.util.Date. (- (System/currentTimeMillis) 
+                                                              (* 1000 60 (Integer/parseInt (str as-of)))))
+                                 ;; Format as ISO timestamp
+                                 iso-time (.format (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'") timestamp)]
+                             (str sql-string " AS OF SYSTEM TIME \"" iso-time "\""))
+                           sql-string)
+            stmt (.createStatement conn)
+            rs (.executeQuery stmt sql-with-time)
+            ;; Get metadata to know column names
+            metadata (.getMetaData rs)
+            col-count (.getColumnCount metadata)
+            col-names (vec (for [i (range 1 (inc col-count))]
+                            (keyword (.getColumnLabel metadata i))))
+            ;; Collect results
+            results (loop [rows []]
+                     (if (.next rs)
+                       (let [row (into {}
+                                      (for [i (range 1 (inc col-count))]
+                                        [(nth col-names (dec i))
+                                         (.getObject rs i)]))]
+                         (recur (conj rows row)))
+                       rows))]
+        {:results results}))
+    
+    (catch Exception e
+      (println "SQL execution error:" (.getMessage e))
+      ;; Fall back to Datalog conversion for basic queries if SQL server not available
+      (try
+        (execute-sql-query-fallback node sql-string params as-of)
+        (catch Exception e2
+          {:error (.getMessage e) :results []})))))
+
+(defn execute-sql-query-fallback
+  "Fallback SQL to Datalog conversion when SQL server is not available."
+  [node sql-string params as-of]
+  (let [db (if as-of
+            (xt/db node (java.util.Date. (- (System/currentTimeMillis) 
+                                           (* 1000 60 (Integer/parseInt (str as-of))))))
+            (xt/db node))
+        sql-lower (.toLowerCase sql-string)
+        ;; Basic SQL to Datalog conversion
+        query (cond
+               (re-find #"select\s+\*\s+from\s+sales" sql-lower)
+               '{:find [(pull ?e [*])]
+                 :where [[?e :table "sales"]]}
+               
+               (re-find #"select\s+\*\s+from\s+inventory" sql-lower)
+               '{:find [(pull ?e [*])]
+                 :where [[?e :table "inventory"]]}
+               
+               :else
+               '{:find [(pull ?e [*])]
+                 :where [[?e :xt/id]]})
+        
+        raw-results (vec (map first (xt/q db query)))]
+    
+    ;; Apply ORDER BY if present
+    (let [results (if-let [order-match (re-find #"order\s+by\s+(\w+)(?:\s+(desc|asc))?" sql-lower)]
+                   (let [order-field (keyword (second order-match))
+                         desc? (= "desc" (or (nth order-match 2) "asc"))]
+                     (sort-by order-field (if desc? > <) raw-results))
+                   raw-results)]
+      {:results results})))
 
 ;; Example Usage
 (comment

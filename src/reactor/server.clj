@@ -3,7 +3,9 @@
   (:require [reactor.session_simple :as session]
             [org.httpkit.server :as http]
             [cheshire.core :as json]
-            [xtdb.api :as xt]))
+            [xtdb.api :as xt]
+            [honeysql.core :as hsql]
+            [honeysql.format :as hfmt]))
 
 (defn wrap-cors [response]
   (-> response
@@ -98,46 +100,32 @@
             
             "/api/sql"
             (let [body (json/parse-string (slurp (:body req)) true)
-                  sql (:sql body)
+                  sql-input (:sql body)
                   params (:params body)
                   as-of (:as-of body)
-                  ;; Use the actual XTDB node to execute real queries
                   node (or (:node session) @session/default-node)
-                  ;; Execute the actual SQL query on XTDB
                   result (if node
                           (try
-                            ;; Call a function to execute SQL - this should be defined in rabbit server
-                            (let [db (if as-of
-                                      (xt/db node (java.util.Date. (- (System/currentTimeMillis) 
-                                                                     (* 1000 60 (Integer/parseInt (str as-of))))))
-                                      (xt/db node))
-                                  ;; Basic SQL to Datalog conversion
-                                  query (cond
-                                         (re-find #"(?i)SELECT\s+\*\s+FROM\s+sales" sql)
-                                         '{:find [(pull ?e [*])]
-                                           :where [[?e :table :sales]]}
-                                         
-                                         (re-find #"(?i)SELECT\s+\*\s+FROM\s+inventory" sql)
-                                         '{:find [(pull ?e [*])]
-                                           :where [[?e :table :inventory]]}
-                                         
-                                         :else
-                                         '{:find [(pull ?e [*])]
-                                           :where [[?e :xt/id]]})
-                                  raw-results (vec (map first (xt/q db query)))]
-                              ;; Handle ORDER BY
-                              (if-let [order-match (re-find #"(?i)ORDER\s+BY\s+(\w+)(?:\s+(DESC|ASC))?" sql)]
-                                (let [order-field (keyword (second order-match))
-                                      desc? (= "DESC" (.toUpperCase (or (nth order-match 2) "ASC")))]
-                                  (sort-by order-field (if desc? > <) raw-results))
-                                raw-results))
+                            ;; Check if it's a HoneySQL map or a SQL string
+                            (cond
+                              ;; HoneySQL map - render to SQL first
+                              (map? sql-input)
+                              (let [sql-string (first (hsql/format sql-input))]
+                                (session/execute-sql-query node sql-string params as-of))
+                              
+                              ;; SQL string - execute directly via XTDB SQL
+                              (string? sql-input)
+                              (session/execute-sql-query node sql-input params as-of)
+                              
+                              :else
+                              {:error "Invalid SQL input" :results []})
                             (catch Exception e
                               (println "SQL error:" (.getMessage e))
-                              []))
-                          [])]
+                              {:error (.getMessage e) :results []}))
+                          {:error "No XTDB node available" :results []})]
               {:status 200
                :headers {"Content-Type" "application/json"}
-               :body (json/generate-string {:results result})})
+               :body (json/generate-string result)})
             
             "/api/subscribe"
             (http/with-channel req channel

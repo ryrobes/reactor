@@ -251,7 +251,7 @@
                           :text-transform "uppercase"}} (name col)])]]
          [:tbody
           (for [row results]
-            ^{:key (:xt/id row)}
+            ^{:key (or (:ID row) (:id row) (:xt/id row) (str (hash row)))}
             [:tr
              (for [col (keys (first results))]
                ^{:key col}
