@@ -10,7 +10,7 @@
 ;; ===== Reactor Connection =====
 
 (defonce connection 
-  (reactor/connect! "http://localhost:3000"
+  (reactor/connect! "http://localhost:9000"
                     {:format :edn
                      :initial-state {:todos {}
                                     :filter :all}}))

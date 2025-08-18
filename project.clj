@@ -14,7 +14,10 @@
                  [com.xtdb/xtdb-core "1.24.4"]
                  [com.xtdb/xtdb-rocksdb "1.24.4"]
                  ;; SQL query support
-                 [honeysql "1.0.461"]]
+                 [honeysql "1.0.461"]
+                 ;; Logging for pgwire
+                 [org.clojure/tools.logging "1.2.4"]
+                 [ch.qos.logback/logback-classic "1.4.11"]]
   :plugins [[lein-cloverage "1.0.13"]
             [lein-shell "0.5.0"]
             [lein-ancient "0.6.15"]

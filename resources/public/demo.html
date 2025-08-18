@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reactor TODO App - Session Edition</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 600px;
+            padding: 30px;
+        }
+        
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .session-info {
+            font-size: 12px;
+            color: #666;
+            font-weight: normal;
+            padding: 5px 10px;
+            background: #f0f0f0;
+            border-radius: 20px;
+        }
+        
+        .status {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 5px;
+        }
+        
+        .status.connected {
+            background: #4caf50;
+            animation: pulse 2s infinite;
+        }
+        
+        .status.disconnected {
+            background: #f44336;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+        
+        .input-group {
+            display: flex;
+            margin: 20px 0;
+            gap: 10px;
+        }
+        
+        input[type="text"] {
+            flex: 1;
+            padding: 12px 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 50px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        button {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 50px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        button:active {
+            transform: translateY(0);
+        }
+        
+        .todo-item {
+            display: flex;
+            align-items: center;
+            padding: 15px;
+            background: #f9f9f9;
+            margin-bottom: 10px;
+            border-radius: 10px;
+            transition: background 0.3s;
+        }
+        
+        .todo-item:hover {
+            background: #f0f0f0;
+        }
+        
+        .todo-item input[type="checkbox"] {
+            margin-right: 15px;
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+        
+        .todo-text {
+            flex: 1;
+            font-size: 16px;
+            color: #333;
+        }
+        
+        .todo-text.completed {
+            text-decoration: line-through;
+            color: #999;
+        }
+        
+        .delete-btn {
+            background: #f44336;
+            color: white;
+            border: none;
+            padding: 5px 15px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .filters {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        
+        .filter-btn {
+            padding: 8px 16px;
+            background: #e0e0e0;
+            color: #666;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .filter-btn.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            padding: 15px;
+            background: #f0f0f0;
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        
+        .time-travel {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #e0e0e0;
+        }
+        
+        .time-travel h3 {
+            color: #666;
+            margin-bottom: 15px;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 50px;
+            color: #666;
+        }
+        
+        .sessions-panel {
+            position: fixed;
+            left: 20px;
+            top: 20px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            padding: 15px;
+            width: 200px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        
+        .sessions-panel h3 {
+            margin: 0 0 10px 0;
+            color: #333;
+            font-size: 14px;
+        }
+        
+        .session-item {
+            padding: 8px;
+            margin: 5px 0;
+            background: #f5f5f5;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s;
+        }
+        
+        .session-item:hover {
+            background: #e0e0e0;
+        }
+        
+        .session-item.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .time-scrubber {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 10px;
+        }
+        
+        .time-scrubber input[type="range"] {
+            width: 100%;
+            margin: 10px 0;
+        }
+        
+        .scrubber-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="sessions-panel" id="sessions-panel">
+        <h3>Sessions</h3>
+        <div id="sessions-list">Loading...</div>
+        <button onclick="createNewSession()" style="width: 100%; margin-top: 10px;">New Session</button>
+    </div>
+    
+    <div class="container">
+        <h1>
+            Reactor TODOs
+            <span class="session-info">
+                <span class="status disconnected" id="status"></span>
+                <span id="session-id">Connecting...</span>
+            </span>
+        </h1>
+        
+        <div id="app">
+            <div class="loading">Initializing session...</div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration
+        const SERVER_URL = 'http://localhost:9000';
+        let sessionId = null;
+        let state = { todos: {}, filter: 'all', next_id: 1 };
+        let eventSource = null;
+
+        // Initialize session
+        async function initSession() {
+            try {
+                // Check URL for demo parameter
+                const urlParams = new URLSearchParams(window.location.search);
+                const demoMode = urlParams.get('demo');
+                
+                if (demoMode) {
+                    // Use demo session
+                    sessionId = 'demo';
+                    const response = await fetch(`${SERVER_URL}/api/state?session-id=demo`);
+                    state = await response.json();
+                } else {
+                    // Check if we have a session in localStorage
+                    const storedSession = localStorage.getItem('reactor-session');
+                    
+                    if (storedSession) {
+                        // Try to restore session
+                        const response = await fetch(`${SERVER_URL}/api/state?session-id=${storedSession}`);
+                        if (response.ok) {
+                            sessionId = storedSession;
+                            state = await response.json();
+                        }
+                    }
+                    
+                    if (!sessionId) {
+                        // Create new session
+                        const response = await fetch(`${SERVER_URL}/api/init`, {
+                            method: 'POST'
+                        });
+                        const data = await response.json();
+                        sessionId = data['session-id'];
+                        state = data.state;
+                        localStorage.setItem('reactor-session', sessionId);
+                    }
+                }
+                
+                // Update UI
+                document.getElementById('session-id').textContent = sessionId;
+                setupSSE();
+                render();
+                
+            } catch (error) {
+                console.error('Failed to initialize session:', error);
+                document.getElementById('app').innerHTML = `
+                    <div style="color: red; padding: 20px;">
+                        Failed to connect to server. Make sure the server is running on port 9000.
+                    </div>
+                `;
+            }
+        }
+
+        // Setup Server-Sent Events for real-time updates
+        function setupSSE() {
+            if (eventSource) {
+                eventSource.close();
+            }
+            
+            eventSource = new EventSource(`${SERVER_URL}/api/subscribe?session-id=${sessionId}`);
+            
+            eventSource.onmessage = (event) => {
+                state = JSON.parse(event.data);
+                render();
+            };
+            
+            eventSource.onopen = () => {
+                document.getElementById('status').className = 'status connected';
+            };
+            
+            eventSource.onerror = () => {
+                document.getElementById('status').className = 'status disconnected';
+            };
+        }
+
+        // Dispatch event to server
+        window.dispatch = async function(event) {
+            try {
+                const response = await fetch(`${SERVER_URL}/api/dispatch?session-id=${sessionId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(event)
+                });
+                const data = await response.json();
+                state = data.state;
+                render();
+                updateHistory();  // Update history info after new state
+            } catch (error) {
+                console.error('Dispatch failed:', error);
+            }
+        }
+
+        // Undo last action
+        window.undo = async function() {
+            try {
+                const response = await fetch(`${SERVER_URL}/api/undo?session-id=${sessionId}`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                state = data.state;
+                render();
+                updateHistory();
+            } catch (error) {
+                console.error('Undo failed:', error);
+            }
+        }
+        
+        // Redo action
+        window.redo = async function() {
+            try {
+                const response = await fetch(`${SERVER_URL}/api/redo?session-id=${sessionId}`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                state = data.state;
+                render();
+                updateHistory();
+            } catch (error) {
+                console.error('Redo failed:', error);
+            }
+        }
+        
+        // Jump to specific history index
+        window.jumpToHistory = async function(index) {
+            try {
+                const response = await fetch(`${SERVER_URL}/api/jump-history?session-id=${sessionId}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ index: parseInt(index) })
+                });
+                if (!response.ok) {
+                    console.error('Jump failed:', response.status);
+                    return;
+                }
+                const data = await response.json();
+                state = data.state || data;  // Handle both wrapped and unwrapped responses
+                render();
+                updateHistory();
+            } catch (error) {
+                console.error('Jump to history failed:', error);
+            }
+        }
+        
+        // Update history info
+        let historyInfo = null;
+        async function updateHistory() {
+            try {
+                const response = await fetch(`${SERVER_URL}/api/history?session-id=${sessionId}`);
+                historyInfo = await response.json();
+                renderTimeTravelControls();
+            } catch (error) {
+                console.error('Failed to get history:', error);
+            }
+        }
+
+        // Filter todos
+        function getVisibleTodos() {
+            const todos = Object.values(state.todos || {});
+            switch (state.filter) {
+                case 'active':
+                    return todos.filter(t => !t.completed);
+                case 'completed':
+                    return todos.filter(t => t.completed);
+                default:
+                    return todos;
+            }
+        }
+
+        // Render the app
+        function render() {
+            const todos = Object.values(state.todos || {});
+            const activeTodos = todos.filter(t => !t.completed);
+            const visibleTodos = getVisibleTodos();
+            
+            document.getElementById('app').innerHTML = `
+                <div class="input-group">
+                    <input type="text" id="new-todo" placeholder="What needs to be done?" />
+                    <button onclick="addTodo()">Add</button>
+                </div>
+                
+                <div class="filters">
+                    <button class="filter-btn ${state.filter === 'all' ? 'active' : ''}" 
+                            onclick="setFilter('all')">All</button>
+                    <button class="filter-btn ${state.filter === 'active' ? 'active' : ''}" 
+                            onclick="setFilter('active')">Active</button>
+                    <button class="filter-btn ${state.filter === 'completed' ? 'active' : ''}" 
+                            onclick="setFilter('completed')">Completed</button>
+                </div>
+                
+                <div class="todo-list">
+                    ${visibleTodos.length === 0 ? '<p style="text-align:center; color:#999; padding:20px;">No todos to show</p>' :
+                      visibleTodos.map(todo => `
+                        <div class="todo-item">
+                            <input type="checkbox" 
+                                   ${todo.completed ? 'checked' : ''} 
+                                   onchange="toggleTodo(${todo.id})" />
+                            <span class="todo-text ${todo.completed ? 'completed' : ''}">
+                                ${todo.text}
+                            </span>
+                            <button class="delete-btn" onclick="deleteTodo(${todo.id})">Delete</button>
+                        </div>
+                    `).join('')}
+                </div>
+                
+                <div class="stats">
+                    <span>${activeTodos.length} active</span>
+                    <span>${todos.length} total</span>
+                    ${todos.length > activeTodos.length ? 
+                        '<button onclick="clearCompleted()">Clear completed</button>' : ''}
+                </div>
+                
+                <div class="time-travel" id="time-travel-controls">
+                    <h3>Time Travel</h3>
+                    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                        <button onclick="undo()" id="undo-btn">← Undo</button>
+                        <button onclick="redo()" id="redo-btn">Redo →</button>
+                    </div>
+                    <div class="time-scrubber" id="scrubber-container">
+                        <!-- Will be rendered by renderTimeTravelControls() -->
+                    </div>
+                </div>
+            `;
+            
+            // Set up enter key handler
+            const input = document.getElementById('new-todo');
+            if (input) {
+                input.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') addTodo();
+                });
+            }
+        }
+
+        // Event handlers
+        window.addTodo = function() {
+            const input = document.getElementById('new-todo');
+            const text = input.value.trim();
+            if (text) {
+                dispatch(['add-todo', text]);
+                input.value = '';
+            }
+        }
+
+        window.toggleTodo = function(id) {
+            dispatch(['toggle-todo', id]);
+        }
+
+        window.deleteTodo = function(id) {
+            dispatch(['delete-todo', id]);
+        }
+
+        window.setFilter = function(filter) {
+            dispatch(['set-filter', filter]);
+        }
+
+        window.clearCompleted = function() {
+            dispatch(['clear-completed']);
+        }
+
+        window.createNewSession = function() {
+            localStorage.removeItem('reactor-session');
+            window.location = '/demo.html';
+        }
+        
+        // Render time travel controls
+        function renderTimeTravelControls() {
+            if (!historyInfo) return;
+            
+            const container = document.getElementById('scrubber-container');
+            if (!container) return;
+            
+            const current_index = historyInfo['current-index'];
+            const total_states = historyInfo['total-states'];
+            const can_undo = historyInfo['can-undo'];
+            const can_redo = historyInfo['can-redo'];
+            
+            // Update button states
+            const undoBtn = document.getElementById('undo-btn');
+            const redoBtn = document.getElementById('redo-btn');
+            if (undoBtn) undoBtn.disabled = !can_undo;
+            if (redoBtn) redoBtn.disabled = !can_redo;
+            
+            // Invert the index for display (0 should be on right for newest)
+            const displayValue = total_states - 1 - current_index;
+            
+            container.innerHTML = `
+                <h4 style="margin: 0 0 10px 0; font-size: 14px;">History Scrubber</h4>
+                <input type="range" 
+                       id="history-scrubber" 
+                       min="0" 
+                       max="${total_states - 1}" 
+                       value="${displayValue}"
+                       oninput="window.jumpToHistory(${total_states - 1} - this.value)"
+                       style="width: 100%;">
+                <div class="scrubber-info">
+                    <span>Oldest</span>
+                    <span>State ${total_states - current_index} of ${total_states}</span>
+                    <span>Newest</span>
+                </div>
+            `;
+        }
+        
+        // Load sessions list
+        async function loadSessions() {
+            try {
+                const response = await fetch(`${SERVER_URL}/api/sessions`);
+                const sessions = await response.json();
+                
+                const container = document.getElementById('sessions-list');
+                container.innerHTML = sessions.map(s => `
+                    <div class="session-item ${s['session-id'] === sessionId ? 'active' : ''}"
+                         onclick="window.switchSession('${s['session-id']}')">
+                        <strong>${s['session-id']}</strong><br>
+                        <small>${s['todo-count']} todos</small>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Failed to load sessions:', error);
+            }
+        }
+        
+        // Switch to different session
+        window.switchSession = function(newSessionId) {
+            localStorage.setItem('reactor-session', newSessionId);
+            sessionId = newSessionId;
+            document.getElementById('session-id').textContent = sessionId;
+            
+            // Reconnect SSE
+            setupSSE();
+            
+            // Load new session state
+            (async () => {
+                const response = await fetch(`${SERVER_URL}/api/state?session-id=${sessionId}`);
+                state = await response.json();
+                render();
+                updateHistory();
+                loadSessions();
+            })();
+        };
+
+        // Initialize on load
+        (async () => {
+            await initSession();
+            updateHistory();
+            loadSessions();
+            // Refresh sessions list periodically
+            setInterval(loadSessions, 5000);
+        })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,316 @@
+SLF4J: Failed to load class "org.slf4j.impl.StaticLoggerBinder".
+SLF4J: Defaulting to no-operation (NOP) logger implementation
+SLF4J: See http://www.slf4j.org/codes.html#StaticLoggerBinder for further details.
+
+lein test reactor.core-test
+
+lein test reactor.curl-test
+Starting XTDB SSE server on port 8768
+Testing health with curl...
+Request: :get /health
+Health result: OK
+Testing SSE with curl...
+Request: :get /subscribe
+Subscribe endpoint hit!
+Query subscription - format: keypath poll: nil query: ["test"]
+SSE channel opened for query
+SSE result exit code: 28
+SSE result output: data: #{}
+
+
+SSE result error: 
+
+lein test reactor.frame-xtdb-test
+
+lein test reactor.integration-test
+Starting XTDB SSE server on port 8765
+Request: :get /health
+Request: :post /update
+Request: :post /update
+Request: :post /update
+Request: :post /query
+Request: :post /sync-table
+Request: :post /sync-table
+Request: :post /sync-table
+Request: :post /sql-builder
+Request: :get /subscribe
+Subscribe endpoint hit!
+Query subscription - format: keypath poll: 100 query: ["todo-1"]
+SSE channel opened for query
+Request: :post /query
+Request: :post /query
+
+lein test reactor.pgwire-test
+
+========================================
+PostgreSQL Wire Protocol Server Started
+========================================
+Port: 5434
+
+Connect with psql:
+  psql -h localhost -p 5434 -U xtdb -d reactor_xtdb
+
+No password required. Try these queries:
+  SELECT version();
+  SELECT current_database();
+  SELECT * FROM todos;
+  \q to quit
+========================================
+
+
+========================================
+PostgreSQL Wire Protocol Server Started
+========================================
+Port: 5435
+
+Connect with psql:
+  psql -h localhost -p 5435 -U xtdb -d reactor_xtdb
+
+No password required. Try these queries:
+  SELECT version();
+  SELECT current_database();
+  SELECT * FROM todos;
+  \q to quit
+========================================
+
+
+SQL Connectivity Test Results:
+==============================
+1. PostgreSQL Wire Protocol Server: ✓ Running (but psql handshake incomplete)
+2. HTTP SQL API: ✓ Available and working
+3. psql CLI: ✓ Installed
+4. XTDB 2.x Migration: ⚠ Recommended for native psql support
+
+Recommendation: Use HTTP SQL API for immediate needs,
+                migrate to XTDB 2.x for full psql support
+SQL API Server started on port 8081
+Try: curl http://localhost: 8081 /info
+
+lein test :only reactor.pgwire-test/test-http-sql-api-alternative
+
+ERROR in (test-http-sql-api-alternative) (Reflector.java:397)
+Uncaught exception, not in assertion.
+expected: nil
+  actual: java.lang.IllegalArgumentException: No matching field found: close for class clojure.lang.Atom
+ at clojure.lang.Reflector.getInstanceField (Reflector.java:397)
+    clojure.lang.Reflector.invokeNoArgInstanceMember (Reflector.java:440)
+    reactor.pgwire_test$fn__14668.invokeStatic (pgwire_test.clj:110)
+    reactor.pgwire_test/fn (pgwire_test.clj:79)
+    clojure.test$test_var$fn__9707.invoke (test.clj:717)
+    clojure.test$test_var.invokeStatic (test.clj:717)
+    clojure.test$test_var.invoke (test.clj:708)
+    clojure.test$test_vars$fn__9733$fn__9738.invoke (test.clj:735)
+    clojure.test$default_fixture.invokeStatic (test.clj:687)
+    clojure.test$default_fixture.invoke (test.clj:683)
+    clojure.test$test_vars$fn__9733.invoke (test.clj:735)
+    clojure.test$default_fixture.invokeStatic (test.clj:687)
+    clojure.test$default_fixture.invoke (test.clj:683)
+    clojure.test$test_vars.invokeStatic (test.clj:731)
+    clojure.test$test_all_vars.invokeStatic (test.clj:737)
+    clojure.test$test_ns.invokeStatic (test.clj:758)
+    clojure.test$test_ns.invoke (test.clj:743)
+    user$eval224$fn__287.invoke (form-init14573209345302527295.clj:1)
+    clojure.lang.AFn.applyToHelper (AFn.java:156)
+    clojure.lang.AFn.applyTo (AFn.java:144)
+    clojure.core$apply.invokeStatic (core.clj:667)
+    clojure.core$apply.invoke (core.clj:660)
+    leiningen.core.injected$compose_hooks$fn__154.doInvoke (form-init14573209345302527295.clj:1)
+    clojure.lang.RestFn.applyTo (RestFn.java:137)
+    clojure.core$apply.invokeStatic (core.clj:665)
+    clojure.core$apply.invoke (core.clj:660)
+    leiningen.core.injected$run_hooks.invokeStatic (form-init14573209345302527295.clj:1)
+    leiningen.core.injected$run_hooks.invoke (form-init14573209345302527295.clj:1)
+    leiningen.core.injected$prepare_for_hooks$fn__159$fn__160.doInvoke (form-init14573209345302527295.clj:1)
+    clojure.lang.RestFn.applyTo (RestFn.java:137)
+    clojure.lang.AFunction$1.doInvoke (AFunction.java:31)
+    clojure.lang.RestFn.invoke (RestFn.java:408)
+    clojure.core$map$fn__5851.invoke (core.clj:2755)
+    clojure.lang.LazySeq.sval (LazySeq.java:42)
+    clojure.lang.LazySeq.seq (LazySeq.java:51)
+    clojure.lang.Cons.next (Cons.java:39)
+    clojure.lang.RT.next (RT.java:709)
+    clojure.core$next__5371.invokeStatic (core.clj:64)
+    clojure.core$reduce1.invokeStatic (core.clj:944)
+    clojure.core$reduce1.invokeStatic (core.clj:934)
+    clojure.core$merge_with.invokeStatic (core.clj:3059)
+    clojure.core$merge_with.doInvoke (core.clj:3051)
+    clojure.lang.RestFn.applyTo (RestFn.java:139)
+    clojure.core$apply.invokeStatic (core.clj:667)
+    clojure.test$run_tests.invokeStatic (test.clj:768)
+    clojure.test$run_tests.doInvoke (test.clj:768)
+    clojure.lang.RestFn.applyTo (RestFn.java:137)
+    clojure.core$apply.invokeStatic (core.clj:665)
+    clojure.core$apply.invoke (core.clj:660)
+    user$eval224$fn__297$fn__330.invoke (form-init14573209345302527295.clj:1)
+    user$eval224$fn__297$fn__298.invoke (form-init14573209345302527295.clj:1)
+    user$eval224$fn__297.invoke (form-init14573209345302527295.clj:1)
+    user$eval224.invokeStatic (form-init14573209345302527295.clj:1)
+    user$eval224.invoke (form-init14573209345302527295.clj:1)
+    clojure.lang.Compiler.eval (Compiler.java:7176)
+    clojure.lang.Compiler.eval (Compiler.java:7166)
+    clojure.lang.Compiler.load (Compiler.java:7635)
+    clojure.lang.Compiler.loadFile (Compiler.java:7573)
+    clojure.main$load_script.invokeStatic (main.clj:452)
+    clojure.main$init_opt.invokeStatic (main.clj:454)
+    clojure.main$init_opt.invoke (main.clj:454)
+    clojure.main$initialize.invokeStatic (main.clj:485)
+    clojure.main$null_opt.invokeStatic (main.clj:519)
+    clojure.main$null_opt.invoke (main.clj:516)
+    clojure.main$main.invokeStatic (main.clj:598)
+    clojure.main$main.doInvoke (main.clj:561)
+    clojure.lang.RestFn.applyTo (RestFn.java:137)
+    clojure.lang.Var.applyTo (Var.java:705)
+    clojure.main.main (main.java:37)
+
+lein test reactor.simple-integration-test
+Starting XTDB SSE server on port 8766
+Testing health endpoint...
+Request: :get /health
+Health response: {:opts {:as :text, :timeout 2000, :method :get, :url http://localhost:8766/health}, :body OK, :headers {:access-control-allow-headers Content-Type, :access-control-allow-methods GET, POST, OPTIONS, :access-control-allow-origin *, :content-length 2, :date Mon, 18 Aug 2025 11:01:12 GMT, :server http-kit}, :status 200}
+Testing update endpoint...
+Request: :post /update
+Update response: {:opts {:body {:entity-id "test-1", :data {:value "test"}}, :headers {Content-Type application/edn}, :as :text, :timeout 2000, :method :post, :url http://localhost:8766/update}, :body {:status :ok, :tx-id {:xtdb.api/tx-id 0, :xtdb.api/tx-time #inst "2025-08-18T11:01:12.774-00:00"}}, :headers {:access-control-allow-headers Content-Type, :access-control-allow-methods GET, POST, OPTIONS, :access-control-allow-origin *, :content-length 98, :content-type application/edn, :date Mon, 18 Aug 2025 11:01:12 GMT, :server http-kit}, :status 200}
+Testing query endpoint...
+Request: :post /query
+Query response: {:opts {:body {:query ["test-1"]}, :headers {Content-Type application/edn}, :as :text, :timeout 2000, :method :post, :url http://localhost:8766/query}, :body {:status :ok, :result #{[{:value "test", :xt/id "test-1"}]}}, :headers {:access-control-allow-headers Content-Type, :access-control-allow-methods GET, POST, OPTIONS, :access-control-allow-origin *, :content-length 60, :content-type application/edn, :date Mon, 18 Aug 2025 11:01:12 GMT, :server http-kit}, :status 200}
+Stopping server...
+
+lein test reactor.sse-endpoint-test
+Starting XTDB SSE server on port 8767
+Request: :post /update
+Testing SSE without polling...
+SSE URL: http://localhost:8767/subscribe?query=%5B%22test-sse%22%5D&query-format=keypath&format=edn
+Request: :get /subscribe
+Subscribe endpoint hit!
+Query subscription - format: keypath poll: nil query: ["test-sse"]
+SSE channel opened for query
+Curl exit code: 28
+Curl output: data: #{[{:name "SSE Test", :xt/id "test-sse"}]}
+
+
+Curl error: 
+SSE works with curl: data: #{[{:name "SSE Test", :xt/id "test-sse"}]}
+
+
+
+lein test reactor.sse-test
+
+lein test :only reactor.sse-test/integration-test
+
+ERROR in (integration-test) (Net.java:-2)
+Uncaught exception, not in assertion.
+expected: nil
+  actual: java.net.BindException: Address already in use
+ at sun.nio.ch.Net.bind0 (Net.java:-2)
+    sun.nio.ch.Net.bind (Net.java:565)
+    sun.nio.ch.ServerSocketChannelImpl.netBind (ServerSocketChannelImpl.java:344)
+    sun.nio.ch.ServerSocketChannelImpl.bind (ServerSocketChannelImpl.java:301)
+    java.nio.channels.ServerSocketChannel.bind (ServerSocketChannel.java:224)
+    org.httpkit.server.HttpServer.<init> (HttpServer.java:163)
+    org.httpkit.server$run_server.invokeStatic (server.clj:155)
+    org.httpkit.server$run_server.doInvoke (server.clj:45)
+    clojure.lang.RestFn.invoke (RestFn.java:423)
+    reactor.sse$start_sse_server.invokeStatic (sse.clj:182)
+    reactor.sse$start_sse_server.invoke (sse.clj:180)
+    reactor.sse_test$fn__15021.invokeStatic (sse_test.clj:133)
+    reactor.sse_test/fn (sse_test.clj:128)
+    clojure.test$test_var$fn__9707.invoke (test.clj:717)
+    clojure.test$test_var.invokeStatic (test.clj:717)
+    clojure.test$test_var.invoke (test.clj:708)
+    clojure.test$test_vars$fn__9733$fn__9738.invoke (test.clj:735)
+    clojure.test$default_fixture.invokeStatic (test.clj:687)
+    clojure.test$default_fixture.invoke (test.clj:683)
+    clojure.test$test_vars$fn__9733.invoke (test.clj:735)
+    clojure.test$default_fixture.invokeStatic (test.clj:687)
+    clojure.test$default_fixture.invoke (test.clj:683)
+    clojure.test$test_vars.invokeStatic (test.clj:731)
+    clojure.test$test_all_vars.invokeStatic (test.clj:737)
+    clojure.test$test_ns.invokeStatic (test.clj:758)
+    clojure.test$test_ns.invoke (test.clj:743)
+    user$eval224$fn__287.invoke (form-init14573209345302527295.clj:1)
+    clojure.lang.AFn.applyToHelper (AFn.java:156)
+    clojure.lang.AFn.applyTo (AFn.java:144)
+    clojure.core$apply.invokeStatic (core.clj:667)
+    clojure.core$apply.invoke (core.clj:660)
+    leiningen.core.injected$compose_hooks$fn__154.doInvoke (form-init14573209345302527295.clj:1)
+    clojure.lang.RestFn.applyTo (RestFn.java:137)
+    clojure.core$apply.invokeStatic (core.clj:665)
+    clojure.core$apply.invoke (core.clj:660)
+    leiningen.core.injected$run_hooks.invokeStatic (form-init14573209345302527295.clj:1)
+    leiningen.core.injected$run_hooks.invoke (form-init14573209345302527295.clj:1)
+    leiningen.core.injected$prepare_for_hooks$fn__159$fn__160.doInvoke (form-init14573209345302527295.clj:1)
+    clojure.lang.RestFn.applyTo (RestFn.java:137)
+    clojure.lang.AFunction$1.doInvoke (AFunction.java:31)
+    clojure.lang.RestFn.invoke (RestFn.java:408)
+    clojure.core$map$fn__5851.invoke (core.clj:2755)
+    clojure.lang.LazySeq.sval (LazySeq.java:42)
+    clojure.lang.LazySeq.seq (LazySeq.java:51)
+    clojure.lang.Cons.next (Cons.java:39)
+    clojure.lang.RT.next (RT.java:709)
+    clojure.core$next__5371.invokeStatic (core.clj:64)
+    clojure.core$reduce1.invokeStatic (core.clj:944)
+    clojure.core$reduce1.invokeStatic (core.clj:934)
+    clojure.core$merge_with.invokeStatic (core.clj:3059)
+    clojure.core$merge_with.doInvoke (core.clj:3051)
+    clojure.lang.RestFn.applyTo (RestFn.java:139)
+    clojure.core$apply.invokeStatic (core.clj:667)
+    clojure.test$run_tests.invokeStatic (test.clj:768)
+    clojure.test$run_tests.doInvoke (test.clj:768)
+    clojure.lang.RestFn.applyTo (RestFn.java:137)
+    clojure.core$apply.invokeStatic (core.clj:665)
+    clojure.core$apply.invoke (core.clj:660)
+    user$eval224$fn__297$fn__330.invoke (form-init14573209345302527295.clj:1)
+    user$eval224$fn__297$fn__298.invoke (form-init14573209345302527295.clj:1)
+    user$eval224$fn__297.invoke (form-init14573209345302527295.clj:1)
+    user$eval224.invokeStatic (form-init14573209345302527295.clj:1)
+    user$eval224.invoke (form-init14573209345302527295.clj:1)
+    clojure.lang.Compiler.eval (Compiler.java:7176)
+    clojure.lang.Compiler.eval (Compiler.java:7166)
+    clojure.lang.Compiler.load (Compiler.java:7635)
+    clojure.lang.Compiler.loadFile (Compiler.java:7573)
+    clojure.main$load_script.invokeStatic (main.clj:452)
+    clojure.main$init_opt.invokeStatic (main.clj:454)
+    clojure.main$init_opt.invoke (main.clj:454)
+    clojure.main$initialize.invokeStatic (main.clj:485)
+    clojure.main$null_opt.invokeStatic (main.clj:519)
+    clojure.main$null_opt.invoke (main.clj:516)
+    clojure.main$main.invokeStatic (main.clj:598)
+    clojure.main$main.doInvoke (main.clj:561)
+    clojure.lang.RestFn.applyTo (RestFn.java:137)
+    clojure.lang.Var.applyTo (Var.java:705)
+    clojure.main.main (main.java:37)
+
+lein test reactor.time-travel-simple-test
+
+lein test reactor.todo-clean-test
+Clean XTDB TODO server started on port 8889
+Clean XTDB TODO server started on port 8888
+First server todos: (Learn Reactor with XTDB Build persistent apps Master time travel)
+Clean XTDB TODO server started on port 8888
+After restart todos: {}
+
+lein test reactor.todo-server-simple-test
+Clean XTDB TODO server started on port 7777
+
+lein test reactor.xtdb-debug-test
+Initial deref: {:counter 0, :name test}
+After swap: {:counter 1, :name test}
+Direct entity: {:value 42, :xt/id test}
+
+lein test reactor.xtdb-id-test
+Atom1 created with initial value: {:value 1}
+Atom2 using global-key: {:value 2}
+Putting entity with ID: test-entity
+All entity IDs in DB: #{[test-entity]}
+Get with string ID: {:counter 0, :name test, :xt/id test-entity}
+Global key: :global/test-entity
+Get with global key: nil
+Atom deref: nil
+
+lein test reactor.xtdb-query-test
+
+lein test reactor.xtdb-store-test
+
+Ran 57 tests containing 236 assertions.
+0 failures, 2 errors.
+Subprocess failed (exit code: 1)

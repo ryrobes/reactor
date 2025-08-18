@@ -130,7 +130,7 @@
     (let [ra (r/ratom {:test "data"})
           server (atom nil)]
       (try
-        (reset! server (sse/start-sse-server ra 8081))
+        (reset! server (sse/start-sse-server ra 8082))
         (Thread/sleep 100)
         (is (not (nil? @server)))
         (finally
