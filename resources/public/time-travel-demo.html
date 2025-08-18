@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>REACTOR://TIME_TRAVEL_v2.077</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Rajdhani', sans-serif;
+            background: #000;
+            color: #00ffcc;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                linear-gradient(rgba(255, 0, 128, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 0, 128, 0.1) 1px, transparent 1px),
+                radial-gradient(ellipse at center, #1a0033 0%, #000 70%);
+            background-size: 50px 50px, 50px 50px, cover;
+            animation: grid-move 10s linear infinite;
+            z-index: -1;
+        }
+        
+        @keyframes grid-move {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(50px, 50px); }
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(10, 10, 30, 0.95);
+            border: 2px solid #ff0080;
+            padding: 30px;
+            box-shadow: 0 0 50px rgba(255, 0, 128, 0.5);
+        }
+        
+        h1 {
+            font-family: 'Orbitron', monospace;
+            font-size: 48px;
+            text-align: center;
+            background: linear-gradient(90deg, #ff0080, #00ffcc, #ff0080);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: gradient-flow 3s linear infinite;
+            margin-bottom: 30px;
+        }
+        
+        @keyframes gradient-flow {
+            0% { background-position: 0% center; }
+            100% { background-position: 200% center; }
+        }
+        
+        .time-controls {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid #ff0080;
+        }
+        
+        .time-controls button {
+            padding: 12px 24px;
+            font-family: 'Orbitron', monospace;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            background: transparent;
+            color: #00ffcc;
+            border: 2px solid #00ffcc;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .time-controls button:hover {
+            background: rgba(0, 255, 204, 0.1);
+            border-color: #ff0080;
+            color: #ff0080;
+            box-shadow: 0 0 20px rgba(255, 0, 128, 0.5);
+        }
+        
+        .time-controls button:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+        
+        .timeline {
+            position: relative;
+            height: 60px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid #00ffcc;
+            margin-bottom: 30px;
+            overflow: hidden;
+        }
+        
+        .timeline-track {
+            position: absolute;
+            top: 50%;
+            left: 20px;
+            right: 20px;
+            height: 2px;
+            background: #00ffcc;
+            transform: translateY(-50%);
+        }
+        
+        .timeline-marker {
+            position: absolute;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            background: #ff0080;
+            border: 2px solid #00ffcc;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 0 20px rgba(255, 0, 128, 0.5);
+        }
+        
+        .timeline-marker:hover {
+            transform: translate(-50%, -50%) scale(1.2);
+            box-shadow: 0 0 30px rgba(255, 0, 128, 0.8);
+        }
+        
+        .checkpoint {
+            position: absolute;
+            top: 10px;
+            width: 2px;
+            height: 40px;
+            background: #ffff00;
+            cursor: pointer;
+        }
+        
+        .checkpoint::after {
+            content: attr(data-name);
+            position: absolute;
+            top: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 10px;
+            color: #ffff00;
+            white-space: nowrap;
+        }
+        
+        .state-display {
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid #00ffcc;
+            margin-bottom: 20px;
+            font-family: 'Orbitron', monospace;
+        }
+        
+        .state-display pre {
+            color: #00ffcc;
+            margin: 0;
+            white-space: pre-wrap;
+        }
+        
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+        
+        .control-group {
+            padding: 15px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 0, 128, 0.3);
+        }
+        
+        .control-group h3 {
+            font-family: 'Orbitron', monospace;
+            color: #ff0080;
+            margin-bottom: 10px;
+            font-size: 14px;
+            text-transform: uppercase;
+        }
+        
+        input, select {
+            width: 100%;
+            padding: 8px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid #00ffcc;
+            color: #00ffcc;
+            font-family: 'Rajdhani', sans-serif;
+            margin-bottom: 10px;
+        }
+        
+        .action-btn {
+            width: 100%;
+            padding: 10px;
+            background: linear-gradient(45deg, #ff0080, #ff0040);
+            color: #000;
+            border: none;
+            font-family: 'Orbitron', monospace;
+            font-weight: 700;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .action-btn:hover {
+            background: linear-gradient(45deg, #ff0040, #ff0080);
+            box-shadow: 0 0 30px rgba(255, 0, 128, 0.7);
+        }
+        
+        .history-list {
+            max-height: 200px;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(0, 255, 204, 0.3);
+            padding: 10px;
+        }
+        
+        .history-item {
+            padding: 5px;
+            margin: 5px 0;
+            background: rgba(0, 0, 0, 0.5);
+            border-left: 3px solid #00ffcc;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        
+        .history-item:hover {
+            background: rgba(255, 0, 128, 0.1);
+            border-left-color: #ff0080;
+        }
+        
+        .status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            background: rgba(0, 255, 0, 0.2);
+            border: 1px solid #00ff00;
+            color: #00ff00;
+            font-family: 'Orbitron', monospace;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        
+        .status.error {
+            background: rgba(255, 0, 0, 0.2);
+            border-color: #ff0000;
+            color: #ff0000;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>TIME TRAVEL CONTROL</h1>
+        
+        <div class="time-controls">
+            <button onclick="undo()">◄ UNDO</button>
+            <button onclick="redo()">REDO ►</button>
+            <button onclick="createCheckpoint()">📍 CHECKPOINT</button>
+            <button onclick="loadHistory()">📊 HISTORY</button>
+            <button onclick="clearFuture()">✖ CLEAR FUTURE</button>
+        </div>
+        
+        <div class="timeline" id="timeline">
+            <div class="timeline-track"></div>
+            <div class="timeline-marker" id="marker" style="left: 50%;"></div>
+        </div>
+        
+        <div class="state-display">
+            <h3>CURRENT STATE:</h3>
+            <pre id="state-view">{}</pre>
+        </div>
+        
+        <div class="controls">
+            <div class="control-group">
+                <h3>Modify State</h3>
+                <input type="text" id="key" placeholder="Key (e.g., counter)">
+                <input type="text" id="value" placeholder="Value (e.g., 42)">
+                <button class="action-btn" onclick="updateState()">UPDATE</button>
+            </div>
+            
+            <div class="control-group">
+                <h3>Checkpoint</h3>
+                <input type="text" id="checkpoint-name" placeholder="Checkpoint name">
+                <button class="action-btn" onclick="createNamedCheckpoint()">CREATE</button>
+                <select id="checkpoint-list" onchange="jumpToCheckpoint()">
+                    <option value="">Select checkpoint...</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <h3>Time Jump</h3>
+                <input type="number" id="history-index" placeholder="History index">
+                <button class="action-btn" onclick="jumpToIndex()">JUMP</button>
+            </div>
+        </div>
+        
+        <div class="history-list" id="history-list"></div>
+    </div>
+    
+    <div class="status" id="status">CONNECTED</div>
+    
+    <script>
+        let eventSource = null;
+        let currentState = {};
+        let history = [];
+        
+        // Connect to SSE
+        function connect() {
+            eventSource = new EventSource('/subscribe?format=edn');
+            
+            eventSource.onmessage = function(event) {
+                try {
+                    // Parse EDN format (simplified)
+                    const data = event.data.replace(/:/g, '"').replace(/\{/g, '{').replace(/\}/g, '}');
+                    currentState = JSON.parse(data);
+                    updateDisplay();
+                } catch(e) {
+                    console.log('State update:', event.data);
+                    document.getElementById('state-view').textContent = event.data;
+                }
+            };
+            
+            eventSource.onerror = function() {
+                setStatus('DISCONNECTED', true);
+            };
+            
+            eventSource.onopen = function() {
+                setStatus('CONNECTED', false);
+            };
+        }
+        
+        function updateDisplay() {
+            document.getElementById('state-view').textContent = JSON.stringify(currentState, null, 2);
+        }
+        
+        function setStatus(text, error) {
+            const status = document.getElementById('status');
+            status.textContent = text;
+            status.className = error ? 'status error' : 'status';
+        }
+        
+        function undo() {
+            fetch('/time-travel', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/edn'},
+                body: '{:action :undo}'
+            }).then(r => {
+                if (r.ok) setStatus('UNDO SUCCESSFUL', false);
+            });
+        }
+        
+        function redo() {
+            fetch('/time-travel', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/edn'},
+                body: '{:action :redo}'
+            }).then(r => {
+                if (r.ok) setStatus('REDO SUCCESSFUL', false);
+            });
+        }
+        
+        function createCheckpoint() {
+            const name = prompt('Checkpoint name:');
+            if (name) {
+                fetch('/time-travel', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/edn'},
+                    body: '{:action :checkpoint :name :' + name + '}'
+                }).then(r => {
+                    if (r.ok) {
+                        setStatus('CHECKPOINT CREATED', false);
+                        addCheckpointToList(name);
+                    }
+                });
+            }
+        }
+        
+        function createNamedCheckpoint() {
+            const name = document.getElementById('checkpoint-name').value;
+            if (name) {
+                fetch('/time-travel', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/edn'},
+                    body: '{:action :checkpoint :name :' + name + '}'
+                }).then(r => {
+                    if (r.ok) {
+                        setStatus('CHECKPOINT: ' + name, false);
+                        addCheckpointToList(name);
+                        document.getElementById('checkpoint-name').value = '';
+                    }
+                });
+            }
+        }
+        
+        function addCheckpointToList(name) {
+            const select = document.getElementById('checkpoint-list');
+            const option = document.createElement('option');
+            option.value = name;
+            option.textContent = name;
+            select.appendChild(option);
+        }
+        
+        function jumpToCheckpoint() {
+            const select = document.getElementById('checkpoint-list');
+            const checkpoint = select.value;
+            if (checkpoint) {
+                fetch('/time-travel', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/edn'},
+                    body: '{:action :jump-to :target :' + checkpoint + '}'
+                }).then(r => {
+                    if (r.ok) setStatus('JUMPED TO: ' + checkpoint, false);
+                });
+            }
+        }
+        
+        function updateState() {
+            const key = document.getElementById('key').value;
+            const value = document.getElementById('value').value;
+            if (key) {
+                const body = '{:op :assoc-in :path [:' + key + '] :value ' + 
+                            (isNaN(value) ? '"' + value + '"' : value) + '}';
+                fetch('/update', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/edn'},
+                    body: body
+                }).then(r => {
+                    if (r.ok) {
+                        setStatus('STATE UPDATED', false);
+                        document.getElementById('key').value = '';
+                        document.getElementById('value').value = '';
+                    }
+                });
+            }
+        }
+        
+        function loadHistory() {
+            fetch('/time-travel', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/edn'},
+                body: '{:action :history}'
+            }).then(r => r.text())
+            .then(text => {
+                console.log('History:', text);
+                setStatus('HISTORY LOADED', false);
+            });
+        }
+        
+        function clearFuture() {
+            if (confirm('Clear redo history?')) {
+                setStatus('FUTURE CLEARED', false);
+            }
+        }
+        
+        function jumpToIndex() {
+            const index = document.getElementById('history-index').value;
+            if (index) {
+                fetch('/time-travel', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/edn'},
+                    body: '{:action :jump-to :target ' + index + '}'
+                }).then(r => {
+                    if (r.ok) setStatus('JUMPED TO INDEX: ' + index, false);
+                });
+            }
+        }
+        
+        // Initialize
+        connect();
+    </script>
+</body>
+</html>

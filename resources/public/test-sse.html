@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>SSE Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #1a1a1a;
+            color: #0ff;
+            padding: 20px;
+        }
+        #log {
+            background: #000;
+            padding: 10px;
+            border: 1px solid #0ff;
+            height: 400px;
+            overflow-y: auto;
+        }
+        .entry {
+            margin: 2px 0;
+            padding: 2px;
+        }
+        .success { color: #0f0; }
+        .error { color: #f00; }
+        .data { color: #ff0; }
+    </style>
+</head>
+<body>
+    <h1>Reactor SSE Connection Test</h1>
+    <div id="log"></div>
+    <br>
+    <button onclick="testDispatch()">Test Dispatch</button>
+    <button onclick="clearLog()">Clear Log</button>
+    
+    <script>
+        const log = document.getElementById('log');
+        
+        function addLog(msg, className = '') {
+            const entry = document.createElement('div');
+            entry.className = 'entry ' + className;
+            entry.textContent = new Date().toISOString().substr(11, 8) + ' - ' + msg;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
+        }
+        
+        function clearLog() {
+            log.innerHTML = '';
+        }
+        
+        // Test SSE connection
+        addLog('Attempting SSE connection to http://localhost:3000/subscribe?format=edn');
+        
+        const eventSource = new EventSource('http://localhost:3000/subscribe?format=edn');
+        
+        eventSource.onopen = function(e) {
+            addLog('SSE Connection opened!', 'success');
+            addLog('ReadyState: ' + eventSource.readyState);
+        };
+        
+        eventSource.onmessage = function(e) {
+            addLog('SSE Message received:', 'data');
+            addLog(e.data.substring(0, 200) + (e.data.length > 200 ? '...' : ''), 'data');
+        };
+        
+        eventSource.onerror = function(e) {
+            addLog('SSE Error occurred', 'error');
+            addLog('ReadyState: ' + eventSource.readyState, 'error');
+            if (eventSource.readyState === EventSource.CLOSED) {
+                addLog('Connection was closed', 'error');
+            } else if (eventSource.readyState === EventSource.CONNECTING) {
+                addLog('Reconnecting...', 'error');
+            }
+        };
+        
+        // Test dispatch
+        function testDispatch() {
+            const event = '[:add-todo "Test from browser ' + Date.now() + '"]';
+            addLog('Dispatching: ' + event);
+            
+            fetch('http://localhost:3000/api/dispatch', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/edn'
+                },
+                body: event
+            })
+            .then(response => {
+                if (response.ok) {
+                    addLog('Dispatch successful!', 'success');
+                } else {
+                    addLog('Dispatch failed: ' + response.status, 'error');
+                }
+            })
+            .catch(error => {
+                addLog('Dispatch error: ' + error, 'error');
+            });
+        }
+        
+        // Log readyState periodically
+        setInterval(() => {
+            const states = ['CONNECTING', 'OPEN', 'CLOSED'];
+            addLog('Current state: ' + states[eventSource.readyState] + ' (' + eventSource.readyState + ')');
+        }, 5000);
+    </script>
+</body>
+</html>

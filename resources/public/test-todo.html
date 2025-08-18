@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Todo App</title>
+</head>
+<body>
+    <div id="app">Loading...</div>
+    <script src="/js/main.js"></script>
+    <script>
+        console.log("Script loaded, checking if app initialized...");
+        // Check if the namespace is available
+        setTimeout(function() {
+            if (typeof examples !== 'undefined' && 
+                typeof examples.todo_app !== 'undefined' && 
+                typeof examples.todo_app.app !== 'undefined') {
+                console.log("App namespace found!");
+                if (typeof examples.todo_app.app.init_BANG_ === 'function') {
+                    console.log("Calling init!");
+                    examples.todo_app.app.init_BANG_();
+                } else {
+                    console.log("init! function not found");
+                }
+            } else {
+                console.log("App namespace not found");
+            }
+        }, 1000);
+    </script>
+</body>
+</html>

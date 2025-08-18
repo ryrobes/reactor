@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Reactor Todo App</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/todomvc-app-css@2.4.2/index.css">
+</head>
+<body>
+    <div id="app">
+        <h1>Loading Reactor Todo App...</h1>
+        <p>Connecting to server...</p>
+    </div>
+    <script src="resources/public/js/main.js"></script>
+    
+    <script>
+    // Add debugging to watch for state changes
+    setTimeout(function() {
+        console.log("Testing dispatch after 3 seconds...");
+        // We'll manually dispatch an event to test
+        fetch("/api/dispatch", {
+            method: "POST",
+            headers: {"Content-Type": "application/edn"},
+            body: '[:add-todo "Test from HTML page"]'
+        }).then(r => console.log("Dispatch response:", r));
+    }, 3000);
+    </script>
+</body>
+</html>

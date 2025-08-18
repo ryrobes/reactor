@@ -1,0 +1,25 @@
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure {:mvn/version "1.11.1"}
+        org.clojure/clojurescript {:mvn/version "1.11.60"}
+        org.clojure/core.cache {:mvn/version "1.0.225"}
+        http-kit/http-kit {:mvn/version "2.7.0"}
+        ring/ring-core {:mvn/version "1.10.0"}
+        ring/ring-defaults {:mvn/version "0.4.0"}
+        compojure/compojure {:mvn/version "1.7.0"}
+        cheshire/cheshire {:mvn/version "5.12.0"}
+        reagent/reagent {:mvn/version "1.2.0"}}
+ 
+ :aliases
+ {:dev {:extra-paths ["test" "dev"]
+        :extra-deps {nrepl/nrepl {:mvn/version "1.0.0"}
+                     cider/cider-nrepl {:mvn/version "0.28.5"}}}
+  
+  :test {:extra-paths ["test"]
+         :extra-deps {lambdaisland/kaocha {:mvn/version "1.87.1366"}}
+         :main-opts ["-m" "kaocha.runner"]}
+  
+  :todo-server {:main-opts ["-m" "examples.todo-app.server"]}
+  :chat-server {:main-opts ["-m" "examples.chat-app.server"]}
+  
+  :build {:deps {io.github.clojure/tools.build {:git/tag "v0.9.6" :git/sha "8e78bcc"}}
+          :ns-default build}}}

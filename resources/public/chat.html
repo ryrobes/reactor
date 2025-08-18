@@ -1,0 +1,964 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>REACTOR://CHAT_v2.077</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@300;400;600&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body { 
+            font-family: 'Rajdhani', sans-serif;
+            margin: 0; 
+            padding: 0;
+            background: #000;
+            color: #00ffcc;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        
+        /* Animated cyber grid background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                linear-gradient(rgba(255, 0, 128, 0.1) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 0, 128, 0.1) 1px, transparent 1px),
+                radial-gradient(ellipse at center, #1a0033 0%, #000 70%);
+            background-size: 50px 50px, 50px 50px, cover;
+            animation: grid-move 10s linear infinite;
+            z-index: -1;
+        }
+        
+        @keyframes grid-move {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(50px, 50px); }
+        }
+        
+        /* Scanlines */
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 255, 255, 0.03) 0px,
+                transparent 1px,
+                transparent 2px,
+                rgba(0, 255, 255, 0.03) 3px
+            );
+            pointer-events: none;
+            animation: scanlines 8s linear infinite;
+        }
+        
+        @keyframes scanlines {
+            0% { transform: translateY(0); }
+            100% { transform: translateY(10px); }
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 20px auto;
+            background: rgba(10, 10, 30, 0.95);
+            border: 2px solid #ff0080;
+            box-shadow: 
+                0 0 50px rgba(255, 0, 128, 0.5),
+                inset 0 0 50px rgba(0, 255, 204, 0.1);
+            overflow: hidden;
+            height: calc(100vh - 40px);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .header {
+            background: linear-gradient(90deg, rgba(255, 0, 128, 0.3) 0%, rgba(0, 255, 204, 0.3) 100%);
+            padding: 20px;
+            border-bottom: 2px solid #ff0080;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .header::before {
+            content: 'NEURAL_LINK_ACTIVE';
+            position: absolute;
+            top: 5px;
+            right: 20px;
+            font-family: 'Orbitron', monospace;
+            font-size: 10px;
+            color: rgba(0, 255, 204, 0.5);
+            letter-spacing: 2px;
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-family: 'Orbitron', monospace;
+            font-size: 42px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 8px;
+            background: linear-gradient(90deg, #ff0080, #00ffcc, #ff0080);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: gradient-flow 3s linear infinite;
+            filter: drop-shadow(0 0 20px rgba(255, 0, 128, 0.5));
+        }
+        
+        @keyframes gradient-flow {
+            0% { background-position: 0% center; }
+            100% { background-position: 200% center; }
+        }
+        
+        .join-area {
+            padding: 30px;
+            background: rgba(0, 0, 0, 0.7);
+            border-bottom: 1px solid rgba(255, 0, 128, 0.3);
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .join-area input {
+            flex: 1;
+            padding: 12px 20px;
+            font-size: 18px;
+            font-family: 'Rajdhani', sans-serif;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #00ffcc;
+            color: #00ffcc;
+            outline: none;
+            transition: all 0.3s;
+        }
+        
+        .join-area input::placeholder {
+            color: rgba(0, 255, 204, 0.3);
+        }
+        
+        .join-area input:focus {
+            border-color: #ff0080;
+            box-shadow: 0 0 20px rgba(255, 0, 128, 0.5);
+            background: rgba(255, 0, 128, 0.05);
+        }
+        
+        .join-area button {
+            padding: 12px 30px;
+            font-size: 16px;
+            font-family: 'Orbitron', monospace;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            background: linear-gradient(45deg, #ff0080, #ff0040);
+            color: #000;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .join-area button::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+            transition: left 0.5s;
+        }
+        
+        .join-area button:hover::before {
+            left: 100%;
+        }
+        
+        .join-area button:hover {
+            background: linear-gradient(45deg, #ff0040, #ff0080);
+            box-shadow: 0 0 30px rgba(255, 0, 128, 0.7);
+            transform: translateY(-2px);
+        }
+        
+        .chat-area {
+            display: none;
+            flex: 1;
+            overflow: hidden;
+            flex-direction: column;
+        }
+        
+        .chat-area.active {
+            display: flex;
+        }
+        
+        .status {
+            padding: 10px 20px;
+            background: linear-gradient(90deg, rgba(255, 0, 128, 0.2), rgba(0, 255, 204, 0.2));
+            text-align: center;
+            font-family: 'Orbitron', monospace;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            border-bottom: 1px solid rgba(255, 0, 128, 0.3);
+        }
+        
+        .online-users {
+            padding: 15px 20px;
+            background: rgba(0, 0, 0, 0.5);
+            border-bottom: 1px solid rgba(255, 0, 128, 0.2);
+            font-family: 'Orbitron', monospace;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .user {
+            display: inline-block;
+            margin: 0 10px 5px 0;
+            padding: 5px 12px;
+            background: rgba(0, 255, 204, 0.1);
+            border: 1px solid #00ffcc;
+            color: #00ffcc;
+            font-size: 11px;
+            position: relative;
+        }
+        
+        .user::before {
+            content: '';
+            position: absolute;
+            left: 5px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 6px;
+            height: 6px;
+            background: #00ff00;
+            border-radius: 50%;
+            box-shadow: 0 0 10px #00ff00;
+            animation: pulse-dot 2s infinite;
+        }
+        
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.3);
+        }
+        
+        .messages::-webkit-scrollbar {
+            width: 10px;
+        }
+        
+        .messages::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 0, 128, 0.2);
+        }
+        
+        .messages::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, #ff0080, #00ffcc);
+            border: 1px solid rgba(255, 0, 128, 0.5);
+        }
+        
+        .message {
+            margin: 15px 0;
+            padding: 15px 20px;
+            background: rgba(0, 0, 0, 0.5);
+            border-left: 3px solid #00ffcc;
+            position: relative;
+            animation: message-in 0.3s ease-out;
+        }
+        
+        @keyframes message-in {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+        
+        .message::before {
+            content: attr(data-time);
+            position: absolute;
+            top: 5px;
+            right: 10px;
+            font-size: 10px;
+            color: rgba(0, 255, 204, 0.3);
+            font-family: 'Orbitron', monospace;
+        }
+        
+        .message.system {
+            background: linear-gradient(90deg, rgba(255, 0, 128, 0.1), rgba(255, 0, 128, 0.05));
+            border-left-color: #ff0080;
+            font-style: italic;
+            color: rgba(255, 0, 128, 0.8);
+            text-align: center;
+            font-family: 'Orbitron', monospace;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .message strong {
+            color: #ff0080;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            text-shadow: 0 0 10px rgba(255, 0, 128, 0.5);
+        }
+        
+        .input-area {
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            border-top: 2px solid rgba(255, 0, 128, 0.5);
+            display: flex;
+            gap: 15px;
+        }
+        
+        .input-area input {
+            flex: 1;
+            padding: 12px 20px;
+            font-size: 16px;
+            font-family: 'Rajdhani', sans-serif;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #00ffcc;
+            color: #00ffcc;
+            outline: none;
+            transition: all 0.3s;
+        }
+        
+        .input-area input::placeholder {
+            color: rgba(0, 255, 204, 0.3);
+        }
+        
+        .input-area input:focus {
+            border-color: #ff0080;
+            box-shadow: 0 0 20px rgba(255, 0, 128, 0.5);
+            background: rgba(255, 0, 128, 0.05);
+        }
+        
+        .input-area button {
+            padding: 12px 30px;
+            font-size: 14px;
+            font-family: 'Orbitron', monospace;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            background: linear-gradient(45deg, #00ffcc, #00ff88);
+            color: #000;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .input-area button::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+            transition: left 0.5s;
+        }
+        
+        .input-area button:hover::before {
+            left: 100%;
+        }
+        
+        .input-area button:hover {
+            background: linear-gradient(45deg, #00ff88, #00ffcc);
+            box-shadow: 0 0 30px rgba(0, 255, 204, 0.7);
+            transform: translateY(-2px);
+        }
+        
+        /* Glitch effect */
+        @keyframes glitch {
+            0%, 100% { 
+                text-shadow: 
+                    2px 0 #ff0080,
+                    -2px 0 #00ffcc;
+            }
+            25% { 
+                text-shadow: 
+                    -2px 0 #ff0080,
+                    2px 0 #00ffcc;
+            }
+            50% { 
+                text-shadow: 
+                    2px 0 #00ffcc,
+                    -2px 0 #ff0080;
+            }
+        }
+        
+        .error {
+            animation: glitch 0.3s infinite;
+        }
+        
+        /* Time Travel Controls */
+        .time-travel-panel {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            width: 300px;
+            background: rgba(10, 10, 30, 0.95);
+            border: 2px solid #ff0080;
+            padding: 15px;
+            box-shadow: 0 0 30px rgba(255, 0, 128, 0.5);
+            z-index: 1000;
+            transition: all 0.3s;
+        }
+        
+        .time-travel-panel.collapsed {
+            width: 60px;
+            height: 60px;
+            padding: 0;
+            overflow: hidden;
+        }
+        
+        .time-travel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            font-family: 'Orbitron', monospace;
+            color: #ff0080;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        
+        .time-travel-toggle {
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(45deg, #ff0080, #00ffcc);
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            transition: all 0.3s;
+        }
+        
+        .time-travel-panel.collapsed .time-travel-toggle {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .time-travel-toggle:hover {
+            transform: rotate(180deg);
+            box-shadow: 0 0 20px rgba(0, 255, 204, 0.5);
+        }
+        
+        .time-travel-content {
+            display: block;
+        }
+        
+        .time-travel-panel.collapsed .time-travel-content {
+            display: none;
+        }
+        
+        .time-controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .time-btn {
+            flex: 1;
+            padding: 8px;
+            background: transparent;
+            color: #00ffcc;
+            border: 1px solid #00ffcc;
+            font-family: 'Orbitron', monospace;
+            font-size: 11px;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .time-btn:hover:not(:disabled) {
+            background: rgba(0, 255, 204, 0.1);
+            border-color: #ff0080;
+            color: #ff0080;
+            box-shadow: 0 0 15px rgba(255, 0, 128, 0.5);
+        }
+        
+        .time-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
+        
+        .timeline-scrubber {
+            position: relative;
+            height: 40px;
+            background: rgba(0, 0, 0, 0.7);
+            border: 1px solid #00ffcc;
+            margin-bottom: 15px;
+            cursor: pointer;
+        }
+        
+        .timeline-track {
+            position: absolute;
+            top: 50%;
+            left: 10px;
+            right: 10px;
+            height: 2px;
+            background: #00ffcc;
+            transform: translateY(-50%);
+        }
+        
+        .timeline-position {
+            position: absolute;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 12px;
+            height: 12px;
+            background: #ff0080;
+            border: 2px solid #00ffcc;
+            border-radius: 50%;
+            box-shadow: 0 0 10px rgba(255, 0, 128, 0.8);
+            transition: left 0.3s;
+        }
+        
+        .checkpoint-marker {
+            position: absolute;
+            top: 5px;
+            width: 2px;
+            height: 30px;
+            background: #ffff00;
+            cursor: pointer;
+        }
+        
+        .checkpoint-marker:hover::after {
+            content: attr(data-name);
+            position: absolute;
+            bottom: -20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.9);
+            color: #ffff00;
+            padding: 2px 6px;
+            font-size: 10px;
+            white-space: nowrap;
+            border: 1px solid #ffff00;
+        }
+        
+        .history-info {
+            font-size: 11px;
+            color: #00ffcc;
+            text-align: center;
+            margin-bottom: 10px;
+            font-family: 'Orbitron', monospace;
+        }
+        
+        .checkpoint-input {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .checkpoint-input input {
+            flex: 1;
+            padding: 5px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 1px solid #00ffcc;
+            color: #00ffcc;
+            font-family: 'Rajdhani', sans-serif;
+            font-size: 12px;
+        }
+        
+        .checkpoint-input button {
+            padding: 5px 10px;
+            background: linear-gradient(45deg, #ff0080, #ff0040);
+            color: #000;
+            border: none;
+            font-family: 'Orbitron', monospace;
+            font-size: 10px;
+            font-weight: bold;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .checkpoint-input button:hover {
+            box-shadow: 0 0 15px rgba(255, 0, 128, 0.7);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>REACTOR://CHAT</h1>
+        </div>
+        
+        <div class="join-area" id="join-area">
+            <input type="text" id="username" placeholder="ENTER_HANDLE..." />
+            <button onclick="joinChat()">[ JACK IN ]</button>
+        </div>
+        
+        <div class="chat-area" id="chat-area">
+            <div class="status" id="status">[ ESTABLISHING CONNECTION ]</div>
+            <div class="online-users" id="online-users">
+                NETRUNNERS_ONLINE: <span id="user-list"></span>
+            </div>
+            <div class="messages" id="messages"></div>
+            <div class="input-area">
+                <input type="text" id="message-input" placeholder="TRANSMIT_MESSAGE..." onkeypress="handleKeyPress(event)" />
+                <button onclick="sendMessage()">[ SEND ]</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let userId = null;
+        let username = null;
+        let eventSource = null;
+        
+        function getTime() {
+            const now = new Date();
+            return now.getHours().toString().padStart(2, '0') + ':' + 
+                   now.getMinutes().toString().padStart(2, '0');
+        }
+        
+        function joinChat() {
+            const input = document.getElementById('username');
+            username = input.value.trim();
+            if (!username) {
+                input.style.animation = 'glitch 0.3s';
+                setTimeout(() => input.style.animation = '', 300);
+                return;
+            }
+            
+            userId = 'netrunner-' + Date.now();
+            
+            // Show chat area
+            document.getElementById('join-area').style.display = 'none';
+            document.getElementById('chat-area').classList.add('active');
+            document.getElementById('status').textContent = '[ NEURAL LINK ESTABLISHED ]';
+            document.getElementById('status').style.color = '#00ff00';
+            
+            // Connect SSE
+            eventSource = new EventSource('/subscribe?format=json');
+            
+            eventSource.onopen = function() {
+                console.log('SSE connected');
+                document.getElementById('status').textContent = '[ ONLINE ]';
+                document.getElementById('status').style.background = 'linear-gradient(90deg, rgba(0, 255, 0, 0.2), rgba(0, 255, 204, 0.2))';
+            };
+            
+            eventSource.onmessage = function(event) {
+                console.log('SSE data:', event.data);
+                try {
+                    const state = JSON.parse(event.data);
+                    updateUI(state);
+                } catch(e) {
+                    console.error('Parse error:', e);
+                }
+            };
+            
+            eventSource.onerror = function(e) {
+                console.error('SSE error:', e);
+                document.getElementById('status').textContent = '[ CONNECTION LOST ]';
+                document.getElementById('status').style.background = 'linear-gradient(90deg, rgba(255, 0, 0, 0.2), rgba(255, 0, 128, 0.2))';
+                document.getElementById('status').style.color = '#ff0080';
+            };
+            
+            // Join the chat
+            setTimeout(function() {
+                const ednData = '{:user-id "' + userId + '" :username "' + username.replace(/"/g, '\\"') + '"}';
+                
+                fetch('/api/join', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/edn'},
+                    body: ednData
+                })
+                .then(() => {
+                    // Join general room
+                    const roomData = '{:user-id "' + userId + '" :room-id :general}';
+                    return fetch('/api/room/join', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/edn'},
+                        body: roomData
+                    });
+                })
+                .then(() => {
+                    console.log('Successfully jacked into the matrix');
+                });
+            }, 100);
+        }
+        
+        function sendMessage() {
+            const input = document.getElementById('message-input');
+            const text = input.value.trim();
+            if (!text || !userId) return;
+            
+            const msgData = '{:user-id "' + userId + '" :room-id :general :text "' + 
+                           text.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"}';
+            
+            console.log('Transmitting:', msgData);
+            
+            fetch('/api/message', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/edn'},
+                body: msgData
+            })
+            .then(response => {
+                if (response.ok) {
+                    input.value = '';
+                    // Add typing effect
+                    input.style.borderColor = '#00ff00';
+                    setTimeout(() => input.style.borderColor = '#00ffcc', 200);
+                } else {
+                    console.error('Transmission failed:', response.status);
+                    input.style.animation = 'glitch 0.3s';
+                    setTimeout(() => input.style.animation = '', 300);
+                }
+            });
+        }
+        
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+        
+        function updateUI(state) {
+            // Update messages
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.innerHTML = '';
+            
+            // Get messages from general room
+            const messages = (state.rooms && state.rooms.general && state.rooms.general.messages) || [];
+            
+            messages.forEach(msg => {
+                const div = document.createElement('div');
+                div.className = msg.type === 'system' ? 'message system' : 'message';
+                div.setAttribute('data-time', getTime());
+                
+                if (msg.type === 'system') {
+                    div.textContent = '[ ' + msg.text.toUpperCase() + ' ]';
+                } else {
+                    div.innerHTML = '<strong>' + (msg.username || 'UNKNOWN') + ':</strong> ' + msg.text;
+                }
+                
+                messagesDiv.appendChild(div);
+            });
+            
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            
+            // Update online users
+            const userList = document.getElementById('user-list');
+            userList.innerHTML = '';
+            
+            if (state.users) {
+                Object.values(state.users).forEach(user => {
+                    if (user.online) {
+                        const span = document.createElement('span');
+                        span.className = 'user';
+                        span.textContent = user.username;
+                        userList.appendChild(span);
+                    }
+                });
+            }
+        }
+    </script>
+    
+    <!-- Time Travel Panel -->
+    <div class="time-travel-panel" id="timeTravelPanel">
+        <button class="time-travel-toggle" onclick="toggleTimePanel()">⏰</button>
+        <div class="time-travel-content">
+            <div class="time-travel-header">
+                <span>TIME CONTROL</span>
+            </div>
+            
+            <div class="history-info" id="historyInfo">
+                History: <span id="historyCount">0</span> states
+            </div>
+            
+            <div class="timeline-scrubber" id="timelineScrubber" onclick="scrubToPosition(event)">
+                <div class="timeline-track"></div>
+                <div class="timeline-position" id="timelinePosition" style="left: 100%;"></div>
+            </div>
+            
+            <div class="time-controls">
+                <button class="time-btn" onclick="timeTravel('undo')" id="undoBtn">◄ UNDO</button>
+                <button class="time-btn" onclick="timeTravel('redo')" id="redoBtn">REDO ►</button>
+            </div>
+            
+            <div class="checkpoint-input">
+                <input type="text" id="checkpointName" placeholder="Checkpoint name...">
+                <button onclick="createCheckpoint()">SAVE</button>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Time Travel Functions
+        let timePanelCollapsed = false;
+        let historyLength = 0;
+        let historyPosition = 0;
+        
+        function toggleTimePanel() {
+            const panel = document.getElementById('timeTravelPanel');
+            timePanelCollapsed = !timePanelCollapsed;
+            if (timePanelCollapsed) {
+                panel.classList.add('collapsed');
+            } else {
+                panel.classList.remove('collapsed');
+            }
+        }
+        
+        function timeTravel(action) {
+            fetch('/time-travel', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/edn'},
+                body: `{:action :${action}}`
+            }).then(response => {
+                if (response.ok) {
+                    // Update position based on action (fixed direction)
+                    if (action === 'undo' && historyPosition > 0) {
+                        historyPosition--;
+                    } else if (action === 'redo' && historyPosition < historyLength - 1) {
+                        historyPosition++;
+                    }
+                    updateTimelinePosition();
+                    updateHistoryInfo();
+                    // For chat app, just refresh the messages
+                    if (window.updateUI && window.eventSource) {
+                        // Request a state update via SSE
+                        fetch('/api/state')
+                            .then(r => r.text())
+                            .then(state => {
+                                // Parse EDN and update UI
+                                console.log('State refreshed after time travel');
+                            });
+                    }
+                }
+            }).catch(err => console.error('Time travel error:', err));
+        }
+        
+        function createCheckpoint() {
+            const name = document.getElementById('checkpointName').value;
+            if (!name) return;
+            
+            fetch('/time-travel', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/edn'},
+                body: `{:action :checkpoint :name :${name.replace(/\s+/g, '-')}}`
+            }).then(response => {
+                if (response.ok) {
+                    document.getElementById('checkpointName').value = '';
+                    // Could add visual checkpoint marker to timeline
+                    addCheckpointMarker(name, historyPosition);
+                }
+            }).catch(err => console.error('Checkpoint error:', err));
+        }
+        
+        function scrubToPosition(event) {
+            const scrubber = document.getElementById('timelineScrubber');
+            const rect = scrubber.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const percentage = Math.max(0, Math.min(1, x / rect.width));
+            const targetIndex = Math.floor(percentage * historyLength);
+            
+            // Jump to the target position
+            fetch('/time-travel', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/edn'},
+                body: `{:action :jump-to :target ${targetIndex}}`
+            }).then(response => {
+                if (response.ok) {
+                    historyPosition = targetIndex;
+                    updateTimelinePosition();
+                    // Refresh chat state
+                    if (window.updateUI && window.eventSource) {
+                        fetch('/api/state')
+                            .then(r => r.text())
+                            .then(state => {
+                                console.log('State refreshed after jump');
+                            });
+                    }
+                }
+            }).catch(err => console.error('Scrub error:', err));
+        }
+        
+        function updateTimelinePosition() {
+            const position = document.getElementById('timelinePosition');
+            const percentage = historyLength > 0 ? (historyPosition / historyLength) * 100 : 100;
+            position.style.left = `${percentage}%`;
+            
+            // Update button states
+            document.getElementById('undoBtn').disabled = historyPosition === 0;
+            document.getElementById('redoBtn').disabled = historyPosition === historyLength - 1;
+        }
+        
+        function updateHistoryInfo() {
+            fetch('/time-travel', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/edn'},
+                body: '{:action :history}'
+            }).then(response => response.text())
+            .then(text => {
+                // Parse the response to get history length and current position
+                // Count the number of history entries
+                const matches = text.match(/:timestamp \d+/g);
+                historyLength = matches ? matches.length : 0;
+                
+                // Try to determine current position from history
+                // For now, assume we're at the end unless we've undone
+                if (!historyPosition) {
+                    historyPosition = historyLength - 1;
+                }
+                
+                document.getElementById('historyCount').textContent = historyLength;
+                updateTimelinePosition();
+            }).catch(err => console.error('History info error:', err));
+        }
+        
+        function addCheckpointMarker(name, position) {
+            const scrubber = document.getElementById('timelineScrubber');
+            const marker = document.createElement('div');
+            marker.className = 'checkpoint-marker';
+            marker.setAttribute('data-name', name);
+            marker.style.left = `${(position / historyLength) * 100}%`;
+            marker.onclick = () => {
+                fetch('/time-travel', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/edn'},
+                    body: `{:action :jump-to :target :${name.replace(/\s+/g, '-')}}`
+                }).then(response => {
+                    if (response.ok) {
+                        historyPosition = position;
+                        updateTimelinePosition();
+                    }
+                });
+            };
+            scrubber.appendChild(marker);
+        }
+        
+        // Initialize history info on load
+        setTimeout(() => {
+            updateHistoryInfo();
+            setInterval(updateHistoryInfo, 5000); // Poll for updates
+        }, 1000);
+    </script>
+</body>
+</html>
