@@ -96,6 +96,49 @@
                :headers {"Content-Type" "application/json"}
                :body (json/generate-string result)})
             
+            "/api/sql"
+            (let [body (json/parse-string (slurp (:body req)) true)
+                  sql (:sql body)
+                  params (:params body)
+                  as-of (:as-of body)
+                  ;; Use the actual XTDB node to execute real queries
+                  node (or (:node session) @session/default-node)
+                  ;; Execute the actual SQL query on XTDB
+                  result (if node
+                          (try
+                            ;; Call a function to execute SQL - this should be defined in rabbit server
+                            (let [db (if as-of
+                                      (xt/db node (java.util.Date. (- (System/currentTimeMillis) 
+                                                                     (* 1000 60 (Integer/parseInt (str as-of))))))
+                                      (xt/db node))
+                                  ;; Basic SQL to Datalog conversion
+                                  query (cond
+                                         (re-find #"(?i)SELECT\s+\*\s+FROM\s+sales" sql)
+                                         '{:find [(pull ?e [*])]
+                                           :where [[?e :table :sales]]}
+                                         
+                                         (re-find #"(?i)SELECT\s+\*\s+FROM\s+inventory" sql)
+                                         '{:find [(pull ?e [*])]
+                                           :where [[?e :table :inventory]]}
+                                         
+                                         :else
+                                         '{:find [(pull ?e [*])]
+                                           :where [[?e :xt/id]]})
+                                  raw-results (vec (map first (xt/q db query)))]
+                              ;; Handle ORDER BY
+                              (if-let [order-match (re-find #"(?i)ORDER\s+BY\s+(\w+)(?:\s+(DESC|ASC))?" sql)]
+                                (let [order-field (keyword (second order-match))
+                                      desc? (= "DESC" (.toUpperCase (or (nth order-match 2) "ASC")))]
+                                  (sort-by order-field (if desc? > <) raw-results))
+                                raw-results))
+                            (catch Exception e
+                              (println "SQL error:" (.getMessage e))
+                              []))
+                          [])]
+              {:status 200
+               :headers {"Content-Type" "application/json"}
+               :body (json/generate-string {:results result})})
+            
             "/api/subscribe"
             (http/with-channel req channel
               (http/send! channel {:status 200

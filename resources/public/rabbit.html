@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>RABBIT // SQL_BROWSER</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700&display=swap');
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            overflow: hidden;
+            background: #0a0a0a;
+            color: #00ff9f;
+        }
+        
+        /* Cyberpunk glow effects */
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+        
+        @keyframes scan {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100%); }
+        }
+        
+        /* Block resize handles */
+        .resize-handle {
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 15px;
+            height: 15px;
+            cursor: nwse-resize;
+            background: linear-gradient(135deg, transparent 50%, #00ff9f 50%);
+            opacity: 0.5;
+        }
+        
+        .resize-handle:hover {
+            opacity: 1;
+        }
+        
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(0, 255, 159, 0.1);
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, #00ff9f, #00cc7f);
+            border-radius: 2px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #00ff9f;
+            box-shadow: 0 0 10px #00ff9f;
+        }
+        
+        /* Grid styling */
+        table {
+            border-collapse: collapse;
+        }
+        
+        /* Range input styling */
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            background: transparent;
+            cursor: pointer;
+        }
+        
+        input[type="range"]::-webkit-slider-track {
+            background: rgba(0, 255, 159, 0.2);
+            height: 2px;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            background: #00ff9f;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-top: -5px;
+            box-shadow: 0 0 10px #00ff9f;
+        }
+        
+        input[type="range"]::-moz-range-track {
+            background: rgba(0, 255, 159, 0.2);
+            height: 2px;
+        }
+        
+        input[type="range"]::-moz-range-thumb {
+            background: #00ff9f;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: none;
+            box-shadow: 0 0 10px #00ff9f;
+        }
+        
+        /* Loading animation */
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: #0a0a0a;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .loading::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #00ff9f, transparent);
+            animation: scan 2s linear infinite;
+        }
+        
+        .loading h2 {
+            color: #00ff9f;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 300;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            animation: pulse 1.5s ease-in-out infinite;
+            text-shadow: 0 0 20px rgba(0, 255, 159, 0.5);
+        }
+        
+        /* Button hover effects */
+        button {
+            transition: all 0.3s ease;
+        }
+        
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 5px 15px rgba(0, 255, 159, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <div class="loading">
+            <h2>INITIALIZING RABBIT//SQL_BROWSER</h2>
+        </div>
+    </div>
+    <script src="/js/rabbit.js"></script>
+</body>
+</html>

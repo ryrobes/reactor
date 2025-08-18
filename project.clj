@@ -13,6 +13,7 @@
                  ;; XTDB dependencies
                  [com.xtdb/xtdb-core "1.24.4"]
                  [com.xtdb/xtdb-rocksdb "1.24.4"]
+                 [com.xtdb/xtdb-sql "1.24.4"]
                  ;; SQL query support
                  [honeysql "1.0.461"]
                  ;; Logging for pgwire

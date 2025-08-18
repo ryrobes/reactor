@@ -16,4 +16,11 @@
          :asset-path "/js"
          :modules {:todo {:init-fn examples.todo-app.client/init!}}
          :devtools {:http-root "resources/public"
-                    :http-port 8080}}}}
+                    :http-port 8080}}
+  
+  :rabbit {:target :browser
+           :output-dir "resources/public/js"
+           :asset-path "/js"
+           :modules {:rabbit {:init-fn examples.rabbit-demo.client/init!}}
+           :devtools {:http-root "resources/public"
+                      :http-port 8080}}}}
