@@ -142,7 +142,10 @@
                              result))
                
                :update-block (fn [db [id updates]]
-                              (update-in db [:canvas :blocks id] merge updates))
+                              (println "UPDATE-BLOCK:" id "with" updates)
+                              (let [result (update-in db [:canvas :blocks id] merge updates)]
+                                (println "Block after update:" (get-in result [:canvas :blocks id]))
+                                result))
                
                :delete-block (fn [db [id]]
                               (update db [:canvas :blocks] dissoc id))

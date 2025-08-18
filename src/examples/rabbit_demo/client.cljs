@@ -58,7 +58,10 @@
   ;; Send final position on drag end
   (when-let [{:keys [block-id]} @drag-state]
     (when-let [pos (get @local-positions block-id)]
-      (r/dispatch! [:move-block block-id pos])))
+      (r/dispatch! [:move-block block-id pos])
+      ;; Keep the local position until server confirms
+      ;; (removed the reset of local-positions here)
+      ))
   (reset! drag-state nil)
   (when @pending-update
     (js/clearTimeout @pending-update)
@@ -108,8 +111,14 @@
 ;; ============= Block Components =============
 
 (defn query-block [{:keys [id position size sql results as-of]}]
-  (let [local-pos (get @local-positions id)
+  (let [;; Initialize local position if not set
+        _ (when (and position (not (get @local-positions id)))
+            (swap! local-positions assoc id position))
+        local-pos (get @local-positions id)
         actual-pos (or local-pos position)
+        ;; Initialize local size if not set
+        _ (when (and size (not (get @local-sizes id)))
+            (swap! local-sizes assoc id size))
         local-size (get @local-sizes id)
         actual-size (or local-size size)]
     [:div.block.query-block
@@ -152,6 +161,7 @@
        :on-click (fn [e]
                    (when-let [conn @connection-mode]
                      (.stopPropagation ^js e)
+                     ;; Update the chart block (conn's source-id) to link to this query block (id)
                      (r/dispatch! [:update-block (:source-id conn) {:source-id id}])
                      (reset! connection-mode nil)))}
       [:div {:style {:display "flex" :align-items "center" :gap "10px"}}
@@ -260,8 +270,14 @@
                             :font-family "monospace"}} (str (get row col))])])]]])]))
 
 (defn chart-block [{:keys [id position size source-id chart-type]}]
-  (let [local-pos (get @local-positions id)
+  (let [;; Initialize local position if not set
+        _ (when (and position (not (get @local-positions id)))
+            (swap! local-positions assoc id position))
+        local-pos (get @local-positions id)
         actual-pos (or local-pos position)
+        ;; Initialize local size if not set
+        _ (when (and size (not (get @local-sizes id)))
+            (swap! local-sizes assoc id size))
         local-size (get @local-sizes id)
         actual-size (or local-size size)
         source-block (when source-id @(r/subscribe [:block source-id]))
@@ -364,8 +380,14 @@
          "Link to a query block to see data"])]]))
 
 (defn sql-exec-block [{:keys [id position size sql]}]
-  (let [local-pos (get @local-positions id)
+  (let [;; Initialize local position if not set
+        _ (when (and position (not (get @local-positions id)))
+            (swap! local-positions assoc id position))
+        local-pos (get @local-positions id)
         actual-pos (or local-pos position)
+        ;; Initialize local size if not set
+        _ (when (and size (not (get @local-sizes id)))
+            (swap! local-sizes assoc id size))
         local-size (get @local-sizes id)
         actual-size (or local-size size)]
     [:div.block.sql-exec-block
@@ -479,44 +501,60 @@
                      :background-image "linear-gradient(rgba(0,255,159,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0,255,159,0.03) 1px, transparent 1px)"
                      :background-size "50px 50px"
                      :pointer-events "none"}}]
-       ;; Connection lines - render after grid but before blocks
-       (let [all-blocks @blocks]
+       ;; Connection lines SVG
+       (let [local-pos @local-positions
+             local-sz @local-sizes
+             all-blocks @blocks
+             ;; Build lines outside the SVG element - filter out nils immediately
+             lines (->> (for [[block-id block] all-blocks
+                              :when (:source-id block)]
+                          (let [source-id (:source-id block)
+                                ;; Try both string and keyword lookup
+                                source-block (or (get all-blocks source-id)
+                                               (get all-blocks (keyword source-id))
+                                               (get all-blocks (name source-id)))
+                                ;; Chart block (block) connects TO query block (source-block)
+                                ;; So line goes FROM query block TO chart block
+                                source-pos (or (get local-pos source-id) 
+                                             (get local-pos (keyword source-id))
+                                             (get local-pos (name source-id))
+                                             (:position source-block))
+                                target-pos (or (get local-pos block-id)
+                                             (get local-pos (keyword block-id))
+                                             (get local-pos (name block-id))
+                                             (:position block))
+                                source-size (or (get local-sz source-id) 
+                                              (get local-sz (keyword source-id))
+                                              (get local-sz (name source-id))
+                                              (:size source-block) 
+                                              {:width 400 :height 300})
+                                target-size (or (get local-sz block-id)
+                                              (get local-sz (keyword block-id))
+                                              (get local-sz (name block-id))
+                                              (:size block) 
+                                              {:width 400 :height 300})]
+                            (when (and source-pos target-pos)
+                              [:line {:key (str "line-" block-id)
+                                     :x1 (+ (:x source-pos) (/ (:width source-size) 2))
+                                     :y1 (+ (:y source-pos) (/ (:height source-size) 2))
+                                     :x2 (+ (:x target-pos) (/ (:width target-size) 2))
+                                     :y2 (+ (:y target-pos) (/ (:height target-size) 2))
+                                     :stroke "#00ff9f"
+                                     :stroke-width "3"
+                                     :opacity 1}])))
+                        (remove nil?)
+                        vec)]
          [:svg {:style {:position "absolute"
                        :top 0
                        :left 0
                        :width "100%"
                        :height "100%"
                        :pointer-events "none"
-                       :z-index 1}}
-          (doall
-           (for [[block-id block] all-blocks
-                 :when (:source-id block)
-                 :let [source-block (get all-blocks (:source-id block))
-                       source-pos (or (get @local-positions (:source-id block)) (:position source-block))
-                       source-size (or (get @local-sizes (:source-id block)) (:size source-block))
-                       target-pos (or (get @local-positions block-id) (:position block))
-                       target-size (or (get @local-sizes block-id) (:size block))]
-                 :when (and source-pos target-pos source-size target-size)]
-             ^{:key (str block-id "-connection")}
-             [:g
-              [:defs
-               [:marker {:id (str "arrowhead-" block-id)
-                        :markerWidth "10"
-                        :markerHeight "10"
-                        :refX "9"
-                        :refY "3"
-                        :orient "auto"}
-                [:polygon {:points "0 0, 10 3, 0 6"
-                          :fill "#ff006e"}]]]
-              [:path {:d (str "M " (+ (:x source-pos) (/ (:width source-size) 2)) " "
-                             (+ (:y source-pos) (:height source-size)) " "
-                             "L " (+ (:x target-pos) (/ (:width target-size) 2)) " "
-                             (:y target-pos))
-                     :stroke "#ff006e"
-                     :stroke-width "2"
-                     :fill "none"
-                     :opacity 0.5
-                     :marker-end (str "url(#arrowhead-" block-id ")")}]]))])
+                       :z-index 5}
+                :id "connection-svg"}
+          ;; Add the connection lines
+          (for [line lines]
+            line)])
        ;; Connection mode indicator
        (when @connection-mode
          [:div {:style {:position "fixed"
@@ -546,7 +584,8 @@
           "Click buttons above to add blocks"]
          (for [[id block] @blocks]
            ^{:key id}
-           [render-block (assoc block :id id)]))])))
+           [render-block (assoc block :id id)]))
+       ])))
 
 ;; ============= Toolbar Component =============
 
