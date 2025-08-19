@@ -13,12 +13,27 @@
 (defonce session-history-index (atom {}))  ;; Track current position in history for each session
 (defonce default-node (atom nil))
 
+(defonce app-name (atom nil))
+(defonce app-table (atom "sessions"))  ;; Default table name
+
 (defn init!
   "Initialize the session system with XTDB 2.0"
-  []
-  (let [node (xts/start-xtdb-node {:storage-dir "data/xtdb2"})]
-    (xts/ensure-tables node)
-    (reset! default-node node)))
+  ([]
+   (init! nil nil))
+  ([app]
+   (init! app nil))
+  ([app table]
+   (when app 
+     (reset! app-name app)
+     ;; Use app-specific table if not specified
+     (reset! app-table (or table (str (name app) "_sessions"))))
+   (when table
+     (reset! app-table table))
+   ;; Only create node if not already exists
+   (when-not @default-node
+     (let [node (xts/start-xtdb-node {:storage-dir "data/xtdb2"})]
+       (xts/ensure-tables node)
+       (reset! default-node node)))))
 
 (defprotocol ISession
   (get-state [this])
@@ -50,11 +65,33 @@
                            (dissoc x :__hash :cljs$lang$protocol_mask$partition0$ 
                                   :cljs$lang$protocol_mask$partition1$)
                            :else x))
-                       value)]
-      (xts/put-entity node "sessions" entity-id 
+                       value)
+          ;; Auto-flatten for SQL querying
+          flattened (merge
                      {:session_id id
                       :state (pr-str clean-value)
-                      :created_at (str (java.util.Date.))}))
+                      :created_at (str (java.util.Date.))}
+                     ;; Add app name if set
+                     (when @app-name
+                       {:app_name (name @app-name)})
+                     ;; Extract useful top-level fields (with prefixing to avoid collisions)
+                     (into {}
+                           (for [[k v] clean-value
+                                 :when (and (keyword? k)
+                                           ;; Only extract simple values or counts
+                                           (or (string? v)
+                                               (number? v)
+                                               (boolean? v)
+                                               (keyword? v)))]
+                             ;; Replace hyphens with underscores in column names
+                             [(keyword (str "app_" (clojure.string/replace (name k) "-" "_"))) 
+                              (if (keyword? v) (name v) v)]))
+                     ;; Extract metrics from collections
+                     (when-let [todos (:todos clean-value)]
+                       {:app_todos_count (if (map? todos) (count todos) 0)})
+                     (when-let [blocks (get-in clean-value [:canvas :blocks])]
+                       {:app_blocks_count (if (map? blocks) (count blocks) 0)}))]
+      (xts/put-entity node @app-table entity-id flattened))
     value)
   
   (set-state-no-persist! [this value]
@@ -64,7 +101,7 @@
   
   (get-history [this]
     (let [entity-id (str "session-" id)
-          history (xts/entity-history node "sessions" entity-id :order :desc)]
+          history (xts/entity-history node @app-table entity-id :order :desc)]
       (vec (take 50 history))))
   
   clojure.lang.IDeref
@@ -129,7 +166,7 @@
       (when-let [node @default-node]
         (let [entity-id (str "session-" session-id)
               ;; Get the latest state for this session
-              history (xts/entity-history node "sessions" entity-id :order :desc)]
+              history (xts/entity-history node @app-table entity-id :order :desc)]
           (when (seq history)
             (let [latest (first history)
                   state (try (read-string (:state latest))
@@ -152,12 +189,12 @@
   []
   (when-let [node @default-node]
     (let [;; Query for all unique session IDs using SQL
-          results (xts/query node "SELECT DISTINCT session_id FROM sessions")
+          results (xts/query node (str "SELECT DISTINCT session_id FROM " @app-table))
           ;; For each session, get its latest state
           session-infos (for [row results]
                          (let [session-id (:session_id row)
                                entity-id (str "session-" session-id)
-                               history (xts/entity-history node "sessions" entity-id :order :desc)]
+                               history (xts/entity-history node @app-table entity-id :order :desc)]
                            (when (seq history)
                              (let [latest (first history)
                                    state (try (read-string (:state latest))
@@ -206,7 +243,7 @@
   (println "jump-to-history! called with session-id:" session-id "index:" history-index)
   (when-let [session (get-session session-id)]
     (let [entity-id (str "session-" session-id)
-          history (vec (xts/entity-history (:node session) "sessions" entity-id :order :desc))]
+          history (vec (xts/entity-history (:node session) @app-table entity-id :order :desc))]
       (println "History count:" (count history) "Requested index:" history-index)
       (when (and (>= history-index 0) (< history-index (count history)))
         (let [target-entry (nth history history-index)
@@ -244,7 +281,7 @@
   [session-id]
   (when-let [session (get-session session-id)]
     (let [entity-id (str "session-" session-id)
-          history (vec (xts/entity-history (:node session) "sessions" entity-id :order :desc))
+          history (vec (xts/entity-history (:node session) @app-table entity-id :order :desc))
           current-index (get @session-history-index session-id 0)]
       {:total-states (count history)
        :current-index current-index

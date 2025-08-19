@@ -1,6 +1,7 @@
 (ns examples.todo-app.server
   "TODO app server with the new clean Reactor API"
-  (:require [reactor.server :as r]))
+  (:require [reactor.server :as r]
+            [reactor.session_simple :as session]))
 
 (defn compute-filtered-todos
   "Compute filtered todos based on current filter"
@@ -28,8 +29,10 @@
   (r/start! 
     :port 4000
     :init-fn (fn []
+              ;; Initialize with app name and table for SQL queryability
+              (session/init! :todo "todo_sessions")
               ;; Set up initial state computation for new sessions
-              (println "TODO app server started on port 4000"))
+              (println "TODO app server started on port 4000 using table: todo_sessions"))
     :handlers {;; Initialize new session with computed filtered todos
                :init-session (fn [db _]
                               (compute-filtered-todos 

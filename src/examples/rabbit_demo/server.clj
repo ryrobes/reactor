@@ -49,7 +49,9 @@
   (r/start! 
     :port 5000
     :init-fn (fn []
-              (println "Rabbit Demo server started on port 5000")
+              ;; Initialize with app name and table for SQL queryability
+              (session/init! :rabbit "rabbit_sessions")
+              (println "Rabbit Demo server started on port 5000 using table: rabbit_sessions")
               ;; Seed demo data and create SQL tables on startup
               (when-let [node @session/default-node]
                 (seed-demo-data! node)

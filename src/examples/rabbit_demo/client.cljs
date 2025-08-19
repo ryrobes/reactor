@@ -532,6 +532,7 @@
 ;; ============= Canvas Component =============
 
 (defonce table-dropdown-open (reagent/atom false))
+(defonce table-list (reagent/atom {:public [] :system []}))
 
 (defn canvas []
   (let [blocks (r/subscribe [:blocks])]
@@ -706,7 +707,15 @@
               :gap "5px"}
       :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
       :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
-      :on-click #(swap! table-dropdown-open not)}
+      :on-click (fn []
+                 (swap! table-dropdown-open not)
+                 ;; Fetch tables when opening dropdown
+                 (when-not @table-dropdown-open
+                   (-> (js/fetch "http://localhost:5000/api/tables")
+                       (.then #(.json %))
+                       (.then (fn [data]
+                               (let [tables-data (js->clj data :keywordize-keys true)]
+                                 (reset! table-list tables-data)))))))}
      "+ TABLE"
      [:span {:style {:font-size "10px"}} "▼"]]
     ;; Dropdown menu
@@ -723,7 +732,7 @@
                      :overflow-y "auto"
                      :z-index 1000
                      :box-shadow "0 4px 20px rgba(0,255,159,0.3)"}}
-       ;; User tables
+       ;; User tables (dynamically loaded)
        [:div {:style {:padding "5px 10px"
                       :color "#00ff9f"
                       :font-family "monospace"
@@ -732,7 +741,7 @@
                       :border-bottom "1px solid rgba(0,255,159,0.2)"
                       :opacity 0.7}}
         "Data Tables"]
-       (for [table ["sales" "inventory"]]
+       (for [table (filter #(not (str/starts-with? % "test_")) (:public @table-list))]
          ^{:key table}
          [:div {:style {:padding "8px 15px"
                         :color "#8ff0a4"
@@ -751,100 +760,37 @@
                                            :sql (str "SELECT * FROM " table " LIMIT 10")}]
                              (r/dispatch! [:add-block block-data])))}
           table])
-       ;; XTDB Documents
-       [:div {:style {:padding "5px 10px"
-                      :color "#00ff9f"
-                      :font-family "monospace"
-                      :font-size "10px"
-                      :text-transform "uppercase"
-                      :border-bottom "1px solid rgba(0,255,159,0.2)"
-                      :margin-top "5px"
-                      :opacity 0.7}}
-        "XTDB Documents"]
-       [:div {:style {:padding "8px 15px"
-                      :color "#8ff0a4"
-                      :font-family "monospace"
-                      :font-size "11px"
-                      :cursor "pointer"
-                      :transition "all 0.2s"}
-              :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
-              :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
-              :on-click (fn []
-                         (reset! table-dropdown-open false)
-                         (let [block-data {:id (str (random-uuid))
-                                         :type :query
-                                         :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
-                                         :size {:width 400 :height 300}
-                                         :sql "SELECT _id, session_id, state FROM sessions LIMIT 20"}]
-                           (r/dispatch! [:add-block block-data])))}
-        "All Sessions"]
-       [:div {:style {:padding "8px 15px"
-                      :color "#8ff0a4"
-                      :font-family "monospace"
-                      :font-size "11px"
-                      :cursor "pointer"
-                      :transition "all 0.2s"}
-              :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
-              :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
-              :on-click (fn []
-                         (reset! table-dropdown-open false)
-                         (let [block-data {:id (str (random-uuid))
-                                         :type :query
-                                         :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
-                                         :size {:width 400 :height 300}
-                                         :sql "SELECT _id, session_id, created_at FROM sessions"}]
-                           (r/dispatch! [:add-block block-data])))}
-        "Session States"]
-       [:div {:style {:padding "8px 15px"
-                      :color "#8ff0a4"
-                      :font-family "monospace"
-                      :font-size "11px"
-                      :cursor "pointer"
-                      :transition "all 0.2s"}
-              :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
-              :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
-              :on-click (fn []
-                         (reset! table-dropdown-open false)
-                         (let [block-data {:id (str (random-uuid))
-                                         :type :query
-                                         :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
-                                         :size {:width 400 :height 300}
-                                         :sql "SELECT _id, _valid_time FROM xt$txs ORDER BY _valid_time DESC LIMIT 20"}]
-                           (r/dispatch! [:add-block block-data])))}
-        "Transaction Log"]
        ;; System tables
-       [:div {:style {:padding "5px 10px"
-                      :color "#00ff9f"
-                      :font-family "monospace"
-                      :font-size "10px"
-                      :text-transform "uppercase"
-                      :border-bottom "1px solid rgba(0,255,159,0.2)"
-                      :margin-top "5px"
-                      :opacity 0.7}}
-        "System Tables"]
-       (for [table ["INFORMATION_SCHEMA.TABLES"
-                    "INFORMATION_SCHEMA.COLUMNS" 
-                    "INFORMATION_SCHEMA.TABLE_CONSTRAINTS"
-                    "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
-                    "INFORMATION_SCHEMA.SCHEMATA"]]
-         ^{:key table}
-         [:div {:style {:padding "8px 15px"
-                        :color "#8ff0a4"
-                        :font-family "monospace"
-                        :font-size "11px"
-                        :cursor "pointer"
-                        :transition "all 0.2s"}
-                :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
-                :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
-                :on-click (fn []
-                           (reset! table-dropdown-open false)
-                           (let [block-data {:id (str (random-uuid))
-                                           :type :query
-                                           :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
-                                           :size {:width 400 :height 300}
-                                           :sql (str "SELECT * FROM " table " LIMIT 10")}]
-                             (r/dispatch! [:add-block block-data])))}
-          table])])]
+       (when (seq (:system @table-list))
+         [:div
+          [:div {:style {:padding "5px 10px"
+                         :color "#ff006e"
+                         :font-family "monospace"
+                         :font-size "10px"
+                         :text-transform "uppercase"
+                         :border-bottom "1px solid rgba(255,0,110,0.2)"
+                         :margin-top "5px"
+                         :opacity 0.7}}
+           "System Tables"]
+          (for [table (:system @table-list)]
+            ^{:key table}
+            [:div {:style {:padding "8px 15px"
+                           :color "#ff4f99"
+                           :font-family "monospace"
+                           :font-size "11px"
+                           :cursor "pointer"
+                           :transition "all 0.2s"}
+                   :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(255,0,110,0.1)")
+                   :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+                   :on-click (fn []
+                              (reset! table-dropdown-open false)
+                              (let [block-data {:id (str (random-uuid))
+                                              :type :query
+                                              :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
+                                              :size {:width 400 :height 300}
+                                              :sql (str "SELECT * FROM " table " LIMIT 10")}]
+                                (r/dispatch! [:add-block block-data])))}
+             table])])])]
    [:button
     {:style {:padding "8px 16px"
              :background "transparent"

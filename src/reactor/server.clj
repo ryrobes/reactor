@@ -62,21 +62,27 @@
                :body (json/generate-string state)})
             
             "/api/dispatch" 
-            (let [raw-event (json/parse-string (slurp (:body req)) true)
-                  ;; Convert first element to keyword, and any filter keywords
-                  event-name (keyword (first raw-event))
-                  event-args (map (fn [x] 
-                                   (if (and (string? x) 
-                                           (contains? #{"all" "active" "completed"} x))
-                                     (keyword x)
-                                     x))
-                                 (rest raw-event))
-                  event (vec (cons event-name event-args))]
-              (println "Dispatching event:" event)
-              (session/dispatch session-id event)
-              {:status 200 
-               :headers {"Content-Type" "application/json"}
-               :body (json/generate-string @session)})
+            (try
+              (let [raw-event (json/parse-string (slurp (:body req)) true)
+                    ;; Convert first element to keyword, and any filter keywords
+                    event-name (keyword (first raw-event))
+                    event-args (map (fn [x] 
+                                     (if (and (string? x) 
+                                             (contains? #{"all" "active" "completed"} x))
+                                       (keyword x)
+                                       x))
+                                   (rest raw-event))
+                    event (vec (cons event-name event-args))]
+                (println "Dispatching event:" event)
+                (session/dispatch session-id event)
+                {:status 200 
+                 :headers {"Content-Type" "application/json"}
+                 :body (json/generate-string @session)})
+              (catch Exception e
+                (println "Error in dispatch:" (.getMessage e))
+                {:status 500
+                 :headers {"Content-Type" "application/json"}
+                 :body (json/generate-string {:error (.getMessage e)})}))
             
             "/api/undo" 
             (do (session/undo! session-id)
@@ -164,6 +170,15 @@
                :headers {"Content-Type" "application/json"}
                :body (json/generate-string tables)})
             
+            "/api/table-info"
+            (let [body (json/parse-string (slurp (:body req)) true)
+                  table-name (:table body)
+                  node (or @session/default-node (xts/start-xtdb-node))
+                  info (xts/table-info node table-name)]
+              {:status 200
+               :headers {"Content-Type" "application/json"}
+               :body (json/generate-string info)})
+            
             "/api/subscribe"
             (http/with-channel req channel
               (http/send! channel {:status 200
@@ -197,7 +212,7 @@
                   (session/destroy-session! session-to-delete)
                   ;; Also delete from XTDB
                   (when-let [node @session/default-node]
-                    (xts/delete-entity node "sessions" (str "session-" session-to-delete)))
+                    (xts/delete-entity node @session/app-table (str "session-" session-to-delete)))
                   {:status 200
                    :headers {"Content-Type" "application/json"}
                    :body (json/generate-string {:success true})})
@@ -229,15 +244,16 @@
            session-id-fn (constantly "default")
            initial-state-fn (constantly {})}}]
   
-  ;; Initialize XTDB
-  (session/init!)
+  ;; Run any custom initialization FIRST (so app can set table name)
+  (when init-fn (init-fn))
+  
+  ;; Initialize XTDB (if not already initialized by app)
+  (when-not @session/default-node
+    (session/init!))
   
   ;; Register all handlers
   (doseq [[event-id handler] handlers]
     (session/reg-event-db event-id handler))
-  
-  ;; Run any custom initialization
-  (when init-fn (init-fn))
   
   ;; Start server
   (let [handler (create-handler :session-id-fn session-id-fn)]

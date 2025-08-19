@@ -57,32 +57,20 @@
   "Store an entity - compatible with old API but uses SQL internally"
   [node table entity-id data]
   ;; XTDB 2.0 approach: DELETE then INSERT for upsert semantics
-  ;; XTDB 2.0 uses RECORDS syntax, not VALUES with column list
+  ;; Use parameterized queries for complex values
   (let [delete-sql (str "DELETE FROM " table " WHERE _id = ?")
-        ;; Helper to escape SQL string values for RECORDS syntax
-        escape-sql-string (fn [s]
-                           (if (string? s)
-                             ;; Only escape single quotes for SQL strings
-                             ;; Don't escape braces - they're only special in RECORDS syntax itself
-                             (str "'" (str/replace s "'" "''") "'")
-                             s))
-        ;; Build a record map with _id and all data fields
-        record-map (merge {:_id entity-id} 
-                         (into {} (map (fn [[k v]] [(keyword (name k)) v]) data)))
-        ;; Convert the map to RECORDS clause format
-        record-str (str "{"
-                       (str/join ", " 
-                                (map (fn [[k v]] 
-                                      (str (name k) ": " (escape-sql-string v)))
-                                     record-map))
-                       "}")
-        insert-sql (str "INSERT INTO " table " RECORDS " record-str)]
+        ;; Build column names and placeholders
+        columns (cons "_id" (map name (keys data)))
+        placeholders (str/join ", " (repeat (count columns) "?"))
+        values (cons entity-id (vals data))
+        insert-sql (str "INSERT INTO " table " (" (str/join ", " columns) ") "
+                       "VALUES (" placeholders ")")]
     (with-open [conn (get-connection node)]
       (jdbc/with-transaction [tx conn]
         ;; Delete existing record if it exists  
         (jdbc/execute! tx [delete-sql entity-id])
-        ;; Insert new record using RECORDS syntax
-        (jdbc/execute! tx [insert-sql])))))
+        ;; Insert new record using parameterized query
+        (jdbc/execute! tx (into [insert-sql] values))))))
 
 (defn get-entity
   "Retrieve an entity by ID"
@@ -256,10 +244,20 @@
                                   [sql]))
             {:success true})
           ;; Execute as query
-          {:results (jdbc/execute! conn (if (seq actual-params) 
-                                          (into [sql] actual-params)
-                                          [sql])
-                                  {:builder-fn rs/as-unqualified-lower-maps})})))
+          (let [raw-results (jdbc/execute! conn (if (seq actual-params) 
+                                                  (into [sql] actual-params)
+                                                  [sql])
+                                          {:builder-fn rs/as-unqualified-lower-maps})]
+            ;; Convert dates to strings for JSON serialization
+            {:results (mapv (fn [row]
+                             (into {} (map (fn [[k v]]
+                                            [k (cond
+                                                (instance? java.time.ZonedDateTime v) (str v)
+                                                (instance? java.time.Instant v) (str v)
+                                                (instance? java.util.Date v) (str v)
+                                                :else v)])
+                                          row)))
+                           raw-results)}))))
     (catch Exception e
       {:error (.getMessage e)})))
 
@@ -271,17 +269,65 @@
 ;; Just document the expected structure
 
 (defn list-tables
-  "List all tables in XTDB 2.0"
+  "List all tables in XTDB 2.0, including system tables"
   [node]
   (try
     (with-open [conn (get-connection node)]
-      (let [result (jdbc/execute! conn 
-                                  ["SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"]
-                                  {:builder-fn rs/as-unqualified-lower-maps})]
-        (mapv :table_name result)))
+      (let [;; Get public tables
+            public-tables (jdbc/execute! conn 
+                                        ["SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"]
+                                        {:builder-fn rs/as-unqualified-lower-maps})
+            ;; Get xt system tables
+            xt-tables (jdbc/execute! conn 
+                                    ["SELECT table_name FROM information_schema.tables WHERE table_schema = 'xt'"]
+                                    {:builder-fn rs/as-unqualified-lower-maps})]
+        {:public (mapv :table_name public-tables)
+         :system (mapv #(str "xt." (:table_name %)) xt-tables)}))
     (catch Exception e
       (println "Error listing tables:" (.getMessage e))
-      [])))
+      {:public [] :system []})))
+
+(defn table-info
+  "Get metadata about a table - columns, row count, etc"
+  [node table-name]
+  (try
+    (with-open [conn (get-connection node)]
+      (let [;; Handle schema-qualified names
+            [schema table] (if (str/includes? table-name ".")
+                             (str/split table-name #"\.")
+                             ["public" table-name])
+            ;; Get columns
+            columns-query (if (= schema "xt")
+                           ;; For system tables, just get sample row
+                           [(str "SELECT * FROM " schema "." table " LIMIT 1")]
+                           ["SELECT column_name, data_type 
+                             FROM information_schema.columns 
+                             WHERE table_schema = ? AND table_name = ?"
+                            schema table])
+            columns (if (= schema "xt")
+                     ;; For system tables, get columns from sample
+                     (let [sample (jdbc/execute! conn columns-query
+                                               {:builder-fn rs/as-unqualified-lower-maps})]
+                       (when (seq sample)
+                         (mapv (fn [col] {:column_name (name col) :data_type "variant"})
+                              (keys (first sample)))))
+                     (jdbc/execute! conn columns-query
+                                  {:builder-fn rs/as-unqualified-lower-maps}))
+            ;; Get row count
+            count-query [(str "SELECT COUNT(*) as cnt FROM " 
+                            (if (= schema "xt") (str schema ".") "")
+                            table)]
+            row-count (-> (jdbc/execute! conn count-query
+                                        {:builder-fn rs/as-unqualified-lower-maps})
+                         first
+                         :cnt)]
+        {:table-name table-name
+         :schema schema
+         :columns columns
+         :row-count row-count}))
+    (catch Exception e
+      (println "Error getting table info:" (.getMessage e))
+      {:table-name table-name :error (.getMessage e)})))
 
 (defn ensure-tables
   "XTDB 2.0 doesn't require explicit table creation - tables are implicit"
