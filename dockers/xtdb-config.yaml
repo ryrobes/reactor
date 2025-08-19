@@ -1,13 +1,19 @@
-logClusters:
-  kafka:
-    !Kafka
-      bootstrapServers: "kafka:9092"
+log: !Kafka
+  bootstrapServers: "kafka:9092"
+  topic: "xtdb-log"
+  autoCreateTopic: true
 
-databases:
-  xtdb:  # Change to your database name if needed
-    log: !Kafka
-      cluster: kafka
-      topic: "xtdb-log"
-      autoCreateTopic: true
+storage: !Local
+  path: "/var/lib/xtdb/storage"
 
+server:
+  # Explicitly set PGWire port to fixed value (overrides default random selection)
+  port: 5432
 
+# Enable healthz endpoint for monitoring/healthchecks (includes /healthz/alive)
+healthz:
+  port: 8080
+
+modules:
+  - !HttpServer
+    port: 8088  # keep separate from healthz for port conflicts

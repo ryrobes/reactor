@@ -20,26 +20,42 @@ services:
       - ALLOW_PLAINTEXT_LISTENER=yes
       - KAFKA_CFG_NODE_ID=1
       - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
-      - KAFKA_CFG_NUM_PARTITIONS=1  # Single partition for XTDB log ordering
-      - KAFKA_CFG_MESSAGE_TIMESTAMP_TYPE=LogAppendTime  # For accurate tx timestamps
-      - KAFKA_CFG_LOG_RETENTION_MS=604800000  # 1 week retention
-      - KAFKA_CFG_MESSAGE_MAX_BYTES=1048576  # 1MB max message, adjustable
-      - KAFKA_CFG_LOG_CLEANUP_POLICY=delete  # Default, no compaction needed
+      - KAFKA_CFG_NUM_PARTITIONS=1
+      - KAFKA_CFG_MESSAGE_TIMESTAMP_TYPE=LogAppendTime
+      - KAFKA_CFG_LOG_RETENTION_MS=604800000
+      - KAFKA_CFG_MESSAGE_MAX_BYTES=1048576
+      - KAFKA_CFG_LOG_CLEANUP_POLICY=delete
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   xtdb:
-    image: ghcr.io/xtdb/xtdb:2.0.0  # Use latest stable; check https://github.com/xtdb/xtdb/releases for updates
+    image: ghcr.io/xtdb/xtdb-aws:2.0.0
     container_name: xtdb
     ports:
-      - "3000:3000"  # HTTP API
-      - "5432:5432"  # PG wire protocol
+      - "8080:8080"
+      - "5432:5432"
     volumes:
-      - ./xtdb-config.yaml:/etc/xtdb/config.yaml  # Mount your config file
-      - xtdb_data:/var/lib/xtdb  # Persistence for XTDB data (optional)
-    command: node --config /etc/xtdb/config.yaml
+      - ./xtdb-config.yaml:/etc/xtdb/config.yaml
+      - xtdb_data:/var/lib/xtdb
+    command: -f /etc/xtdb/config.yaml
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
     environment:
-      - XTDB_ENABLE_PGWIRE_SERVER=true  # Enable PG wire if needed (v2 default)
+      - XTDB_ENABLE_PGWIRE_SERVER=true
+      - XTDB_PGWIRE_PORT=5432  # Explicitly set to match exposed port
+      - XTDB_ENABLE_HTTP_SERVER=true  # Enable HTTP for healthcheck
+      - XTDB_HTTP_SERVER_PORT=8080  # Explicit port for HTTP
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz/alive"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
 volumes:
   kafka_data:
