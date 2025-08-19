@@ -3,27 +3,29 @@
   :url "https://github.com/ryrobes/reactor"
   :license {:name "Eclipse Public License"
             :url  "http://www.eclipse.org/legal/epl-v10.html"}
-  :dependencies [[org.clojure/clojure "1.11.1"]
+  :dependencies [[org.clojure/clojure "1.12.0"] ; Required for XTDB 2.0
                  [org.clojure/core.cache "1.0.225"]
                  [http-kit "2.7.0"]
                  [ring/ring-core "1.10.0"]
                  [ring/ring-defaults "0.4.0"]
                  [compojure "1.7.0"]
                  [cheshire "5.12.0"]
-                 ;; XTDB dependencies
-                 [com.xtdb/xtdb-core "1.24.4"]
-                 [com.xtdb/xtdb-rocksdb "1.24.4"]
-                 [com.xtdb/xtdb-sql "1.24.4"]
+                 ;; XTDB 2.0 dependencies
+                 [com.xtdb/xtdb-api "2.0.0"]
+                 [com.xtdb/xtdb-core "2.0.0"]
+                 [com.github.seancorfield/next.jdbc "1.3.939"] ; Required by XTDB 2.0
                  ;; SQL query support
                  [honeysql "1.0.461"]
-                 ;; Logging for pgwire
+                 ;; Logging
                  [org.clojure/tools.logging "1.2.4"]
                  [ch.qos.logback/logback-classic "1.4.11"]]
+  :jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
+             "-Dio.netty.tryReflectionSetAccessible=true"]
   :plugins [[lein-cloverage "1.0.13"]
             [lein-shell "0.5.0"]
             [lein-ancient "0.6.15"]
             [lein-changelog "0.3.2"]]
-  :profiles {:dev {:dependencies [[org.clojure/clojure "1.10.0"]]}}
+  :profiles {:dev {:dependencies [[nrepl "1.0.0"]]}}
   :deploy-repositories [["releases" :clojars]]
   :aliases {"update-readme-version" ["shell" "sed" "-i" "s/\\\\[reactor \"[0-9.]*\"\\\\]/[reactor \"${:version}\"]/" "README.md"]}
   :release-tasks [["shell" "git" "diff" "--exit-code"]

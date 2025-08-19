@@ -3,9 +3,8 @@
    Each session gets its own isolated state universe with time-travel."
   (:require [reactor.xtdb-store :as xts]
             [xtdb.api :as xt]
-            [xtdb.calcite :as calcite]
-            [clojure.string :as str])
-  (:import [java.sql DriverManager]))
+            [clojure.string :as str]
+            [clojure.walk :as walk]))
 
 ;; Session Management
 ;; ==================
@@ -15,9 +14,11 @@
 (defonce default-node (atom nil))
 
 (defn init!
-  "Initialize the session system with XTDB and SQL support"
+  "Initialize the session system with XTDB 2.0"
   []
-  (reset! default-node (xts/start-xtdb-node nil 1501)))
+  (let [node (xts/start-xtdb-node {:storage-dir "data/xtdb2"})]
+    (xts/ensure-tables node)
+    (reset! default-node node)))
 
 (defprotocol ISession
   (get-state [this])
@@ -35,12 +36,25 @@
     (reset! state-atom value)
     ;; Reset history index when new state is added
     (swap! session-history-index assoc id 0)
-    ;; Persist to XTDB
-    (let [entity-id (keyword "session" id)]
-      (xt/submit-tx node [[::xt/put {:xt/id entity-id
-                                     :session-id id
-                                     :state value
-                                     :timestamp (java.util.Date.)}]]))
+    ;; Persist to XTDB 2.0
+    (let [entity-id (str "session-" id)
+          ;; Clean the state before persisting - remove ClojureScript internals
+          clean-value (walk/prewalk
+                       (fn [x]
+                         (cond
+                           ;; Handle ClojureScript UUID objects
+                           (and (map? x) (:uuid x))
+                           (str (:uuid x))
+                           ;; Remove ClojureScript internal fields
+                           (map? x)
+                           (dissoc x :__hash :cljs$lang$protocol_mask$partition0$ 
+                                  :cljs$lang$protocol_mask$partition1$)
+                           :else x))
+                       value)]
+      (xts/put-entity node "sessions" entity-id 
+                     {:session_id id
+                      :state (pr-str clean-value)
+                      :created_at (str (java.util.Date.))}))
     value)
   
   (set-state-no-persist! [this value]
@@ -49,9 +63,8 @@
     value)
   
   (get-history [this]
-    (let [entity-id (keyword "session" id)
-          db (xt/db node)
-          history (xt/entity-history db entity-id :desc)]
+    (let [entity-id (str "session-" id)
+          history (xts/entity-history node "sessions" entity-id :order :desc)]
       (vec (take 50 history))))
   
   clojure.lang.IDeref
@@ -109,9 +122,23 @@
      session)))
 
 (defn get-session
-  "Get or create a session"
+  "Get or create a session - loads from XTDB if exists"
   [session-id]
   (or (get @sessions session-id)
+      ;; Try to load from XTDB before creating new
+      (when-let [node @default-node]
+        (let [entity-id (str "session-" session-id)
+              ;; Get the latest state for this session
+              history (xts/entity-history node "sessions" entity-id :order :desc)]
+          (when (seq history)
+            (let [latest (first history)
+                  state (try (read-string (:state latest))
+                            (catch Exception _ {}))
+                  state-atom (atom state)
+                  session (->Session session-id node state-atom)]
+              (swap! sessions assoc session-id session)
+              session))))
+      ;; Only create new if not found in XTDB
       (create-session! session-id)))
 
 (defn destroy-session!
@@ -121,28 +148,24 @@
   (swap! session-history-index dissoc session-id))
 
 (defn get-all-sessions
-  "Get list of all active sessions"
+  "Get list of all sessions from XTDB"
   []
-  (let [;; Get sessions from memory first
-        active-sessions (for [[id session] @sessions]
-                         {:session-id id
-                          :todo-count (count (:todos @session {}))
-                          :active true})]
-    ;; If we have active sessions, return them
-    ;; Otherwise try to get from XTDB
-    (if (seq active-sessions)
-      (vec active-sessions)
-      (when-let [node @default-node]
-        (let [db (xt/db node)
-              ;; Query for all session entities
-              results (xt/q db '{:find [?id ?state]
-                                 :where [[?e :session-id ?id]
-                                         [?e :state ?state]]})]
-          (mapv (fn [[id state]]
-                  {:session-id id
-                   :todo-count (count (:todos state {}))
-                   :active true})
-                results))))))
+  (when-let [node @default-node]
+    (let [;; Query for all unique session IDs using SQL
+          results (xts/query node "SELECT DISTINCT session_id FROM sessions")
+          ;; For each session, get its latest state
+          session-infos (for [row results]
+                         (let [session-id (:session_id row)
+                               entity-id (str "session-" session-id)
+                               history (xts/entity-history node "sessions" entity-id :order :desc)]
+                           (when (seq history)
+                             (let [latest (first history)
+                                   state (try (read-string (:state latest))
+                                             (catch Exception _ {}))]
+                               {:session-id session-id
+                                :todo-count (count (:todos state {}))
+                                :active true}))))]
+      (vec (remove nil? session-infos)))))
 
 ;; Event Handlers
 ;; ==============
@@ -182,16 +205,17 @@
   [session-id history-index]
   (println "jump-to-history! called with session-id:" session-id "index:" history-index)
   (when-let [session (get-session session-id)]
-    (let [entity-id (keyword "session" session-id)
-          db (xt/db (:node session))
-          history (vec (xt/entity-history db entity-id :desc))]
+    (let [entity-id (str "session-" session-id)
+          history (vec (xts/entity-history (:node session) "sessions" entity-id :order :desc))]
       (println "History count:" (count history) "Requested index:" history-index)
       (when (and (>= history-index 0) (< history-index (count history)))
         (let [target-entry (nth history history-index)
-              target-tx-time (::xt/tx-time target-entry)
-              target-db (xt/db (:node session) target-tx-time)
-              target-entity (xt/entity target-db entity-id)
-              target-state (:state target-entity)]
+              _ (println "Target entry keys:" (keys target-entry))
+              _ (println "Raw state string:" (take 100 (str (:state target-entry))))
+              target-state (try (read-string (:state target-entry))
+                               (catch Exception e 
+                                 (println "Error parsing state:" (.getMessage e))
+                                 nil))]
           (println "Jumping to history index" history-index "with state:" target-state)
           (when target-state
             (swap! session-history-index assoc session-id history-index)
@@ -219,138 +243,56 @@
   "Get information about the history for time travel UI"
   [session-id]
   (when-let [session (get-session session-id)]
-    (let [entity-id (keyword "session" session-id)
-          db (xt/db (:node session))
-          history (vec (xt/entity-history db entity-id :desc))
+    (let [entity-id (str "session-" session-id)
+          history (vec (xts/entity-history (:node session) "sessions" entity-id :order :desc))
           current-index (get @session-history-index session-id 0)]
       {:total-states (count history)
        :current-index current-index
        :can-undo (< current-index (dec (count history)))
        :can-redo (> current-index 0)
        :history (mapv (fn [i entry]
-                        (let [tx-time (::xt/tx-time entry)
-                              hist-db (xt/db (:node session) tx-time)
-                              entity (xt/entity hist-db entity-id)]
+                        (let [state (try (read-string (:state entry))
+                                       (catch Exception _ {}))]
                           {:index i
-                           :tx-time tx-time
-                           :state (:state entity)}))
+                           :tx-time (:system_time_start entry)
+                           :state state}))
                       (range)
                       history)})))
 
 ;; SQL Query Execution
 ;; ====================
 
-(declare execute-sql-query-fallback)
-
 (defn execute-sql-mutation
-  "Execute a SQL mutation (INSERT/UPDATE/DELETE) using XTDB."
+  "Execute a SQL mutation using XTDB 2.0's native SQL support."
   [node sql-string & [params]]
-  (try
-    ;; For now, we'll convert simple SQL mutations to XTDB transactions
-    (let [sql-lower (.toLowerCase sql-string)]
-      (cond
-        ;; Handle INSERT INTO sales
-        (re-find #"insert\s+into\s+sales" sql-lower)
-        (let [;; Parse values from INSERT statement
-              values-match (re-find #"values\s*\(([^)]+)\)" sql-lower)
-              values (when values-match
-                      (map #(str/trim (str/replace % #"['\"]" ""))
-                           (str/split (second values-match) #",")))
-              ;; Create XTDB document
-              doc-id (str "sale-" (System/currentTimeMillis))
-              doc {:xt/id doc-id
-                   :table "sales"
-                   :product (nth values 0 "Unknown")
-                   :amount (Integer/parseInt (or (nth values 1 nil) "0"))
-                   :quantity (Integer/parseInt (or (nth values 2 nil) "0"))
-                   :sale_date (nth values 3 "")}]
-          (xt/submit-tx node [[::xt/put doc]])
-          (xt/sync node)
-          {:result "1 row inserted"})
-        
-        ;; Handle UPDATE sales
-        (re-find #"update\s+sales" sql-lower)
-        {:error "UPDATE not yet implemented for XTDB documents"}
-        
-        ;; Handle DELETE FROM sales  
-        (re-find #"delete\s+from\s+sales" sql-lower)
-        {:error "DELETE not yet implemented for XTDB documents"}
-        
-        :else
-        {:error (str "Unsupported SQL mutation: " sql-string)}))
-    (catch Exception e
-      {:error (.getMessage e)})))
+  (let [result (xts/execute-sql node sql-string params)]
+    (if (:error result)
+      result
+      {:result "SQL executed successfully"})))
 
 (defn execute-sql-query
-  "Execute a SQL query using XTDB's native SQL support via JDBC."
+  "Execute a SQL query using XTDB 2.0's native SQL support."
   [node sql-string & [params as-of]]
   (try
-    ;; Use XTDB's Calcite JDBC connection for proper SQL execution
-    (with-open [conn (calcite/jdbc-connection node)]
-      (let [;; Handle time travel with AS OF SYSTEM TIME
-            sql-with-time (if as-of
-                           ;; Add AS OF SYSTEM TIME clause to the query
-                           (let [timestamp (java.util.Date. (- (System/currentTimeMillis) 
-                                                              (* 1000 60 (Integer/parseInt (str as-of)))))
-                                 ;; Format as ISO timestamp
-                                 iso-time (.format (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'") timestamp)]
-                             (str sql-string " AS OF SYSTEM TIME \"" iso-time "\""))
-                           sql-string)
-            stmt (.createStatement conn)
-            rs (.executeQuery stmt sql-with-time)
-            ;; Get metadata to know column names
-            metadata (.getMetaData rs)
-            col-count (.getColumnCount metadata)
-            col-names (vec (for [i (range 1 (inc col-count))]
-                            (keyword (.getColumnLabel metadata i))))
-            ;; Collect results
-            results (loop [rows []]
-                     (if (.next rs)
-                       (let [row (into {}
-                                      (for [i (range 1 (inc col-count))]
-                                        [(nth col-names (dec i))
-                                         (.getObject rs i)]))]
-                         (recur (conj rows row)))
-                       rows))]
-        {:results results}))
-    
+    (let [;; Handle time travel with FOR SYSTEM_TIME AS OF
+          sql-with-time (if as-of
+                         (let [timestamp (java.util.Date. (- (System/currentTimeMillis) 
+                                                            (* 1000 60 (Integer/parseInt (str as-of)))))
+                               iso-time (.format (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ss") timestamp)]
+                           ;; XTDB 2.0 uses FOR SYSTEM_TIME AS OF syntax
+                           (str/replace sql-string #"FROM (\w+)" 
+                                       (str "FROM $1 FOR SYSTEM_TIME AS OF TIMESTAMP '" iso-time "'")))
+                         sql-string)
+          result (xts/execute-sql node sql-with-time params)]
+      (if (:error result)
+        {:error (:error result) :results []}
+        {:results (:results result)}))
     (catch Exception e
       (println "SQL execution error:" (.getMessage e))
-      ;; Return the error, don't fall back to fake data
       {:error (str "SQL Error: " (.getMessage e)) 
        :results []})))
 
-(defn execute-sql-query-fallback
-  "Fallback SQL to Datalog conversion when SQL server is not available."
-  [node sql-string params as-of]
-  (let [db (if as-of
-            (xt/db node (java.util.Date. (- (System/currentTimeMillis) 
-                                           (* 1000 60 (Integer/parseInt (str as-of))))))
-            (xt/db node))
-        sql-lower (.toLowerCase sql-string)
-        ;; Basic SQL to Datalog conversion
-        query (cond
-               (re-find #"select\s+\*\s+from\s+sales" sql-lower)
-               '{:find [(pull ?e [*])]
-                 :where [[?e :table "sales"]]}
-               
-               (re-find #"select\s+\*\s+from\s+inventory" sql-lower)
-               '{:find [(pull ?e [*])]
-                 :where [[?e :table "inventory"]]}
-               
-               :else
-               '{:find [(pull ?e [*])]
-                 :where [[?e :xt/id]]})
-        
-        raw-results (vec (map first (xt/q db query)))]
-    
-    ;; Apply ORDER BY if present
-    (let [results (if-let [order-match (re-find #"order\s+by\s+(\w+)(?:\s+(desc|asc))?" sql-lower)]
-                   (let [order-field (keyword (second order-match))
-                         desc? (= "desc" (or (nth order-match 2) "asc"))]
-                     (sort-by order-field (if desc? > <) raw-results))
-                   raw-results)]
-      {:results results})))
+;; Removed fallback - XTDB 2.0 handles all SQL natively
 
 ;; Example Usage
 (comment

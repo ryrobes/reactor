@@ -68,7 +68,28 @@
                                (reset! edit-value text))}
          text]
         [:button.destroy
-         {:on-click #(r/dispatch! [:delete-todo id])}
+         {:on-click #(r/dispatch! [:delete-todo id])
+          :style {:position "absolute"
+                  :right "10px"
+                  :top "50%"
+                  :transform "translateY(-50%)"
+                  :width "40px"
+                  :height "40px"
+                  :font-size "32px"
+                  :font-weight "bold"
+                  :color "#ffffff"
+                  :background "none"
+                  :border "none"
+                  :cursor "pointer"
+                  :transition "all 0.2s ease"
+                  :display "flex"
+                  :align-items "center"
+                  :justify-content "center"
+                  :padding "0"
+                  :margin "0"
+                  :box-shadow "none"}
+          :on-mouse-enter #(set! (.-style.transform ^js (.-currentTarget %)) "translateY(-50%) scale(1.2)")
+          :on-mouse-leave #(set! (.-style.transform ^js (.-currentTarget %)) "translateY(-50%) scale(1.0)")}
          "×"]]
        (when @editing
          [:input.edit

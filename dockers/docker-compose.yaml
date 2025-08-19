@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  kafka:
+    image: bitnami/kafka:3.8.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    environment:
+      - KAFKA_ENABLE_KRAFT=yes
+      - KAFKA_CFG_PROCESS_ROLES=broker,controller
+      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
+      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+      - KAFKA_BROKER_ID=1
+      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - ALLOW_PLAINTEXT_LISTENER=yes
+      - KAFKA_CFG_NODE_ID=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_CFG_NUM_PARTITIONS=1  # Single partition for XTDB log ordering
+      - KAFKA_CFG_MESSAGE_TIMESTAMP_TYPE=LogAppendTime  # For accurate tx timestamps
+      - KAFKA_CFG_LOG_RETENTION_MS=604800000  # 1 week retention
+      - KAFKA_CFG_MESSAGE_MAX_BYTES=1048576  # 1MB max message, adjustable
+      - KAFKA_CFG_LOG_CLEANUP_POLICY=delete  # Default, no compaction needed
+
+  xtdb:
+    image: ghcr.io/xtdb/xtdb:2.0.0  # Use latest stable; check https://github.com/xtdb/xtdb/releases for updates
+    container_name: xtdb
+    ports:
+      - "3000:3000"  # HTTP API
+      - "5432:5432"  # PG wire protocol
+    volumes:
+      - ./xtdb-config.yaml:/etc/xtdb/config.yaml  # Mount your config file
+      - xtdb_data:/var/lib/xtdb  # Persistence for XTDB data (optional)
+    command: node --config /etc/xtdb/config.yaml
+    depends_on:
+      - kafka
+    environment:
+      - XTDB_ENABLE_PGWIRE_SERVER=true  # Enable PG wire if needed (v2 default)
+
+volumes:
+  kafka_data:
+  xtdb_data:

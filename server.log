@@ -1,0 +1,6 @@
+TODO app server started on port 4000
+Execution error (BindException) at sun.nio.ch.Net/bind0 (Net.java:-2).
+Address already in use
+
+Full report at:
+/tmp/clojure-1454759596814497102.edn

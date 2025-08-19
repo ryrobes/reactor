@@ -1,0 +1,13 @@
+logClusters:
+  kafka:
+    !Kafka
+      bootstrapServers: "kafka:9092"
+
+databases:
+  xtdb:  # Change to your database name if needed
+    log: !Kafka
+      cluster: kafka
+      topic: "xtdb-log"
+      autoCreateTopic: true
+
+

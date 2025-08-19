@@ -22,4 +22,12 @@
   :chat-server {:main-opts ["-m" "examples.chat-app.server"]}
   
   :build {:deps {io.github.clojure/tools.build {:git/tag "v0.9.6" :git/sha "8e78bcc"}}
-          :ns-default build}}}
+          :ns-default build}
+  
+  ;; XTDB 2.0 migration testing
+  :xtdb2 {:override-deps {org.clojure/clojure {:mvn/version "1.12.0"}
+                          com.xtdb/xtdb-api {:mvn/version "2.0.0"}
+                          com.xtdb/xtdb-core {:mvn/version "2.0.0"}}
+          :jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
+                    "-Dio.netty.tryReflectionSetAccessible=true"]
+          :main-opts ["-m" "reactor.xtdb-v2-test"]}}}
