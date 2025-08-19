@@ -242,6 +242,45 @@
 
 (declare execute-sql-query-fallback)
 
+(defn execute-sql-mutation
+  "Execute a SQL mutation (INSERT/UPDATE/DELETE) using XTDB."
+  [node sql-string & [params]]
+  (try
+    ;; For now, we'll convert simple SQL mutations to XTDB transactions
+    (let [sql-lower (.toLowerCase sql-string)]
+      (cond
+        ;; Handle INSERT INTO sales
+        (re-find #"insert\s+into\s+sales" sql-lower)
+        (let [;; Parse values from INSERT statement
+              values-match (re-find #"values\s*\(([^)]+)\)" sql-lower)
+              values (when values-match
+                      (map #(str/trim (str/replace % #"['\"]" ""))
+                           (str/split (second values-match) #",")))
+              ;; Create XTDB document
+              doc-id (str "sale-" (System/currentTimeMillis))
+              doc {:xt/id doc-id
+                   :table "sales"
+                   :product (nth values 0 "Unknown")
+                   :amount (Integer/parseInt (or (nth values 1 nil) "0"))
+                   :quantity (Integer/parseInt (or (nth values 2 nil) "0"))
+                   :sale_date (nth values 3 "")}]
+          (xt/submit-tx node [[::xt/put doc]])
+          (xt/sync node)
+          {:result "1 row inserted"})
+        
+        ;; Handle UPDATE sales
+        (re-find #"update\s+sales" sql-lower)
+        {:error "UPDATE not yet implemented for XTDB documents"}
+        
+        ;; Handle DELETE FROM sales  
+        (re-find #"delete\s+from\s+sales" sql-lower)
+        {:error "DELETE not yet implemented for XTDB documents"}
+        
+        :else
+        {:error (str "Unsupported SQL mutation: " sql-string)}))
+    (catch Exception e
+      {:error (.getMessage e)})))
+
 (defn execute-sql-query
   "Execute a SQL query using XTDB's native SQL support via JDBC."
   [node sql-string & [params as-of]]
@@ -277,11 +316,9 @@
     
     (catch Exception e
       (println "SQL execution error:" (.getMessage e))
-      ;; Fall back to Datalog conversion for basic queries if SQL server not available
-      (try
-        (execute-sql-query-fallback node sql-string params as-of)
-        (catch Exception e2
-          {:error (.getMessage e) :results []})))))
+      ;; Return the error, don't fall back to fake data
+      {:error (str "SQL Error: " (.getMessage e)) 
+       :results []})))
 
 (defn execute-sql-query-fallback
   "Fallback SQL to Datalog conversion when SQL server is not available."

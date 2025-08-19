@@ -148,7 +148,8 @@
                                 result))
                
                :delete-block (fn [db [id]]
-                              (update db [:canvas :blocks] dissoc id))
+                              (println "DELETE-BLOCK called with id:" id)
+                              (update-in db [:canvas :blocks] dissoc id))
                
                :move-block (fn [db [id position]]
                             (assoc-in db [:canvas :blocks id :position] position))

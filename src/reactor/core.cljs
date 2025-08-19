@@ -151,6 +151,19 @@
        (.then #(.json %))
        (.then #(js->clj % :keywordize-keys true)))))
 
+(defn sql-exec!
+  "Execute a SQL statement (INSERT/UPDATE/DELETE) on the server"
+  ([sql]
+   (sql-exec! sql nil))
+  ([sql params]
+   (-> (js/fetch (str (:server-url @config) "/api/sql-exec?session=" (:session-id @config))
+                 #js {:method "POST"
+                      :headers #js {"Content-Type" "application/json"}
+                      :body (js/JSON.stringify (clj->js {:sql sql
+                                                         :params params}))})
+       (.then #(.json %))
+       (.then #(js->clj % :keywordize-keys true)))))
+
 ;; Forward declarations for functions defined later
 (declare init!)
 (declare disconnect!)

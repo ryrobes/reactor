@@ -127,6 +127,26 @@
                :headers {"Content-Type" "application/json"}
                :body (json/generate-string result)})
             
+            "/api/sql-exec"
+            (let [body (json/parse-string (slurp (:body req)) true)
+                  sql-string (:sql body)
+                  params (:params body)
+                  node (or (:node session) @session/default-node)
+                  result (if node
+                          (try
+                            ;; Execute INSERT/UPDATE/DELETE via XTDB SQL
+                            (let [result (session/execute-sql-mutation node sql-string params)]
+                              (if (:error result)
+                                result
+                                {:result (str "Executed successfully. Rows affected: " (or (:rows-affected result) "unknown"))}))
+                            (catch Exception e
+                              (println "SQL exec error:" (.getMessage e))
+                              {:error (.getMessage e)}))
+                          {:error "No XTDB node available"})]
+              {:status 200
+               :headers {"Content-Type" "application/json"}
+               :body (json/generate-string result)})
+            
             "/api/subscribe"
             (http/with-channel req channel
               (http/send! channel {:status 200

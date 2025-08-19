@@ -110,7 +110,7 @@
 
 ;; ============= Block Components =============
 
-(defn query-block [{:keys [id position size sql results as-of]}]
+(defn query-block [{:keys [id position size sql results as-of error] :as block}]
   (let [;; Initialize local position if not set
         _ (when (and position (not (get @local-positions id)))
             (swap! local-positions assoc id position))
@@ -181,7 +181,7 @@
                            (r/dispatch! [:delete-block id]))
                 :style {:background "none"
                         :border "none"
-                        :color "#ff006e"
+                        :color "#00ff9f"
                         :cursor "pointer"
                         :font-size "20px"
                         :line-height "20px"}}
@@ -238,8 +238,20 @@
         :on-click (fn []
                     (-> (r/sql-query! (or sql "SELECT * FROM sales") nil as-of)
                         (.then (fn [response]
-                                 (r/dispatch! [:update-block id {:results (:results response)}])))))}
+                                 (if (:error response)
+                                   (r/dispatch! [:update-block id {:results nil :error (:error response)}])
+                                   (r/dispatch! [:update-block id {:results (:results response) :error nil}]))))))}
        "Execute Query"]]
+     (when (:error block)
+       [:div {:style {:margin-top "10px"
+                     :padding "10px"
+                     :background "rgba(255,0,0,0.1)"
+                     :border "1px solid rgba(255,0,0,0.3)"
+                     :border-radius "4px"
+                     :color "#ff6b6b"
+                     :font-family "monospace"
+                     :font-size "11px"}}
+        (:error block)])
      (when results
        [:div.results
         {:style {:margin-top "10px"
@@ -379,7 +391,7 @@
                        :margin-top "20px"}} 
          "Link to a query block to see data"])]]))
 
-(defn sql-exec-block [{:keys [id position size sql]}]
+(defn sql-exec-block [{:keys [id position size sql error result] :as block}]
   (let [;; Initialize local position if not set
         _ (when (and position (not (get @local-positions id)))
             (swap! local-positions assoc id position))
@@ -430,7 +442,7 @@
       [:button {:on-click #(r/dispatch! [:delete-block id])
                 :style {:background "none"
                         :border "none"
-                        :color "#ff006e"
+                        :color "#ffb700"
                         :cursor "pointer"
                         :font-size "20px"
                         :line-height "20px"}} "×"]]
@@ -440,12 +452,13 @@
                     :border-radius "4px"
                     :overflow "hidden"}}
       [monaco/sql-editor
-       {:value (or sql "UPDATE sales SET amount = 300 WHERE id = 1")
+       {:value (or sql "INSERT INTO sales (product, amount, quantity, sale_date) VALUES ('TestProduct', 500, 2, '2024-01-10')")
         :on-change #(r/dispatch! [:update-block id {:sql %}])
         :height "120px"
         :theme "vs-dark"}]]
      [:button
-      {:style {:margin-top "5px"
+      {:style {:width "100%"
+               :margin-top "5px"
                :padding "5px 10px"
                :background "linear-gradient(90deg, #ffb700 0%, #ff8c00 100%)"
                :color "#0a0a0a"
@@ -455,8 +468,36 @@
                :font-weight "bold"
                :text-transform "uppercase"
                :font-size "11px"
-               :letter-spacing "1px"}}
-      "Execute"]]))
+               :letter-spacing "1px"}
+       :on-click (fn []
+                  (-> (r/sql-exec! (or sql ""))
+                      (.then (fn [response]
+                              (if (:error response)
+                                (r/dispatch! [:update-block id {:error (:error response) :result nil}])
+                                (r/dispatch! [:update-block id {:result (:result response) :error nil}]))))))}
+      "Execute"]
+     ;; Error display
+     (when error
+       [:div {:style {:margin-top "10px"
+                     :padding "10px"
+                     :background "rgba(255,0,0,0.1)"
+                     :border "1px solid rgba(255,0,0,0.3)"
+                     :border-radius "4px"
+                     :color "#ff6b6b"
+                     :font-family "monospace"
+                     :font-size "11px"}}
+        error])
+     ;; Success result display
+     (when result
+       [:div {:style {:margin-top "10px"
+                     :padding "10px"
+                     :background "rgba(255,183,0,0.1)"
+                     :border "1px solid rgba(255,183,0,0.3)"
+                     :border-radius "4px"
+                     :color "#ffb700"
+                     :font-family "monospace"
+                     :font-size "11px"}}
+        (str "Success: " result)])]))
 
 (defn render-block [block]
   (js/console.log "Rendering block:" (clj->js block) "Type:" (:type block))
@@ -473,6 +514,8 @@
 
 ;; ============= Canvas Component =============
 
+(defonce table-dropdown-open (reagent/atom false))
+
 (defn canvas []
   (let [blocks (r/subscribe [:blocks])]
     (fn []
@@ -485,6 +528,9 @@
                 :overflow "auto"
                 :box-shadow "inset 0 0 100px rgba(0,0,0,0.5)"
                 :cursor (when @connection-mode "crosshair")}
+        :on-click (fn []
+                   ;; Close dropdown when clicking on canvas
+                   (reset! table-dropdown-open false))
         :on-mouse-move (fn [e]
                         (handle-drag! e)
                         (handle-resize! e))
@@ -589,6 +635,8 @@
 
 ;; ============= Toolbar Component =============
 
+
+
 (defn toolbar []
   [:div.toolbar
    {:style {:height "60px"
@@ -622,6 +670,164 @@
                    (js/console.log "Adding query block:" (clj->js block-data))
                    (r/dispatch! [:add-block block-data])))}
     "+ QUERY"]
+   ;; Table dropdown button
+   [:div {:style {:position "relative"}}
+    [:button
+     {:style {:padding "8px 16px"
+              :background "transparent"
+              :color "#00ff9f"
+              :border "1px solid #00ff9f"
+              :border-radius "2px"
+              :cursor "pointer"
+              :font-family "monospace"
+              :font-size "12px"
+              :text-transform "uppercase"
+              :letter-spacing "1px"
+              :transition "all 0.3s"
+              :display "flex"
+              :align-items "center"
+              :gap "5px"}
+      :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
+      :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+      :on-click #(swap! table-dropdown-open not)}
+     "+ TABLE"
+     [:span {:style {:font-size "10px"}} "▼"]]
+    ;; Dropdown menu
+    (when @table-dropdown-open
+      [:div {:style {:position "absolute"
+                     :top "100%"
+                     :left 0
+                     :margin-top "5px"
+                     :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
+                     :border "1px solid #00ff9f"
+                     :border-radius "4px"
+                     :min-width "200px"
+                     :max-height "400px"
+                     :overflow-y "auto"
+                     :z-index 1000
+                     :box-shadow "0 4px 20px rgba(0,255,159,0.3)"}}
+       ;; User tables
+       [:div {:style {:padding "5px 10px"
+                      :color "#00ff9f"
+                      :font-family "monospace"
+                      :font-size "10px"
+                      :text-transform "uppercase"
+                      :border-bottom "1px solid rgba(0,255,159,0.2)"
+                      :opacity 0.7}}
+        "Data Tables"]
+       (for [table ["sales" "inventory"]]
+         ^{:key table}
+         [:div {:style {:padding "8px 15px"
+                        :color "#8ff0a4"
+                        :font-family "monospace"
+                        :font-size "11px"
+                        :cursor "pointer"
+                        :transition "all 0.2s"}
+                :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
+                :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+                :on-click (fn []
+                           (reset! table-dropdown-open false)
+                           (let [block-data {:id (str (random-uuid))
+                                           :type :query
+                                           :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
+                                           :size {:width 400 :height 300}
+                                           :sql (str "SELECT * FROM " table " LIMIT 10")}]
+                             (r/dispatch! [:add-block block-data])))}
+          table])
+       ;; XTDB Documents
+       [:div {:style {:padding "5px 10px"
+                      :color "#00ff9f"
+                      :font-family "monospace"
+                      :font-size "10px"
+                      :text-transform "uppercase"
+                      :border-bottom "1px solid rgba(0,255,159,0.2)"
+                      :margin-top "5px"
+                      :opacity 0.7}}
+        "XTDB Documents"]
+       [:div {:style {:padding "8px 15px"
+                      :color "#8ff0a4"
+                      :font-family "monospace"
+                      :font-size "11px"
+                      :cursor "pointer"
+                      :transition "all 0.2s"}
+              :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
+              :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+              :on-click (fn []
+                         (reset! table-dropdown-open false)
+                         (let [block-data {:id (str (random-uuid))
+                                         :type :query
+                                         :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
+                                         :size {:width 400 :height 300}
+                                         :sql "SELECT _id FROM XT_DOCS LIMIT 20"}]
+                           (r/dispatch! [:add-block block-data])))}
+        "All Documents (XT_DOCS)"]
+       [:div {:style {:padding "8px 15px"
+                      :color "#8ff0a4"
+                      :font-family "monospace"
+                      :font-size "11px"
+                      :cursor "pointer"
+                      :transition "all 0.2s"}
+              :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
+              :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+              :on-click (fn []
+                         (reset! table-dropdown-open false)
+                         (let [block-data {:id (str (random-uuid))
+                                         :type :query
+                                         :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
+                                         :size {:width 400 :height 300}
+                                         :sql "SELECT _id, _valid_time FROM XT_DOCS WHERE _id LIKE ':session/%'"}]
+                           (r/dispatch! [:add-block block-data])))}
+        "Session States"]
+       [:div {:style {:padding "8px 15px"
+                      :color "#8ff0a4"
+                      :font-family "monospace"
+                      :font-size "11px"
+                      :cursor "pointer"
+                      :transition "all 0.2s"}
+              :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
+              :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+              :on-click (fn []
+                         (reset! table-dropdown-open false)
+                         (let [block-data {:id (str (random-uuid))
+                                         :type :query
+                                         :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
+                                         :size {:width 400 :height 300}
+                                         :sql "SELECT _id FROM TX_LOG ORDER BY _tx_time DESC LIMIT 20"}]
+                           (r/dispatch! [:add-block block-data])))}
+        "Transaction Log (TX_LOG)"]
+       ;; System tables
+       [:div {:style {:padding "5px 10px"
+                      :color "#00ff9f"
+                      :font-family "monospace"
+                      :font-size "10px"
+                      :text-transform "uppercase"
+                      :border-bottom "1px solid rgba(0,255,159,0.2)"
+                      :margin-top "5px"
+                      :opacity 0.7}}
+        "System Tables"]
+       (for [table ["INFORMATION_SCHEMA.TABLES"
+                    "INFORMATION_SCHEMA.COLUMNS" 
+                    "INFORMATION_SCHEMA.TABLE_CONSTRAINTS"
+                    "INFORMATION_SCHEMA.KEY_COLUMN_USAGE"
+                    "INFORMATION_SCHEMA.SCHEMATA"]]
+         ^{:key table}
+         [:div {:style {:padding "8px 15px"
+                        :color "#8ff0a4"
+                        :font-family "monospace"
+                        :font-size "11px"
+                        :cursor "pointer"
+                        :transition "all 0.2s"}
+                :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
+                :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+                :on-click (fn []
+                           (reset! table-dropdown-open false)
+                           (let [block-data {:id (str (random-uuid))
+                                           :type :query
+                                           :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
+                                           :size {:width 400 :height 300}
+                                           :sql (str "SELECT * FROM " table " LIMIT 10")}]
+                             (r/dispatch! [:add-block block-data])))}
+          table])])]
    [:button
     {:style {:padding "8px 16px"
              :background "transparent"
