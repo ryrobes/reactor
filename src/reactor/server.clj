@@ -1,6 +1,7 @@
 (ns reactor.server
   "Dead simple server setup - one function to rule them all"
   (:require [reactor.session_simple :as session]
+            [reactor.xtdb-store :as xts]
             [org.httpkit.server :as http]
             [cheshire.core :as json]
             [honeysql.core :as hsql]
@@ -156,6 +157,13 @@
                :headers {"Content-Type" "application/json"}
                :body (json/generate-string result)})
             
+            "/api/tables"
+            (let [node (or @session/default-node (xts/start-xtdb-node))
+                  tables (xts/list-tables node)]
+              {:status 200
+               :headers {"Content-Type" "application/json"}
+               :body (json/generate-string tables)})
+            
             "/api/subscribe"
             (http/with-channel req channel
               (http/send! channel {:status 200
@@ -180,6 +188,22 @@
               {:status 200
                :headers {"Content-Type" "application/json"}
                :body (json/generate-string {:session-id new-session-id})})
+            
+            "/api/delete-session"
+            (let [body (json/parse-string (slurp (:body req)) true)
+                  session-to-delete (:session-id body)]
+              (if (and session-to-delete (not= session-to-delete "default"))
+                (do
+                  (session/destroy-session! session-to-delete)
+                  ;; Also delete from XTDB
+                  (when-let [node @session/default-node]
+                    (xts/delete-entity node "sessions" (str "session-" session-to-delete)))
+                  {:status 200
+                   :headers {"Content-Type" "application/json"}
+                   :body (json/generate-string {:success true})})
+                {:status 400
+                 :headers {"Content-Type" "application/json"}
+                 :body (json/generate-string {:error "Cannot delete default session"})}))
             
             "/api/history-info"
             {:status 200

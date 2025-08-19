@@ -29,6 +29,25 @@
 (defonce local-sizes (reagent/atom {}))  ;; Track sizes locally for smooth resizing
 (defonce pending-update (atom nil))  ;; Debounce timer
 
+;; Clear local positions when blocks change from time travel
+(defonce blocks-watcher 
+  (let [blocks-sub (r/subscribe [:blocks])]
+    (add-watch blocks-sub ::position-sync
+               (fn [_ _ old-blocks new-blocks]
+                 ;; If blocks changed significantly (time travel), sync positions
+                 (when (not= (set (keys old-blocks)) (set (keys new-blocks)))
+                   ;; Clear local overrides to use state positions
+                   (reset! local-positions {})
+                   (reset! local-sizes {}))
+                 ;; Update local positions for blocks that moved in state
+                 (doseq [[id block] new-blocks]
+                   (when-let [pos (:position block)]
+                     (when (not= pos (get-in old-blocks [id :position]))
+                       (swap! local-positions assoc id pos)))
+                   (when-let [size (:size block)]
+                     (when (not= size (get-in old-blocks [id :size]))
+                       (swap! local-sizes assoc id size))))))))
+
 (defn start-drag! [block-id event]
   (let [rect (.. event -currentTarget getBoundingClientRect)
         offset-x (- (.-clientX event) (.-left rect))
@@ -59,9 +78,8 @@
   (when-let [{:keys [block-id]} @drag-state]
     (when-let [pos (get @local-positions block-id)]
       (r/dispatch! [:move-block block-id pos])
-      ;; Keep the local position until server confirms
-      ;; (removed the reset of local-positions here)
-      ))
+      ;; Clear local position after dispatch
+      (swap! local-positions dissoc block-id)))
   (reset! drag-state nil)
   (when @pending-update
     (js/clearTimeout @pending-update)
@@ -102,7 +120,9 @@
   ;; Send final size on resize end
   (when-let [{:keys [block-id]} @resize-state]
     (when-let [size (get @local-sizes block-id)]
-      (r/dispatch! [:resize-block block-id size])))
+      (r/dispatch! [:resize-block block-id size])
+      ;; Clear local size after dispatch
+      (swap! local-sizes dissoc block-id)))
   (reset! resize-state nil)
   (when @pending-update
     (js/clearTimeout @pending-update)
@@ -111,16 +131,15 @@
 ;; ============= Block Components =============
 
 (defn query-block [{:keys [id position size sql results as-of error] :as block}]
-  (let [;; Initialize local position if not set
-        _ (when (and position (not (get @local-positions id)))
-            (swap! local-positions assoc id position))
-        local-pos (get @local-positions id)
-        actual-pos (or local-pos position)
-        ;; Initialize local size if not set
-        _ (when (and size (not (get @local-sizes id)))
-            (swap! local-sizes assoc id size))
-        local-size (get @local-sizes id)
-        actual-size (or local-size size)]
+  (let [;; Use local position only while dragging, otherwise use state position
+        is-dragging? (= id (:block-id @drag-state))
+        is-resizing? (= id (:block-id @resize-state))
+        actual-pos (if (or is-dragging? (get @local-positions id))
+                     (get @local-positions id position)
+                     position)
+        actual-size (if (or is-resizing? (get @local-sizes id))
+                      (get @local-sizes id size)
+                      size)]
     [:div.block.query-block
      {:style {:position "absolute"
               :left (:x actual-pos)
@@ -282,16 +301,15 @@
                             :font-family "monospace"}} (str (get row col))])])]]])]))
 
 (defn chart-block [{:keys [id position size source-id chart-type]}]
-  (let [;; Initialize local position if not set
-        _ (when (and position (not (get @local-positions id)))
-            (swap! local-positions assoc id position))
-        local-pos (get @local-positions id)
-        actual-pos (or local-pos position)
-        ;; Initialize local size if not set
-        _ (when (and size (not (get @local-sizes id)))
-            (swap! local-sizes assoc id size))
-        local-size (get @local-sizes id)
-        actual-size (or local-size size)
+  (let [;; Use local position only while dragging, otherwise use state position
+        is-dragging? (= id (:block-id @drag-state))
+        is-resizing? (= id (:block-id @resize-state))
+        actual-pos (if (or is-dragging? (get @local-positions id))
+                     (get @local-positions id position)
+                     position)
+        actual-size (if (or is-resizing? (get @local-sizes id))
+                      (get @local-sizes id size)
+                      size)
         source-block (when source-id @(r/subscribe [:block source-id]))
         chart-data (:results source-block [])]
     [:div.block.chart-block
@@ -392,16 +410,15 @@
          "Link to a query block to see data"])]]))
 
 (defn sql-exec-block [{:keys [id position size sql error result] :as block}]
-  (let [;; Initialize local position if not set
-        _ (when (and position (not (get @local-positions id)))
-            (swap! local-positions assoc id position))
-        local-pos (get @local-positions id)
-        actual-pos (or local-pos position)
-        ;; Initialize local size if not set
-        _ (when (and size (not (get @local-sizes id)))
-            (swap! local-sizes assoc id size))
-        local-size (get @local-sizes id)
-        actual-size (or local-size size)]
+  (let [;; Use local position only while dragging, otherwise use state position
+        is-dragging? (= id (:block-id @drag-state))
+        is-resizing? (= id (:block-id @resize-state))
+        actual-pos (if (or is-dragging? (get @local-positions id))
+                     (get @local-positions id position)
+                     position)
+        actual-size (if (or is-resizing? (get @local-sizes id))
+                      (get @local-sizes id size)
+                      size)]
     [:div.block.sql-exec-block
      {:style {:position "absolute"
               :left (:x actual-pos)
@@ -758,9 +775,9 @@
                                          :type :query
                                          :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
                                          :size {:width 400 :height 300}
-                                         :sql "SELECT _id FROM XT_DOCS LIMIT 20"}]
+                                         :sql "SELECT _id, session_id, state FROM sessions LIMIT 20"}]
                            (r/dispatch! [:add-block block-data])))}
-        "All Documents (XT_DOCS)"]
+        "All Sessions"]
        [:div {:style {:padding "8px 15px"
                       :color "#8ff0a4"
                       :font-family "monospace"
@@ -775,7 +792,7 @@
                                          :type :query
                                          :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
                                          :size {:width 400 :height 300}
-                                         :sql "SELECT _id, _valid_time FROM XT_DOCS WHERE _id LIKE ':session/%'"}]
+                                         :sql "SELECT _id, session_id, created_at FROM sessions"}]
                            (r/dispatch! [:add-block block-data])))}
         "Session States"]
        [:div {:style {:padding "8px 15px"
@@ -792,9 +809,9 @@
                                          :type :query
                                          :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
                                          :size {:width 400 :height 300}
-                                         :sql "SELECT _id FROM TX_LOG ORDER BY _tx_time DESC LIMIT 20"}]
+                                         :sql "SELECT _id, _valid_time FROM xt$txs ORDER BY _valid_time DESC LIMIT 20"}]
                            (r/dispatch! [:add-block block-data])))}
-        "Transaction Log (TX_LOG)"]
+        "Transaction Log"]
        ;; System tables
        [:div {:style {:padding "5px 10px"
                       :color "#00ff9f"
@@ -879,57 +896,229 @@
                    :text-transform "uppercase"
                    :letter-spacing "2px"}} "RABBIT//SQL_BROWSER"]])
 
+;; ============= Session Management =============
+
+(defonce session-dropdown-open (reagent/atom false))
+(defonce sessions-list (reagent/atom []))
+(defonce current-session (reagent/atom "default"))
+(defonce new-session-name (reagent/atom ""))
+
+(defn load-sessions! []
+  (-> (r/get-sessions!)
+      (.then (fn [sessions]
+               (reset! sessions-list sessions)))))
+
+(defn session-selector []
+  (let [blocks (r/subscribe [:blocks])
+        _ (reagent/create-class
+           {:component-did-mount
+            (fn []
+              (load-sessions!)
+              ;; Poll for session updates
+              (js/setInterval load-sessions! 5000))
+            
+            :reagent-render
+            (fn [] [:div])})
+        ;; Reload sessions when blocks change
+        _ (add-watch blocks ::session-refresh
+                    (fn [_ _ _ _]
+                      (load-sessions!)))]
+    (fn []
+      [:div {:style {:position "relative"}}
+       ;; Current session button
+       [:button
+        {:style {:padding "6px 12px"
+                 :background "transparent"
+                 :color "#00ff9f"
+                 :border "1px solid rgba(0,255,159,0.5)"
+                 :border-radius "2px"
+                 :cursor "pointer"
+                 :font-family "monospace"
+                 :font-size "11px"
+                 :text-transform "uppercase"
+                 :display "flex"
+                 :align-items "center"
+                 :gap "5px"}
+         :on-click #(swap! session-dropdown-open not)}
+        [:span {:style {:color "#00ff9f"
+                        :opacity 0.7
+                        :font-size "10px"}} "SESSION:"]
+        [:span @current-session]
+        [:span {:style {:font-size "10px"}} (if @session-dropdown-open "▲" "▼")]]
+       
+       ;; Dropdown menu (drops upward)
+       (when @session-dropdown-open
+         [:div {:style {:position "absolute"
+                        :bottom "100%"
+                        :right 0
+                        :margin-bottom "5px"
+                        :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
+                        :border "1px solid #00ff9f"
+                        :border-radius "4px"
+                        :min-width "250px"
+                        :max-height "300px"
+                        :overflow-y "auto"
+                        :z-index 1000
+                        :box-shadow "0 -4px 20px rgba(0,255,159,0.3)"}}
+          ;; New session input
+          [:div {:style {:padding "10px"
+                         :border-bottom "1px solid rgba(0,255,159,0.2)"}}
+           [:div {:style {:display "flex" :gap "5px"}}
+            [:input {:type "text"
+                     :placeholder "New session name"
+                     :value @new-session-name
+                     :on-change #(reset! new-session-name (-> % .-target .-value))
+                     :style {:flex 1
+                             :padding "4px 8px"
+                             :background "rgba(0,0,0,0.3)"
+                             :border "1px solid rgba(0,255,159,0.3)"
+                             :border-radius "2px"
+                             :color "#00ff9f"
+                             :font-family "monospace"
+                             :font-size "11px"}
+                     :on-key-down #(when (= (.-which %) 13)
+                                    (when (seq @new-session-name)
+                                      (r/create-session! @new-session-name)
+                                      (r/switch-session! @new-session-name)
+                                      (reset! current-session @new-session-name)
+                                      (reset! new-session-name "")
+                                      (load-sessions!)))}]
+            [:button {:style {:padding "4px 10px"
+                              :background "linear-gradient(90deg, #00ff9f 0%, #00cc7f 100%)"
+                              :color "#0a0a0a"
+                              :border "none"
+                              :border-radius "2px"
+                              :cursor "pointer"
+                              :font-family "monospace"
+                              :font-size "10px"
+                              :font-weight "bold"}
+                      :on-click (fn []
+                                 (when (seq @new-session-name)
+                                   (r/create-session! @new-session-name)
+                                   (r/switch-session! @new-session-name)
+                                   (reset! current-session @new-session-name)
+                                   (reset! new-session-name "")
+                                   (load-sessions!)))}
+             "CREATE"]]]
+          
+          ;; Session list
+          [:div {:style {:max-height "200px" :overflow-y "auto"}}
+           (for [session @sessions-list]
+             ^{:key (:session-id session)}
+             [:div {:style {:display "flex"
+                            :align-items "center"
+                            :padding "8px 10px"
+                            :cursor "pointer"
+                            :transition "all 0.2s"
+                            :background (when (= (:session-id session) @current-session)
+                                         "rgba(0,255,159,0.1)")}
+                    :on-mouse-over #(when (not= (:session-id session) @current-session)
+                                     (set! (.-style.background ^js (.-currentTarget %)) "rgba(0,255,159,0.05)"))
+                    :on-mouse-out #(when (not= (:session-id session) @current-session)
+                                    (set! (.-style.background ^js (.-currentTarget %)) "transparent"))
+                    :on-click (fn []
+                               (r/switch-session! (:session-id session))
+                               (reset! current-session (:session-id session))
+                               (reset! session-dropdown-open false))}
+              [:div {:style {:flex 1}}
+               [:div {:style {:color "#00ff9f"
+                              :font-family "monospace"
+                              :font-size "11px"}} 
+                (:session-id session)]
+               [:div {:style {:color "#8ff0a4"
+                              :font-family "monospace"
+                              :font-size "9px"
+                              :opacity 0.7}} 
+                (str (count (get-in session [:canvas :blocks] {})) " blocks")]]
+              ;; Delete button (not for default session)
+              (when (not= (:session-id session) "default")
+                [:button {:style {:padding "2px 6px"
+                                  :background "none"
+                                  :border "1px solid rgba(255,0,0,0.5)"
+                                  :border-radius "2px"
+                                  :color "#ff6b6b"
+                                  :cursor "pointer"
+                                  :font-family "monospace"
+                                  :font-size "9px"}
+                          :on-click (fn [e]
+                                     (.stopPropagation ^js e)
+                                     (when (js/confirm (str "Delete session '" (:session-id session) "'?"))
+                                       (-> (js/fetch "http://localhost:5000/api/delete-session"
+                                                    #js {:method "POST"
+                                                         :headers #js {"Content-Type" "application/json"}
+                                                         :body (js/JSON.stringify #js {:session-id (:session-id session)})})
+                                           (.then #(.json %))
+                                           (.then (fn [result]
+                                                   (when (= (:session-id session) @current-session)
+                                                     (reset! current-session "default")
+                                                     (r/switch-session! "default"))
+                                                   (load-sessions!))))))}
+                 "DELETE"])])]])])))
+
 ;; ============= Timeline Component =============
 
 (defn timeline-controls []
-  [:div.timeline
-   {:style {:position "fixed"
-            :bottom 0
-            :left 0
-            :right 0
-            :height "60px"
-            :background "linear-gradient(90deg, #0a0a0a 0%, #1a1a2e 100%)"
-            :border-top "1px solid rgba(0,255,159,0.2)"
-            :display "flex"
-            :align-items "center"
-            :padding "0 20px"
-            :gap "20px"
-            :box-shadow "0 -2px 20px rgba(0,0,0,0.5)"}}
-   [:button {:style {:padding "6px 12px"
-                     :background "transparent"
-                     :color "#00ff9f"
-                     :border "1px solid rgba(0,255,159,0.5)"
-                     :border-radius "2px"
-                     :cursor "pointer"
-                     :font-family "monospace"
-                     :font-size "11px"
-                     :text-transform "uppercase"}
-             :on-click #(r/undo!)} "← UNDO"]
-   [:button {:style {:padding "6px 12px"
-                     :background "transparent"
-                     :color "#00ff9f"
-                     :border "1px solid rgba(0,255,159,0.5)"
-                     :border-radius "2px"
-                     :cursor "pointer"
-                     :font-family "monospace"
-                     :font-size "11px"
-                     :text-transform "uppercase"}
-             :on-click #(r/redo!)} "REDO →"]
-   [:div {:style {:flex 1 :display "flex" :align-items "center" :gap "15px"}}
-    [:span {:style {:color "#00ff9f" :font-family "monospace" :font-size "11px" :text-transform "uppercase"}} "Canvas:"]
-    [:input {:type "range" 
-             :style {:flex 1 
-                    :-webkit-appearance "none"
-                    :height "2px"
-                    :background "rgba(0,255,159,0.2)"
-                    :outline "none"}}]
-    [:span {:style {:color "#ff006e" :font-family "monospace" :font-size "11px" :text-transform "uppercase"}} "Data:"]
-    [:input {:type "range" 
-             :style {:flex 1
-                    :-webkit-appearance "none"
-                    :height "2px"
-                    :background "rgba(255,0,110,0.2)"
-                    :outline "none"}}]]])
+  (let [history-info (r/subscribe [:history-info])]
+    (fn []
+      [:div.timeline
+       {:style {:position "fixed"
+                :bottom 0
+                :left 0
+                :right 0
+                :height "60px"
+                :background "linear-gradient(90deg, #0a0a0a 0%, #1a1a2e 100%)"
+                :border-top "1px solid rgba(0,255,159,0.2)"
+                :display "flex"
+                :align-items "center"
+                :padding "0 20px"
+                :gap "20px"
+                :box-shadow "0 -2px 20px rgba(0,0,0,0.5)"}}
+       [:button {:style {:padding "6px 12px"
+                         :background "transparent"
+                         :color "#00ff9f"
+                         :border "1px solid rgba(0,255,159,0.5)"
+                         :border-radius "2px"
+                         :cursor "pointer"
+                         :font-family "monospace"
+                         :font-size "11px"
+                         :text-transform "uppercase"
+                         :opacity (if (:can-undo @history-info) 1 0.5)}
+                 :disabled (not (:can-undo @history-info))
+                 :on-click #(r/undo!)} "← UNDO"]
+       [:button {:style {:padding "6px 12px"
+                         :background "transparent"
+                         :color "#00ff9f"
+                         :border "1px solid rgba(0,255,159,0.5)"
+                         :border-radius "2px"
+                         :cursor "pointer"
+                         :font-family "monospace"
+                         :font-size "11px"
+                         :text-transform "uppercase"
+                         :opacity (if (:can-redo @history-info) 1 0.5)}
+                 :disabled (not (:can-redo @history-info))
+                 :on-click #(r/redo!)} "REDO →"]
+       [:div {:style {:flex 1 :display "flex" :align-items "center" :gap "15px"}}
+        [:span {:style {:color "#00ff9f" :font-family "monospace" :font-size "11px" :text-transform "uppercase"}} 
+         "TIMELINE:"]
+        [:span {:style {:color "#8ff0a4" :font-family "monospace" :font-size "10px"}}
+         (str "State " (- (:total-states @history-info 0) (:current-index @history-info 0))
+              " of " (:total-states @history-info 0))]
+        [:input {:type "range"
+                 :min 0
+                 :max (max 0 (dec (:total-states @history-info 1)))
+                 :value (- (max 0 (dec (:total-states @history-info 1))) 
+                          (:current-index @history-info 0))
+                 :style {:flex 1 
+                        :-webkit-appearance "none"
+                        :height "2px"
+                        :background "rgba(0,255,159,0.2)"
+                        :outline "none"}
+                 :on-change #(let [val (js/parseInt (.. % -target -value))
+                                  max-idx (max 0 (dec (:total-states @history-info 1)))
+                                  idx (- max-idx val)]
+                              (r/jump-to-history! idx))}]]
+       ;; Session selector on the right
+       [session-selector]])))
 
 ;; ============= Main App Component =============
 
@@ -949,5 +1138,21 @@
 
 (defn ^:export init! []
   (r/init! {:server-url "http://localhost:5000"})
-  (r/dispatch! [:init-rabbit])
+  ;; Initialize with default session or get from query params
+  (let [params (js/URLSearchParams. js/window.location.search)
+        session-id (or (.get params "session") "default")]
+    (reset! current-session session-id)
+    (r/switch-session! session-id))
+  ;; Wait for state to load, then check if we need to initialize
+  (js/setTimeout
+    (fn []
+      ;; Only dispatch init-rabbit for truly new/empty sessions
+      (let [current-state @(r/subscribe [:get []])]
+        (when-not (:canvas current-state)
+          (js/console.log "No canvas found, initializing...")
+          (r/dispatch! [:init-rabbit])))
+      ;; Always get history info for time travel
+      (r/get-history-info!))
+    500)  ;; Give more time for state to load
+  (load-sessions!)
   (rdom/render [rabbit-app] (.getElementById js/document "app")))

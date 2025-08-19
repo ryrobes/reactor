@@ -244,15 +244,21 @@
                           (str/starts-with? sql-lower "update")
                           (str/starts-with? sql-lower "delete")
                           (str/starts-with? sql-lower "create")
-                          (str/starts-with? sql-lower "drop"))]
+                          (str/starts-with? sql-lower "drop"))
+          ;; Filter out nil params - variadic args make (nil) when called with nil
+          actual-params (remove nil? params)]
       (with-open [conn (get-connection node)]
         (if is-mutation?
           ;; Execute as mutation
           (do
-            (jdbc/execute! conn (into [sql] params))
+            (jdbc/execute! conn (if (seq actual-params) 
+                                  (into [sql] actual-params)
+                                  [sql]))
             {:success true})
           ;; Execute as query
-          {:results (jdbc/execute! conn (into [sql] params)
+          {:results (jdbc/execute! conn (if (seq actual-params) 
+                                          (into [sql] actual-params)
+                                          [sql])
                                   {:builder-fn rs/as-unqualified-lower-maps})})))
     (catch Exception e
       {:error (.getMessage e)})))
@@ -263,6 +269,19 @@
 
 ;; Tables in XTDB 2.0 are implicit - no need to create them
 ;; Just document the expected structure
+
+(defn list-tables
+  "List all tables in XTDB 2.0"
+  [node]
+  (try
+    (with-open [conn (get-connection node)]
+      (let [result (jdbc/execute! conn 
+                                  ["SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"]
+                                  {:builder-fn rs/as-unqualified-lower-maps})]
+        (mapv :table_name result)))
+    (catch Exception e
+      (println "Error listing tables:" (.getMessage e))
+      [])))
 
 (defn ensure-tables
   "XTDB 2.0 doesn't require explicit table creation - tables are implicit"

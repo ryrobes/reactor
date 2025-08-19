@@ -28,7 +28,7 @@ SERVER_PID=$!
 echo "Server PID: $SERVER_PID"
 
 # Wait for server to start
-echo -e "${BLUE}Waiting for server to initialize XTDB...${NC}"
+echo -e "${BLUE}Waiting for server to initialize...${NC}"
 
 # Poll for server to be ready (up to 30 seconds)
 COUNTER=0

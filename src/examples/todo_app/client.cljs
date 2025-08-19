@@ -321,12 +321,11 @@
     [footer]]
    [:footer.info
     [:p "Double-click to edit a todo"]
-    [:p "Created with " [:a {:href "https://github.com/ryrobes/reactor"} "Reactor"]]]])
+    [:p "Created with " [:a {:href "https://github.com/ryrobes/reactor"} "(Rabbit) Reactor"]]]])
 
 (defn ^:export init! []
   (r/init! {:server-url "http://localhost:4000"})
   ;; Get initial history info and sessions once
   (r/get-history-info!)
   (r/get-sessions!)
-  ;; Use React 17 render for now as Reagent 1.2.0 doesn't fully support React 18
   (rdom/render [todo-app] (.getElementById js/document "app")))
