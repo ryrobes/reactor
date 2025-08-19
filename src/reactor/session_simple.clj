@@ -226,12 +226,12 @@
     (when-let [handler (get @event-handlers event-key)]
       (println "Found handler for" event-key)
       (when-let [session (get-session session-id)]
-        (println "Current state before:" @session)
+        ;(println "Current state before:" @session)
         ;; Reset history index when new state is created
         (swap! session-history-index assoc session-id 0)
         ;; Now apply the new event
         (let [result (swap! session #(handler % (vec (rest event))))]
-          (println "State after:" result)
+          ;(println "State after:" result)
           result)))))
 
 ;; Time Travel

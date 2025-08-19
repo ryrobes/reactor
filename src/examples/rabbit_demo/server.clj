@@ -1,8 +1,9 @@
 (ns examples.rabbit-demo.server
   "Rabbit Demo - SQL data browser with time travel"
-  (:require [reactor.server :as r]
+  (:require [reactor.reactive-server :as r]
             [reactor.session_simple :as session]
             [reactor.xtdb-store :as xts]
+            [reactor.kafka-reactive :as kafka]
             [cheshire.core :as json]
             [org.httpkit.server :as http]))
 
@@ -46,7 +47,16 @@
 ;; SQL execution is now handled by session/execute-sql-query in the main server
 
 (defn -main []
-  (r/start! 
+  ;; Initialize Kafka reactive system first
+  (try
+    (kafka/init! {"bootstrap.servers" "localhost:9092"
+                  "group.id" "rabbit-demo"})
+    (println "Kafka reactive system initialized")
+    (catch Exception e
+      (println "WARNING: Could not initialize Kafka:" (.getMessage e))
+      (println "Reactive updates will not work")))
+  
+  (r/start-reactive! 
     :port 5000
     :init-fn (fn []
               ;; Initialize with app name and table for SQL queryability
@@ -67,8 +77,13 @@
                
                :update-block (fn [db [id updates]]
                               (println "UPDATE-BLOCK:" id "with" updates)
-                              (let [result (update-in db [:canvas :blocks id] merge updates)]
-                                (println "Block after update:" (get-in result [:canvas :blocks id]))
+                              ;; Limit the size of results stored to prevent Kafka message size errors
+                              (let [limited-updates (if (:results updates)
+                                                     (assoc updates :results 
+                                                           (take 10 (:results updates))) ; Only store first 10 rows
+                                                     updates)
+                                    result (update-in db [:canvas :blocks id] merge limited-updates)]
+                                (println "Block after update (limited):" (get-in result [:canvas :blocks id]))
                                 result))
                
                :delete-block (fn [db [id]]

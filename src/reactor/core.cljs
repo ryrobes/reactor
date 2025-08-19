@@ -12,6 +12,7 @@
 (defonce connected? (r/atom false))
 (defonce sessions (r/atom []))
 (defonce history-info (r/atom {}))
+(defonce sql-subscriptions (atom {}))  ;; Track active SQL subscriptions
 
 (defn configure! 
   "Set server URL and session ID"
@@ -21,6 +22,9 @@
 
 ;; Subscriptions (just like re-frame!)
 (defonce subscriptions (atom {}))
+
+;; Forward declaration
+(declare create-sql-subscription!)
 
 (defn reg-sub
   "Register a subscription - handler should be a function of [db query-args]"
@@ -33,16 +37,31 @@
   (reg-sub id (fn [db _] (get-in db path))))
 
 (defn subscribe
-  "Subscribe to data - returns a reactive atom"
+  "Subscribe to data - returns a reactive atom
+   Supports both keypath subscriptions [:get [:some :path]] and
+   SQL subscriptions [:sql \"SELECT * FROM table\"]"
   [query]
-  (let [handler (get @subscriptions (first query))
-        args (rest query)
-        result-atom (r/atom nil)]
-    ;; Set up reactive computation
-    (r/track! (fn []
-                (when handler
-                  (reset! result-atom (handler @app-db args)))))
-    result-atom))
+  (cond
+    ;; SQL subscription
+    (= :sql (first query))
+    (let [sql (second query)
+          params (nth query 2 nil)
+          as-of (nth query 3 nil)
+          result-atom (r/atom {:loading true})]
+      ;; Create reactive SQL subscription
+      (create-sql-subscription! sql params as-of result-atom)
+      result-atom)
+    
+    ;; Regular keypath subscription
+    :else
+    (let [handler (get @subscriptions (first query))
+          args (rest query)
+          result-atom (r/atom nil)]
+      ;; Set up reactive computation
+      (r/track! (fn []
+                  (when handler
+                    (reset! result-atom (handler @app-db args)))))
+      result-atom)))
 
 ;; Simple key-path subscription
 (reg-sub :db (fn [db _] db))
@@ -67,10 +86,15 @@
                 #js {:method "POST"
                      :headers #js {"Content-Type" "application/json"}
                      :body (js/JSON.stringify (clj->js event))})
-      (.then #(.json %))
+      (.then (fn [response]
+               (if (.-ok response)
+                 (.json response)
+                 (throw (js/Error. "Dispatch failed")))))
       (.then #(do
                 (js/console.log "[CLIENT] dispatch! response received")
-                (reset! app-db (js->clj % :keywordize-keys true))
+                ;; Only update state if not an error response
+                (when-not (:error %)
+                  (reset! app-db (js->clj % :keywordize-keys true)))
                 ;; Update history info and sessions after dispatch
                 (get-history-info!)
                 ;; Update sessions to reflect new todo count
@@ -136,20 +160,36 @@
       (.then #(js->clj % :keywordize-keys true))))
 
 (defn sql-query!
-  "Execute a SQL query on the server"
+  "Execute a SQL query and create a reactive subscription"
   ([sql]
    (sql-query! sql nil nil))
   ([sql params]
    (sql-query! sql params nil))
   ([sql params as-of]
-   (-> (js/fetch (str (:server-url @config) "/api/sql?session=" (:session-id @config))
-                 #js {:method "POST"
-                      :headers #js {"Content-Type" "application/json"}
-                      :body (js/JSON.stringify (clj->js {:sql sql
-                                                         :params params
-                                                         :as-of as-of}))})
-       (.then #(.json %))
-       (.then #(js->clj % :keywordize-keys true)))))
+   ;; Create a subscription and return initial results as a promise
+   (let [result-atom (subscribe [:sql sql params as-of])]
+     ;; Return a promise that resolves with the initial value
+     (js/Promise. 
+      (fn [resolve reject]
+        ;; Wait for the first non-loading result
+        (let [watch-key (gensym)]
+          (add-watch result-atom watch-key
+                     (fn [_ _ _ new-val]
+                       (when-not (:loading new-val)
+                         (remove-watch result-atom watch-key)
+                         (if (:error new-val)
+                           (resolve {:error (:error new-val)})
+                           (resolve {:results (:data new-val)})))))))))))
+
+(defn sql-subscribe!
+  "Create a reactive SQL subscription that updates automatically"
+  ([sql]
+   (sql-subscribe! sql nil nil))
+  ([sql params]
+   (sql-subscribe! sql params nil))
+  ([sql params as-of]
+   ;; Create a subscription and return a reactive atom
+   (subscribe [:sql sql params as-of])))
 
 (defn sql-exec!
   "Execute a SQL statement (INSERT/UPDATE/DELETE) on the server"
@@ -253,6 +293,83 @@
    ;; Return the app-db for convenience
    app-db))
 
+;; SQL Subscription Management  
+(defonce sql-event-source (atom nil))  ;; Single SSE connection for all SQL subscriptions
+
+(defn ensure-sql-sse-connection!
+  "Ensure we have a single SSE connection for SQL subscriptions"
+  []
+  (when-not @sql-event-source
+    (let [server-url (:server-url @config)
+          session-id (:session-id @config)
+          sse-url (str server-url "/api/subscribe-sql?session=" session-id)
+          es (js/EventSource. sse-url)]
+      
+      ;; Handle SSE updates for ALL SQL subscriptions
+      (set! (.-onmessage es)
+            (fn [e]
+              (let [data (js->clj (js/JSON.parse (.-data e)) :keywordize-keys true)]
+                (when-let [sub-id (:subscription-id data)]
+                  (when-let [sub (get @sql-subscriptions sub-id)]
+                    (js/console.log "[CLIENT] SQL subscription update:" sub-id)
+                    (reset! (:result-atom sub)
+                            (if (:error (:result data))
+                              {:error (:error (:result data)) :loading false}
+                              {:data (:results (:result data)) :loading false})))))))
+      
+      ;; Handle errors
+      (set! (.-onerror es)
+            (fn [e]
+              (js/console.error "[CLIENT] SQL SSE connection error:" e)))
+      
+      (reset! sql-event-source es))))
+
+(defn create-sql-subscription!
+  "Create a reactive SQL subscription that updates automatically"
+  [sql params as-of result-atom]
+  (let [sub-id (str "sql-" (random-uuid))
+        server-url (:server-url @config)
+        session-id (:session-id @config)]
+    
+    ;; Store subscription locally FIRST before any async operations
+    (swap! sql-subscriptions assoc sub-id 
+           {:sql sql
+            :params params
+            :result-atom result-atom})
+    
+    ;; Ensure SSE connection exists (this might trigger immediate updates)
+    (ensure-sql-sse-connection!)
+    
+    ;; Call /api/sql which will create server-side subscription AND return initial results
+    (-> (js/fetch (str server-url "/api/sql?session=" session-id)
+                  #js {:method "POST"
+                       :headers #js {"Content-Type" "application/json"}
+                       :body (js/JSON.stringify 
+                              (clj->js {:sql sql
+                                       :params params
+                                       :as-of as-of
+                                       :subscription-id sub-id}))})  ;; Pass sub-id to server
+        (.then #(.json %))
+        (.then #(let [result (js->clj % :keywordize-keys true)]
+                  (js/console.log "[CLIENT] Initial query result for" sub-id)
+                  (reset! result-atom 
+                          (if (:error result)
+                            {:error (:error result) :loading false}
+                            {:data (:results result) :loading false}))))
+        (.catch #(do
+                  (js/console.error "[CLIENT] Query failed for" sub-id %)
+                  (reset! result-atom {:error (str %) :loading false}))))
+    
+    sub-id))
+
+(defn close-sql-subscription!
+  "Close a SQL subscription"
+  [sub-id]
+  (when-let [sub (get @sql-subscriptions sub-id)]
+    (when-let [es (:event-source sub)]
+      (.close es))
+    (swap! sql-subscriptions dissoc sub-id)))
+
 ;; Cleanup
 (defn disconnect! []
   (when @event-source
@@ -260,4 +377,9 @@
     (reset! event-source nil)
     (reset! connected? false))
   ;; Clear history info when disconnecting
-  (reset! history-info {}))
+  (reset! history-info {})
+  ;; Close all SQL subscriptions
+  (doseq [[sub-id sub] @sql-subscriptions]
+    (when-let [es (:event-source sub)]
+      (.close es)))
+  (reset! sql-subscriptions {}))

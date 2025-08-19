@@ -18,11 +18,22 @@
                  [honeysql "1.0.461"]
                  ;; Logging
                  [org.clojure/tools.logging "1.2.4"]
-                 [ch.qos.logback/logback-classic "1.4.11"]]
+                 [ch.qos.logback/logback-classic "1.4.11"]
+                 ;; Kafka integration for XTDB transaction log
+                 [fundingcircle/jackdaw "0.9.12"] ;;  :exclusions [org.apache.kafka/kafka-streams-test-utils]
+                 [com.taoensso/nippy "3.3.0"]
+                 ;; Async for tests
+                 [org.clojure/core.async "1.6.681"]
+                 ;; https://mvnrepository.com/artifact/org.apache.kafka/kafka-streams-test-utils
+                 [org.apache.kafka/kafka-streams-test-utils "4.0.0"]
+                 ;;[pjstadig/humane-test-output "0.11.0"]
+                 ]
+
   :jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
              "-Dio.netty.tryReflectionSetAccessible=true"]
   :plugins [[lein-cloverage "1.0.13"]
             [lein-shell "0.5.0"]
+            [lein-eftest "0.6.0"]
             [lein-ancient "0.6.15"]
             [lein-changelog "0.3.2"]]
   :profiles {:dev {:dependencies [[nrepl "1.0.0"]]}}

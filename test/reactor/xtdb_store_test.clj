@@ -1,14 +1,13 @@
 (ns reactor.xtdb-store-test
   (:require [clojure.test :refer :all]
-            [reactor.xtdb-store :as xts]
-            [xtdb.api :as xt])
-  (:import [java.time Duration]))
+            [reactor.xtdb-store :as xts]))
 
 (deftest test-xtdb-node-lifecycle
   (testing "Can start and stop XTDB 2.0 node"
     (let [node (xts/start-xtdb-node)]
       (is (not (nil? node)))
-      ;; In XTDB 2.0, nodes don't implement PXtdb
+      (is (map? node))
+      (is (:jdbcUrl node))
       (xts/stop-xtdb-node node))))
 
 (deftest test-basic-entity-operations
@@ -42,8 +41,8 @@
           
         ;; Delete it
         (xts/delete-entity node "test_entities" "entity-2")
-        ;; In XTDB 2.0, deletes might not be immediately visible
-        (Thread/sleep 100)
+        ;; Give XTDB time to process
+        (Thread/sleep 200)
         (is (nil? (xts/get-entity node "test_entities" "entity-2")))
         
         (finally
