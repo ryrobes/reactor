@@ -4,7 +4,9 @@
             [reagent.core :as reagent]
             [reagent.dom :as rdom]
             [clojure.string :as str]
-            [examples.rabbit-demo.monaco :as monaco]))
+            [examples.rabbit-demo.monaco :as monaco]
+            [examples.rabbit-demo.reactive-queries :as rq]
+            [examples.rabbit-demo.auto-refresh :as auto-refresh]))
 
 ;; ============= Subscriptions =============
 
@@ -130,8 +132,10 @@
 
 ;; ============= Block Components =============
 
-(defn query-block [{:keys [id position size sql results as-of error] :as block}]
-  (let [;; Use local position only while dragging, otherwise use state position
+(defn query-block [{:keys [id position size sql as-of] :as block}]
+  (let [;; Get results from reactive-queries module
+        {:keys [results error loading]} (rq/get-block-results id)
+        ;; Use local position only while dragging, otherwise use state position
         is-dragging? (= id (:block-id @drag-state))
         is-resizing? (= id (:block-id @resize-state))
         actual-pos (if (or is-dragging? (get @local-positions id))
@@ -197,6 +201,7 @@
         (str "#" id)]]
       [:button {:on-click (fn [e]
                            (.stopPropagation ^js e)
+                           (rq/unsubscribe-block! id)  ;; Clean up subscription
                            (r/dispatch! [:delete-block id]))
                 :style {:background "none"
                         :border "none"
@@ -255,13 +260,10 @@
                 :font-size "11px"
                 :letter-spacing "1px"}
         :on-click (fn []
-                    (-> (r/sql-query! (or sql "SELECT * FROM sales") nil as-of)
-                        (.then (fn [response]
-                                 (if (:error response)
-                                   (r/dispatch! [:update-block id {:results nil :error (:error response)}])
-                                   (r/dispatch! [:update-block id {:results (:results response) :error nil}]))))))}
+                    ;; Use reactive query that auto-updates
+                    (rq/execute-block-query! id (or sql "SELECT * FROM sales") nil as-of))}
        "Execute Query"]]
-     (when (:error block)
+     (when error
        [:div {:style {:margin-top "10px"
                      :padding "10px"
                      :background "rgba(255,0,0,0.1)"
@@ -270,7 +272,7 @@
                      :color "#ff6b6b"
                      :font-family "monospace"
                      :font-size "11px"}}
-        (:error block)])
+        error])
      (when results
        [:div.results
         {:style {:margin-top "10px"
@@ -311,7 +313,9 @@
                       (get @local-sizes id size)
                       size)
         source-block (when source-id @(r/subscribe [:block source-id]))
-        chart-data (:results source-block [])]
+        ;; Get results from reactive-queries for the source block
+        source-results (when source-id (rq/get-block-results source-id))
+        chart-data (:results source-results [])]
     [:div.block.chart-block
      {:style {:position "absolute"
               :left (:x actual-pos)
@@ -349,7 +353,8 @@
                       :text-transform "uppercase"
                       :font-size "11px"
                       :letter-spacing "1px"}} "CHART"]
-      [:button {:on-click #(r/dispatch! [:delete-block id])
+      [:button {:on-click #(do (rq/unsubscribe-block! id)
+                              (r/dispatch! [:delete-block id]))
                 :style {:background "none"
                         :border "none"
                         :color "#ff006e"
@@ -456,7 +461,8 @@
                       :text-transform "uppercase"
                       :font-size "11px"
                       :letter-spacing "1px"}} "SQL EXECUTE"]
-      [:button {:on-click #(r/dispatch! [:delete-block id])
+      [:button {:on-click #(do (rq/unsubscribe-block! id)
+                              (r/dispatch! [:delete-block id]))
                 :style {:background "none"
                         :border "none"
                         :color "#ffb700"
@@ -1089,6 +1095,8 @@
         session-id (or (.get params "session") "default")]
     (reset! current-session session-id)
     (r/switch-session! session-id))
+  ;; Auto-refresh queries for blocks loaded from persistence
+  (auto-refresh/init-auto-refresh!)
   ;; Wait for state to load, then check if we need to initialize
   (js/setTimeout
     (fn []

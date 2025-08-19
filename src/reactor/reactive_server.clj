@@ -37,6 +37,15 @@
             :get
             (do
               (log/info "[REACTIVE-SERVER] SSE connection request from session:" session-id)
+              ;; Don't clean up subscriptions on reconnect - let them persist
+              ;; This way reactive updates continue to work
+              (let [existing-subs (filter (fn [[sub-id sub-info]]
+                                           (= (:session-id sub-info) session-id))
+                                         @kafka/active-subscriptions)]
+                (when (seq existing-subs)
+                  (log/info "[REACTIVE-SERVER] Session" session-id "reconnecting with" (count existing-subs) "existing subscriptions:"
+                            (map first existing-subs))))
+              
               (http/with-channel req channel
                 ;; Set up SSE headers
                 (http/send! channel {:status 200
@@ -140,33 +149,49 @@
                           "Access-Control-Allow-Origin" "*"}
                  :body (json/generate-string result)})
               ;; Create subscription for business tables
-              (let [;; Use client-provided subscription-id if available
-                    client-sub-id (:subscription-id body)
-                    sub-id (if client-sub-id
-                            ;; Register with client's ID
-                            (do (log/info "[REACTIVE-SERVER] Registering client subscription:" client-sub-id "for SQL:" sql)
+              (let [;; Check if there's already a subscription for this SQL query
+                    existing-sub (first (filter (fn [[sub-id sub-info]]
+                                                  (and (= (:session-id sub-info) session-id)
+                                                       (= (:query sub-info) sql)
+                                                       (= (:params sub-info) params)))
+                                               @kafka/active-subscriptions))
+                    ;; Use existing or client-provided subscription-id
+                    sub-id (cond
+                            ;; If we have an existing subscription for this query, reuse it
+                            existing-sub
+                            (let [[existing-id _] existing-sub]
+                              (log/info "[REACTIVE-SERVER] Reusing existing subscription:" existing-id "for SQL:" sql)
+                              existing-id)
+                            
+                            ;; If client provided an ID, use it
+                            (:subscription-id body)
+                            (do (log/info "[REACTIVE-SERVER] Registering client subscription:" (:subscription-id body) "for SQL:" sql)
                                 (kafka/register-query-subscription! 
-                                 client-sub-id sql params 
+                                 (:subscription-id body) sql params 
                                  (kafka/create-subscription-callback session-id) 
                                  session-id)
                                 ;; Execute immediately to get initial results
-                                (kafka/re-execute-subscription client-sub-id)
-                                client-sub-id)
-                            ;; Create new subscription
+                                (kafka/re-execute-subscription (:subscription-id body))
+                                (:subscription-id body))
+                            
+                            ;; Otherwise create new subscription
+                            :else
                             (kafka/subscribe-query! session-id sql params))]
-                (log/info "[REACTIVE-SERVER] Created/registered subscription" sub-id "for session" session-id)
+                (log/info "[REACTIVE-SERVER] Using subscription" sub-id "for session" session-id)
                 (log/info "[REACTIVE-SERVER] Active SSE channels for session:" (count (get @kafka/sse-channels session-id [])))
-                ;; Return initial results
+                ;; Return initial results WITH the subscription ID
                 (let [node @session/default-node
                       result (if node
                               (if as-of
                                 (session/execute-sql-query node sql params as-of)
                                 (xts/execute-sql node sql params))
-                              {:error "No XTDB node available"})]
+                              {:error "No XTDB node available"})
+                      ;; Include subscription ID in response
+                      result-with-sub (assoc result :subscription-id sub-id)]
                   {:status 200
                    :headers {"Content-Type" "application/json"
                             "Access-Control-Allow-Origin" "*"}
-                   :body (json/generate-string result)}))))
+                   :body (json/generate-string result-with-sub)}))))
           
           ;; Override SQL exec to trigger reactive updates
           "/api/sql-exec"

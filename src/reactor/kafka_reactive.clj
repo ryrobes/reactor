@@ -320,19 +320,20 @@
   "Push data to all SSE channels for a session."
   [session-id data]
   (log/info "[KAFKA-REACTIVE] Pushing to session" session-id "channels:" (count (get @sse-channels session-id [])))
-  (log/debug "[KAFKA-REACTIVE] SSE channels map:" @sse-channels)
+  (log/debug "[KAFKA-REACTIVE] SSE channels map keys:" (keys @sse-channels))
   (if-let [channels (seq (get @sse-channels session-id))]
     (let [message (str "data: " (cheshire.core/generate-string data) "\n\n")]
       (log/info "[KAFKA-REACTIVE] Sending update to" (count channels) "channel(s) for session" session-id)
+      (log/info "[KAFKA-REACTIVE] Update type:" (:type data) "subscription-id:" (:subscription-id data))
       (doseq [channel channels]
         (try
           (http-server/send! channel message false)
           (log/info "[KAFKA-REACTIVE] Successfully pushed update to channel for session" session-id)
           (catch Exception e
-            (log/error e "[KAFKA-REACTIVE] Error sending to SSE channel")
+            (log/error e "[KAFKA-REACTIVE] Error sending to SSE channel - channel might be closed")
             ;; Clean up dead channel
             (unregister-sse-channel! session-id channel)))))
-    (log/warn "[KAFKA-REACTIVE] No SSE channels found for session" session-id)))
+    (log/warn "[KAFKA-REACTIVE] No SSE channels found for session" session-id "- client may not be connected")))
 
 (defn create-subscription-callback
   "Create a callback that pushes query results via SSE."

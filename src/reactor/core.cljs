@@ -14,6 +14,10 @@
 (defonce history-info (r/atom {}))
 (defonce sql-subscriptions (atom {}))  ;; Track active SQL subscriptions
 
+;; SQL Subscription Management  
+(defonce sql-event-source (atom nil))  ;; Single SSE connection for all SQL subscriptions
+(defonce sql-query-cache (atom {}))    ;; Cache result atoms by query to avoid duplicates
+
 (defn configure! 
   "Set server URL and session ID"
   [{:keys [server-url session-id]}]
@@ -48,7 +52,7 @@
           params (nth query 2 nil)
           as-of (nth query 3 nil)
           result-atom (r/atom {:loading true})]
-      ;; Create reactive SQL subscription
+      ;; Always create a new subscription - the server will handle deduplication
       (create-sql-subscription! sql params as-of result-atom)
       result-atom)
     
@@ -281,8 +285,19 @@
    (let [es (js/EventSource. (str (:server-url @config) "/api/subscribe?session=" (:session-id @config)))]
      (set! (.-onmessage es)
            (fn [e]
-             (js/console.log "[CLIENT] SSE message received:" (.-data e))
-             (reset! app-db (js->clj (js/JSON.parse (.-data e)) :keywordize-keys true))
+             (let [data (js->clj (js/JSON.parse (.-data e)) :keywordize-keys true)]
+               ;; Check if this is a full state update or a partial update
+               (if (:partial-update data)
+                 ;; Partial update - merge into existing state
+                 (do
+                   (js/console.log "[CLIENT] SSE partial update received for path:" (clj->js (:path data)))
+                   (if-let [path (:path data)]
+                     (swap! app-db assoc-in path (:value data))
+                     (js/console.warn "[CLIENT] Partial update missing path")))
+                 ;; Full state update (e.g., time travel, undo/redo)
+                 (do
+                   (js/console.log "[CLIENT] SSE full state received")
+                   (reset! app-db data))))
              (reset! connected? true)))
      (set! (.-onerror es)
            (fn [e]
@@ -293,8 +308,7 @@
    ;; Return the app-db for convenience
    app-db))
 
-;; SQL Subscription Management  
-(defonce sql-event-source (atom nil))  ;; Single SSE connection for all SQL subscriptions
+
 
 (defn ensure-sql-sse-connection!
   "Ensure we have a single SSE connection for SQL subscriptions"
@@ -309,13 +323,25 @@
       (set! (.-onmessage es)
             (fn [e]
               (let [data (js->clj (js/JSON.parse (.-data e)) :keywordize-keys true)]
-                (when-let [sub-id (:subscription-id data)]
-                  (when-let [sub (get @sql-subscriptions sub-id)]
-                    (js/console.log "[CLIENT] SQL subscription update:" sub-id)
-                    (reset! (:result-atom sub)
-                            (if (:error (:result data))
-                              {:error (:error (:result data)) :loading false}
-                              {:data (:results (:result data)) :loading false})))))))
+                (js/console.log "[CLIENT] SSE SQL update received:" (clj->js data))
+                (js/console.log "[CLIENT] Message type:" (:type data) "is keyword?" (keyword? (:type data)))
+                ;; Skip "connected" messages - only process query updates
+                ;; Handle both keyword and string types (JSON serialization converts keywords to strings)
+                (when (or (= (:type data) :query-update)
+                          (= (:type data) "query-update"))
+                  (when-let [sub-id (:subscription-id data)]
+                    (js/console.log "[CLIENT] Looking for subscription:" sub-id "in" (count @sql-subscriptions) "subscriptions")
+                    (js/console.log "[CLIENT] Available subscription IDs:" (clj->js (keys @sql-subscriptions)))
+                    (if-let [sub (get @sql-subscriptions sub-id)]
+                      (do
+                        (js/console.log "[CLIENT] Found subscription, updating result atom for" sub-id)
+                        ;; Update the result atom
+                        (reset! (:result-atom sub)
+                                (if (:error (:result data))
+                                  {:error (:error (:result data)) :loading false}
+                                  {:data (:results (:result data)) :loading false}))
+                        (js/console.log "[CLIENT] Result atom updated with" (count (:results (:result data))) "results"))
+                      (js/console.warn "[CLIENT] No subscription found for ID:" sub-id)))))))
       
       ;; Handle errors
       (set! (.-onerror es)
@@ -351,7 +377,19 @@
                                        :subscription-id sub-id}))})  ;; Pass sub-id to server
         (.then #(.json %))
         (.then #(let [result (js->clj % :keywordize-keys true)]
-                  (js/console.log "[CLIENT] Initial query result for" sub-id)
+                  (js/console.log "[CLIENT] Initial query result for" sub-id "Result:" (clj->js result))
+                  ;; Handle subscription ID from server
+                  (if-let [server-sub-id (:subscription-id result)]
+                    (if (not= server-sub-id sub-id)
+                      (do
+                        (js/console.log "[CLIENT] Server returned different subscription ID:" server-sub-id "updating mapping")
+                        ;; Move the subscription to the server's ID
+                        (let [sub-info (get @sql-subscriptions sub-id)]
+                          (swap! sql-subscriptions dissoc sub-id)
+                          (swap! sql-subscriptions assoc server-sub-id sub-info)
+                          (js/console.log "[CLIENT] Updated subscriptions map. Keys:" (clj->js (keys @sql-subscriptions)))))
+                      (js/console.log "[CLIENT] Server confirmed subscription ID:" server-sub-id))
+                    (js/console.warn "[CLIENT] Server did not return subscription ID!"))
                   (reset! result-atom 
                           (if (:error result)
                             {:error (:error result) :loading false}

@@ -53,13 +53,20 @@
     (swap! session-history-index assoc id 0)
     ;; Persist to XTDB 2.0
     (let [entity-id (str "session-" id)
-          ;; Clean the state before persisting - remove ClojureScript internals
+          ;; Clean the state before persisting - remove ClojureScript internals AND query results
+          ;; NOTE: We strip :results to prevent exponential growth in transaction logs.
+          ;; Query results can be massive and storing them causes Kafka message size errors.
+          ;; The client keeps results in memory for rendering, but they won't persist.
           clean-value (walk/prewalk
                        (fn [x]
                          (cond
                            ;; Handle ClojureScript UUID objects
                            (and (map? x) (:uuid x))
                            (str (:uuid x))
+                           ;; STRIP OUT QUERY RESULTS from blocks before persisting!
+                           ;; This prevents exponential growth when queries include session data
+                           (and (map? x) (contains? x :results))
+                           (dissoc x :results)
                            ;; Remove ClojureScript internal fields
                            (map? x)
                            (dissoc x :__hash :cljs$lang$protocol_mask$partition0$ 

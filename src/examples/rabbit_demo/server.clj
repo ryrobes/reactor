@@ -77,17 +77,14 @@
                
                :update-block (fn [db [id updates]]
                               (println "UPDATE-BLOCK:" id "with" updates)
-                              ;; Limit the size of results stored to prevent Kafka message size errors
-                              (let [limited-updates (if (:results updates)
-                                                     (assoc updates :results 
-                                                           (take 10 (:results updates))) ; Only store first 10 rows
-                                                     updates)
-                                    result (update-in db [:canvas :blocks id] merge limited-updates)]
-                                (println "Block after update (limited):" (get-in result [:canvas :blocks id]))
+                              ;; No need to limit results anymore - they won't be persisted
+                              (let [result (update-in db [:canvas :blocks id] merge updates)]
+                                (println "Block after update:" (get-in result [:canvas :blocks id]))
                                 result))
                
                :delete-block (fn [db [id]]
                               (println "DELETE-BLOCK called with id:" id)
+                              ;; Note: Client should call rq/unsubscribe-block! before dispatching delete
                               (update-in db [:canvas :blocks] dissoc id))
                
                :move-block (fn [db [id position]]
