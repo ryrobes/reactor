@@ -132,22 +132,30 @@
         :created
         (do
           (log/info "Inserting subscription record for" sub-id)
-          (xts/execute-sql node
-            "INSERT INTO reactor_subscriptions (_id, sub_id, session_id, query, tables, 
-                                                status, created_at, update_count, 
-                                                total_execution_time, last_updated)
-             VALUES (?, ?, ?, ?, ?, 'active', ?, 0, 0, ?)"
-            [(generate-id) sub-id session-id query (pr-str tables) timestamp timestamp]))
+          (try
+            (let [result (xts/execute-sql node
+                          "INSERT INTO reactor_subscriptions (_id, sub_id, session_id, query, tables, 
+                                                              status, created_at, update_count, 
+                                                              total_execution_time, last_updated)
+                           VALUES (?, ?, ?, ?, ?, 'active', ?, 0, 0, ?)"
+                          (generate-id) sub-id session-id query (pr-str tables) timestamp timestamp)]
+              (log/info "Insert result:" result))
+            (catch Exception e
+              (log/error e "Failed to insert subscription"))))
         
         :updated
-        (xts/execute-sql node
-          "UPDATE reactor_subscriptions 
-           SET update_count = update_count + 1,
-               total_execution_time = total_execution_time + ?,
-               last_result_count = ?,
-               last_updated = ?
-           WHERE sub_id = ?"
-          [execution-time-ms result-count timestamp sub-id])
+        (try
+          (let [result (xts/execute-sql node
+                        "UPDATE reactor_subscriptions 
+                         SET update_count = update_count + 1,
+                             total_execution_time = total_execution_time + ?,
+                             last_result_count = ?,
+                             last_updated = ?
+                         WHERE sub_id = ?"
+                        execution-time-ms result-count timestamp sub-id)]
+            (log/info "Update result for" sub-id ":" result))
+          (catch Exception e
+            (log/error e "Failed to update subscription" sub-id)))
         
         :removed
         (xts/execute-sql node
@@ -156,7 +164,7 @@
                removed_at = ?,
                removal_reason = ?
            WHERE sub_id = ?"
-          [timestamp reason sub-id])))))
+          timestamp reason sub-id)))))
 
 (defn- process-event! [{:keys [category event-type payload session-id timestamp]}]
   (let [node @session/default-node]
@@ -164,7 +172,7 @@
       (xts/execute-sql node
         "INSERT INTO reactor_events (_id, category, event_type, payload, session_id, created_at)
          VALUES (?, ?, ?, ?, ?, ?)"
-        [(generate-id) category event-type (pr-str payload) session-id timestamp]))))
+        (generate-id) category event-type (pr-str payload) session-id timestamp))))
 
 (defn- process-reaction! [{:keys [table-name change-type affected-subscriptions timestamp]}]
   (let [node @session/default-node]
@@ -173,7 +181,7 @@
         "INSERT INTO reactor_reactions (_id, table_name, change_type, 
                                         affected_subscriptions, triggered_at)
          VALUES (?, ?, ?, ?, ?)"
-        [(generate-id) table-name change-type (pr-str affected-subscriptions) timestamp]))))
+        (generate-id) table-name change-type (pr-str affected-subscriptions) timestamp))))
 
 (defn- process-performance! [{:keys [metric-type query execution-time-ms result-count timestamp]}]
   (let [node @session/default-node]
@@ -182,7 +190,7 @@
         "INSERT INTO reactor_performance (_id, metric_type, query, 
                                           execution_time_ms, result_count, measured_at)
          VALUES (?, ?, ?, ?, ?, ?)"
-        [(generate-id) metric-type query execution-time-ms result-count timestamp]))))
+        (generate-id) metric-type query execution-time-ms result-count timestamp))))
 
 ;; ========== Table Creation ==========
 
@@ -190,70 +198,58 @@
   "Create meta-tracking tables if they don't exist"
   []
   (let [node @session/default-node]
+    (log/info "Node for meta-tracking:" (if node (str "exists: " (type node)) "nil"))
     (when node
-      (log/info "Creating meta-tracking tables...")
+      (log/info "Creating meta-tracking tables with node:" node)
       
-      ;; Subscriptions table
+      ;; Subscriptions table - XTDB 2.0 creates tables on first insert
       (try
+        (log/info "Initializing reactor_subscriptions table...")
+        ;; Insert a dummy row to create the table, then delete it
         (xts/execute-sql node
-          "CREATE TABLE IF NOT EXISTS reactor_subscriptions (
-            _id VARCHAR PRIMARY KEY,
-            sub_id VARCHAR,
-            session_id VARCHAR,
-            query TEXT,
-            tables TEXT,
-            status VARCHAR,
-            created_at TIMESTAMP,
-            removed_at TIMESTAMP,
-            removal_reason VARCHAR,
-            update_count INTEGER,
-            total_execution_time BIGINT,
-            last_result_count INTEGER,
-            last_updated TIMESTAMP
-          )")
+          "INSERT INTO reactor_subscriptions (_id, sub_id, session_id, query, tables, status, created_at, update_count, total_execution_time, last_updated)
+           VALUES ('init-dummy', 'dummy', 'system', 'init', '[]', 'init', CURRENT_TIMESTAMP, 0, 0, CURRENT_TIMESTAMP)")
+        (xts/execute-sql node
+          "DELETE FROM reactor_subscriptions WHERE _id = 'init-dummy'")
+        (log/info "reactor_subscriptions table initialized")
         (catch Exception e
-          (log/debug "Subscriptions table might already exist:" (.getMessage e))))
+          (log/error e "Failed to initialize subscriptions table")))
       
-      ;; Events table
+      ;; Events table - XTDB 2.0 creates tables on first insert
       (try
+        (log/info "Initializing reactor_events table...")
         (xts/execute-sql node
-          "CREATE TABLE IF NOT EXISTS reactor_events (
-            _id VARCHAR PRIMARY KEY,
-            category VARCHAR,
-            event_type VARCHAR,
-            payload TEXT,
-            session_id VARCHAR,
-            created_at TIMESTAMP
-          )")
+          "INSERT INTO reactor_events (_id, category, event_type, payload, session_id, created_at)
+           VALUES ('init-dummy', 'system', 'init', '{}', 'system', CURRENT_TIMESTAMP)")
+        (xts/execute-sql node
+          "DELETE FROM reactor_events WHERE _id = 'init-dummy'")
+        (log/info "reactor_events table initialized")
         (catch Exception e
-          (log/debug "Events table might already exist:" (.getMessage e))))
+          (log/error e "Failed to initialize events table")))
       
-      ;; Reactions table
+      ;; Reactions table - XTDB 2.0 creates tables on first insert
       (try
+        (log/info "Initializing reactor_reactions table...")
         (xts/execute-sql node
-          "CREATE TABLE IF NOT EXISTS reactor_reactions (
-            _id VARCHAR PRIMARY KEY,
-            table_name VARCHAR,
-            change_type VARCHAR,
-            affected_subscriptions TEXT,
-            triggered_at TIMESTAMP
-          )")
+          "INSERT INTO reactor_reactions (_id, table_name, change_type, affected_subscriptions, triggered_at)
+           VALUES ('init-dummy', 'system', 'init', '[]', CURRENT_TIMESTAMP)")
+        (xts/execute-sql node
+          "DELETE FROM reactor_reactions WHERE _id = 'init-dummy'")
+        (log/info "reactor_reactions table initialized")
         (catch Exception e
-          (log/debug "Reactions table might already exist:" (.getMessage e))))
+          (log/error e "Failed to initialize reactions table")))
       
-      ;; Performance table
+      ;; Performance table - XTDB 2.0 creates tables on first insert
       (try
+        (log/info "Initializing reactor_performance table...")
         (xts/execute-sql node
-          "CREATE TABLE IF NOT EXISTS reactor_performance (
-            _id VARCHAR PRIMARY KEY,
-            metric_type VARCHAR,
-            query TEXT,
-            execution_time_ms BIGINT,
-            result_count INTEGER,
-            measured_at TIMESTAMP
-          )")
+          "INSERT INTO reactor_performance (_id, metric_type, query, execution_time_ms, result_count, measured_at)
+           VALUES ('init-dummy', 'system', 'init', 0, 0, CURRENT_TIMESTAMP)")
+        (xts/execute-sql node
+          "DELETE FROM reactor_performance WHERE _id = 'init-dummy'")
+        (log/info "reactor_performance table initialized")
         (catch Exception e
-          (log/debug "Performance table might already exist:" (.getMessage e))))
+          (log/error e "Failed to initialize performance table")))
       
       (log/info "Meta-tracking tables ready"))))
 

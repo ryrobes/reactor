@@ -4,6 +4,7 @@
   (:require [reactor.kafka-reactive :as kafka]
             [reactor.xtdb-store :as xts]
             [reactor.session_simple :as session]
+            [reactor.meta-tracking :as meta]
             [cheshire.core :as json]
             [clojure.tools.logging :as log]
             [clojure.string :as str]))
@@ -59,8 +60,13 @@
   (let [body (json/parse-string (slurp (:body req)) true)
         sql-string (:sql body)
         params (:params body)
+        session-id (get-in req [:headers "x-session-id"] "default")
         node @session/default-node]
     (log/debug "[SQL-EXEC] Received SQL:" sql-string "params:" params)
+    ;; Track the SQL execution event
+    (meta/track-event! "sql-exec" "mutation" 
+                      {:sql sql-string :params params} 
+                      session-id)
     (if node
       (let [result (execute-sql-reactive node sql-string params)]
         (log/debug "[SQL-EXEC] Result:" result)

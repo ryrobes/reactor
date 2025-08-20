@@ -279,6 +279,9 @@
                                  (let [affected-subs (find-affected-subscriptions filtered-tables)]
                                    (when (seq affected-subs)
                                      (log/info "Triggering" (count affected-subs) "subscriptions for tables:" filtered-tables)
+                                     ;; Track the reaction
+                                     (doseq [table filtered-tables]
+                                       (meta/track-reaction! table "mutation" affected-subs))
                                      (doseq [sub-id affected-subs]
                                        (re-execute-subscription sub-id))))
                                  

@@ -237,9 +237,9 @@
           actual-params (remove nil? params)]
       (with-open [conn (get-connection node)]
         (if is-mutation?
-          ;; Execute as mutation
-          (do
-            (jdbc/execute! conn (if (seq actual-params) 
+          ;; Execute as mutation with transaction
+          (jdbc/with-transaction [tx conn]
+            (jdbc/execute! tx (if (seq actual-params) 
                                   (into [sql] actual-params)
                                   [sql]))
             {:success true})

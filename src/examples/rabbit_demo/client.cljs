@@ -1124,15 +1124,10 @@
                    :on-click (fn []
                               (reset! table-dropdown-open false)
                               (let [block-data {:id (str (random-uuid))
-                                              :type :debug
+                                              :type :query
                                               :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
-                                              :size {:width 500 :height 400}
-                                              :debug-mode (case table
-                                                           "reactor_subscriptions" :subscriptions
-                                                           "reactor_events" :events
-                                                           "reactor_reactions" :reactions
-                                                           "reactor_performance" :performance
-                                                           :subscriptions)}]
+                                              :size {:width 400 :height 300}
+                                              :sql (str "SELECT * FROM " table " LIMIT 10")}]
                                 (r/dispatch! [:add-block block-data])))}
              table])])
        ;; System tables

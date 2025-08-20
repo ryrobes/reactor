@@ -5,6 +5,7 @@
             [reactor.sql-reactive-bridge :as bridge]
             [reactor.session_simple :as session]
             [reactor.xtdb-store :as xts]
+            [reactor.meta-tracking :as meta]
             [org.httpkit.server :as http]
             [cheshire.core :as json]
             [clojure.tools.logging :as log]))
@@ -150,6 +151,10 @@
             (log/debug "[REACTIVE-SERVER] /api/sql called with SQL:" sql)
             (log/debug "[REACTIVE-SERVER] Session ID:" session-id "Has SSE channels:" (seq (get @kafka/sse-channels session-id)))
             (log/info "[REACTIVE-SERVER] as-of value:" (pr-str as-of) "is-temporal?" (and as-of (not (empty? as-of))))
+            ;; Track the SQL query event
+            (meta/track-event! "sql-query" "query" 
+                              {:sql sql :params params :as-of as-of} 
+                              session-id)
             ;; Only create subscription for non-session queries AND non-temporal queries
             ;; Note: Check for actual temporal value, not just truthy (empty string is truthy!)
             (if (or is-session-query? (and as-of (not (empty? as-of))))
