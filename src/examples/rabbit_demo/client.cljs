@@ -42,14 +42,17 @@
                    ;; Clear local overrides to use state positions
                    (reset! local-positions {})
                    (reset! local-sizes {}))
-                 ;; Update local positions for blocks that moved in state
+                 ;; When a block's position in server state matches its local position,
+                 ;; clear the local override (server has caught up)
                  (doseq [[id block] new-blocks]
                    (when-let [pos (:position block)]
-                     (when (not= pos (get-in old-blocks [id :position]))
-                       (swap! local-positions assoc id pos)))
+                     (when (= pos (get @local-positions id))
+                       ;; Server position matches local - clear local override
+                       (swap! local-positions dissoc id)))
                    (when-let [size (:size block)]
-                     (when (not= size (get-in old-blocks [id :size]))
-                       (swap! local-sizes assoc id size))))))))
+                     (when (= size (get @local-sizes id))
+                       ;; Server size matches local - clear local override
+                       (swap! local-sizes dissoc id))))))))
 
 (defn start-drag! [block-id event]
   (let [rect (.. event -currentTarget getBoundingClientRect)
@@ -68,25 +71,30 @@
       ;; Update local position immediately for smooth dragging
       (swap! local-positions assoc block-id {:x x :y y})
       
-      ;; Debounce the server update
+      ;; Debounce the server update (increased to 300ms since we guarantee final update)
       (when @pending-update
         (js/clearTimeout @pending-update))
       (reset! pending-update
               (js/setTimeout
                #(r/dispatch! [:move-block block-id {:x x :y y}])
-               100)))))
+               300)))))
 
 (defn stop-drag! []
+  ;; Cancel any pending update FIRST to prevent race conditions
+  (when @pending-update
+    (js/clearTimeout @pending-update)
+    (reset! pending-update nil))
+  
   ;; Send final position on drag end
   (when-let [{:keys [block-id]} @drag-state]
     (when-let [pos (get @local-positions block-id)]
+      ;; Immediately dispatch the final position
       (r/dispatch! [:move-block block-id pos])
-      ;; Clear local position after dispatch
-      (swap! local-positions dissoc block-id)))
-  (reset! drag-state nil)
-  (when @pending-update
-    (js/clearTimeout @pending-update)
-    (reset! pending-update nil)))
+      ;; Don't clear local position immediately - let it persist until server updates
+      ;; This prevents jitter from using stale server position
+      ;; The position will be cleared when blocks change (via blocks-watcher)
+      ))
+  (reset! drag-state nil))
 
 (defn start-resize! [block-id event]
   (let [rect (.. ^js event -currentTarget -parentElement getBoundingClientRect)
@@ -111,25 +119,30 @@
       ;; Update local size immediately for smooth resizing
       (swap! local-sizes assoc block-id {:width new-width :height new-height})
       
-      ;; Debounce the server update
+      ;; Debounce the server update (increased to 300ms since we guarantee final update)
       (when @pending-update
         (js/clearTimeout @pending-update))
       (reset! pending-update
               (js/setTimeout
                #(r/dispatch! [:resize-block block-id {:width new-width :height new-height}])
-               100)))))
+               300)))))
 
 (defn stop-resize! []
+  ;; Cancel any pending update FIRST to prevent race conditions
+  (when @pending-update
+    (js/clearTimeout @pending-update)
+    (reset! pending-update nil))
+  
   ;; Send final size on resize end
   (when-let [{:keys [block-id]} @resize-state]
     (when-let [size (get @local-sizes block-id)]
+      ;; Immediately dispatch the final size
       (r/dispatch! [:resize-block block-id size])
-      ;; Clear local size after dispatch
-      (swap! local-sizes dissoc block-id)))
-  (reset! resize-state nil)
-  (when @pending-update
-    (js/clearTimeout @pending-update)
-    (reset! pending-update nil)))
+      ;; Don't clear local size immediately - let it persist until server updates
+      ;; This prevents jitter from using stale server size
+      ;; The size will be cleared when blocks change (via blocks-watcher)
+      ))
+  (reset! resize-state nil))
 
 ;; ============= Block Components =============
 
@@ -338,46 +351,87 @@
                      :font-size "11px"}}
         error])]  ;; Close fixed-content div
      (when results
-       [:div.results
-        {:style {:flex 1
-                 :margin-top "10px"
-                 :min-height 0  ;; Important for flex children to shrink properly
-                 :overflow "auto"
-                 :background "rgba(0,0,0,0.3)"
-                 :border "1px solid rgba(0,255,159,0.2)"
-                 :padding "5px"
-                 :display "flex"
-                 :flex-direction "column"}}
-        [:table {:style {:width "100%" 
-                        :font-size "11px"
-                        :table-layout "fixed"}}
-         [:thead {:style {:position "sticky"
-                         :top 0
-                         :background "rgba(26,26,46,0.95)"
-                         :z-index 1}}
-          [:tr
-           (for [col (keys (first results))]
-             ^{:key col}
-             [:th {:style {:text-align "left" 
-                          :padding "4px"
-                          :color "#00ff9f"
-                          :border-bottom "1px solid rgba(0,255,159,0.2)"
-                          :font-family "monospace"
-                          :text-transform "uppercase"
-                          :font-size "10px"}} (name col)])]]
-         [:tbody
-          (for [row results]
-            ^{:key (or (:ID row) (:id row) (:xt/id row) (str (hash row)))}
-            [:tr
-             (for [col (keys (first results))]
-               ^{:key col}
-               [:td {:style {:padding "4px"
-                            :color "#8ff0a4"
-                            :font-family "monospace"
-                            :font-size "10px"
-                            :overflow "hidden"
-                            :text-overflow "ellipsis"
-                            :white-space "nowrap"}} (str (get row col))])])]]])]))})))
+       (let [;; Check if this is a single value result (1 row, 1 column)
+             is-single-value? (and (= 1 (count results))
+                                  (= 1 (count (keys (first results)))))
+             single-value (when is-single-value?
+                           (let [row (first results)
+                                 col-key (first (keys row))
+                                 value (get row col-key)]
+                             value))
+             ;; Format number with commas
+             format-number (fn [n]
+                            (if (number? n)
+                              ;; Use JS Intl.NumberFormat for reliable formatting
+                              (.format (js/Intl.NumberFormat. "en-US") n)
+                              (str n)))
+             ;; Calculate font size based on block dimensions
+             ;; Aim for about 1/3 of height, max 120px
+             font-size (min 120 (int (/ (:height actual-size) 3)))]
+         (if is-single-value?
+           ;; Render as large callout text
+           [:div.single-value-result
+            {:style {:flex 1
+                     :display "flex"
+                     :align-items "center"
+                     :justify-content "center"
+                     :margin-top "10px"
+                     :background "rgba(0,0,0,0.3)"
+                     :border "1px solid rgba(0,255,159,0.2)"
+                     :padding "20px"
+                     :overflow "hidden"}}
+            [:div {:style {:color "#00ff9f"
+                          :font-family "'JetBrains Mono', 'Courier New', monospace"
+                          :font-weight "bold"
+                          :font-size (str font-size "px")
+                          :text-align "center"
+                          :word-break "break-word"
+                          :line-height "1.1"
+                          :max-width "100%"}}
+             (if (number? single-value)
+               (format-number single-value)
+               (str single-value))]]
+           ;; Render as table for multiple rows/columns
+           [:div.results
+            {:style {:flex 1
+                     :margin-top "10px"
+                     :min-height 0  ;; Important for flex children to shrink properly
+                     :overflow "auto"
+                     :background "rgba(0,0,0,0.3)"
+                     :border "1px solid rgba(0,255,159,0.2)"
+                     :padding "5px"
+                     :display "flex"
+                     :flex-direction "column"}}
+            [:table {:style {:width "100%" 
+                            :font-size "11px"
+                            :table-layout "fixed"}}
+             [:thead {:style {:position "sticky"
+                             :top 0
+                             :background "rgba(26,26,46,0.95)"
+                             :z-index 1}}
+              [:tr
+               (for [col (keys (first results))]
+                 ^{:key col}
+                 [:th {:style {:text-align "left" 
+                              :padding "4px"
+                              :color "#00ff9f"
+                              :border-bottom "1px solid rgba(0,255,159,0.2)"
+                              :font-family "monospace"
+                              :text-transform "uppercase"
+                              :font-size "10px"}} (name col)])]]
+             [:tbody
+              (for [row results]
+                ^{:key (or (:ID row) (:id row) (:xt/id row) (str (hash row)))}
+                [:tr
+                 (for [col (keys (first results))]
+                   ^{:key col}
+                   [:td {:style {:padding "4px"
+                                :color "#8ff0a4"
+                                :font-family "monospace"
+                                :font-size "10px"
+                                :overflow "hidden"
+                                :text-overflow "ellipsis"
+                                :white-space "nowrap"}} (str (get row col))])])]]])))]))})))
 
 (defn chart-block [{:keys [id position size source-id chart-type]}]
   (let [;; Use local position only while dragging, otherwise use state position
@@ -492,112 +546,128 @@
          "Link to a query block to see data"])]]))
 
 (defn sql-exec-block [{:keys [id position size sql error result] :as block}]
-  (let [;; Use local position only while dragging, otherwise use state position
-        is-dragging? (= id (:block-id @drag-state))
-        is-resizing? (= id (:block-id @resize-state))
-        actual-pos (if (or is-dragging? (get @local-positions id))
-                     (get @local-positions id position)
-                     position)
-        actual-size (if (or is-resizing? (get @local-sizes id))
-                      (get @local-sizes id size)
-                      size)]
-    [:div.block.sql-exec-block
-     {:style {:position "absolute"
-              :left (:x actual-pos)
-              :top (:y actual-pos)
-              :width (:width actual-size)
-              :height (:height actual-size)
-              :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
-              :border "1px solid #ffb700"
-              :border-radius "4px"
-              :padding "10px"
-              :cursor "move"
-              :z-index 10
-              :box-shadow "0 0 20px rgba(255,183,0,0.3), inset 0 0 20px rgba(255,183,0,0.05)"}
-      :on-mouse-down #(start-drag! id %)}
-     ;; Resize handle
-     [:div.resize-handle
-      {:style {:position "absolute"
-               :bottom 0
-               :right 0
-               :width "15px"
-               :height "15px"
-               :cursor "nwse-resize"
-               :background "linear-gradient(135deg, transparent 50%, #ffb700 50%)"
-               :opacity 0.5}
-       :on-mouse-down #(start-resize! id %)}]
-     [:div.block-header
-      {:style {:display "flex"
-               :justify-content "space-between"
-               :margin-bottom "10px"
-               :padding-bottom "5px"
-               :border-bottom "1px solid rgba(255,183,0,0.2)"}}
-      [:span {:style {:font-weight "bold" 
-                      :color "#ffb700"
-                      :font-family "monospace"
-                      :text-transform "uppercase"
-                      :font-size "11px"
-                      :letter-spacing "1px"}} "SQL EXECUTE"]
-      [:button {:on-click #(do (rq/unsubscribe-block! id)
-                              (r/dispatch! [:delete-block id]))
-                :style {:background "none"
-                        :border "none"
-                        :color "#ffb700"
-                        :cursor "pointer"
-                        :font-size "20px"
-                        :line-height "20px"}} "×"]]
-     ;; SQL Editor
-     [:div {:style {:margin "10px 0"
-                    :border "1px solid rgba(255,183,0,0.3)"
+  (let [;; Local state for SQL (only syncs to app state on execute)
+        local-sql (reagent/atom (or sql "INSERT INTO sales (product, amount, quantity, sale_date) VALUES ('TestProduct', 500, 2, '2024-01-10')"))]
+    (reagent/create-class
+     {:component-did-update
+      (fn [this [_ old-props]]
+        (let [new-props (reagent/props this)]
+          ;; Update local SQL if props change from external source
+          (when (and (:sql new-props)
+                    (not= (:sql old-props) (:sql new-props)))
+            (reset! local-sql (:sql new-props)))))
+      
+      :reagent-render
+      (fn [{:keys [id position size sql error result] :as block}]
+        (let [;; Use local position only while dragging, otherwise use state position
+              is-dragging? (= id (:block-id @drag-state))
+              is-resizing? (= id (:block-id @resize-state))
+              actual-pos (if (or is-dragging? (get @local-positions id))
+                           (get @local-positions id position)
+                           position)
+              actual-size (if (or is-resizing? (get @local-sizes id))
+                            (get @local-sizes id size)
+                            size)]
+          [:div.block.sql-exec-block
+           {:style {:position "absolute"
+                    :left (:x actual-pos)
+                    :top (:y actual-pos)
+                    :width (:width actual-size)
+                    :height (:height actual-size)
+                    :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
+                    :border "1px solid #ffb700"
                     :border-radius "4px"
-                    :overflow "hidden"}}
-      [monaco/sql-editor
-       {:value (or sql "INSERT INTO sales (product, amount, quantity, sale_date) VALUES ('TestProduct', 500, 2, '2024-01-10')")
-        :on-change #(r/dispatch! [:update-block id {:sql %}])
-        :height "120px"
-        :theme "vs-dark"}]]
-     [:button
-      {:style {:width "100%"
-               :margin-top "5px"
-               :padding "5px 10px"
-               :background "linear-gradient(90deg, #ffb700 0%, #ff8c00 100%)"
-               :color "#0a0a0a"
-               :border "none"
-               :border-radius "2px"
-               :cursor "pointer"
-               :font-weight "bold"
-               :text-transform "uppercase"
-               :font-size "11px"
-               :letter-spacing "1px"}
-       :on-click (fn []
-                  (-> (r/sql-exec! (or sql ""))
-                      (.then (fn [response]
-                              (if (:error response)
-                                (r/dispatch! [:update-block id {:error (:error response) :result nil}])
-                                (r/dispatch! [:update-block id {:result (:result response) :error nil}]))))))}
-      "Execute"]
-     ;; Error display
-     (when error
-       [:div {:style {:margin-top "10px"
-                     :padding "10px"
-                     :background "rgba(255,0,0,0.1)"
-                     :border "1px solid rgba(255,0,0,0.3)"
-                     :border-radius "4px"
-                     :color "#ff6b6b"
-                     :font-family "monospace"
-                     :font-size "11px"}}
-        error])
-     ;; Success result display
-     (when result
-       [:div {:style {:margin-top "10px"
-                     :padding "10px"
-                     :background "rgba(255,183,0,0.1)"
-                     :border "1px solid rgba(255,183,0,0.3)"
-                     :border-radius "4px"
-                     :color "#ffb700"
-                     :font-family "monospace"
-                     :font-size "11px"}}
-        (str "Success: " result)])]))
+                    :padding "10px"
+                    :cursor "move"
+                    :z-index 10
+                    :box-shadow "0 0 20px rgba(255,183,0,0.3), inset 0 0 20px rgba(255,183,0,0.05)"}
+            :on-mouse-down #(start-drag! id %)}
+           ;; Resize handle
+           [:div.resize-handle
+            {:style {:position "absolute"
+                     :bottom 0
+                     :right 0
+                     :width "15px"
+                     :height "15px"
+                     :cursor "nwse-resize"
+                     :background "linear-gradient(135deg, transparent 50%, #ffb700 50%)"
+                     :opacity 0.5}
+             :on-mouse-down #(start-resize! id %)}]
+           [:div.block-header
+            {:style {:display "flex"
+                     :justify-content "space-between"
+                     :margin-bottom "10px"
+                     :padding-bottom "5px"
+                     :border-bottom "1px solid rgba(255,183,0,0.2)"}}
+            [:span {:style {:font-weight "bold" 
+                            :color "#ffb700"
+                            :font-family "monospace"
+                            :text-transform "uppercase"
+                            :font-size "11px"
+                            :letter-spacing "1px"}} "SQL EXECUTE"]
+            [:button {:on-click #(do (rq/unsubscribe-block! id)
+                                    (r/dispatch! [:delete-block id]))
+                      :style {:background "none"
+                              :border "none"
+                              :color "#ffb700"
+                              :cursor "pointer"
+                              :font-size "20px"
+                              :line-height "20px"}} "×"]]
+           ;; SQL Editor - now using local state
+           [:div {:style {:margin "10px 0"
+                          :border "1px solid rgba(255,183,0,0.3)"
+                          :border-radius "4px"
+                          :overflow "hidden"}}
+            [monaco/sql-editor
+             {:value @local-sql
+              :on-change #(reset! local-sql %)  ; Only update local state on typing
+              :height "120px"
+              :theme "vs-dark"}]]
+           [:button
+            {:style {:width "100%"
+                     :margin-top "5px"
+                     :padding "5px 10px"
+                     :background "linear-gradient(90deg, #ffb700 0%, #ff8c00 100%)"
+                     :color "#0a0a0a"
+                     :border "none"
+                     :border-radius "2px"
+                     :cursor "pointer"
+                     :font-weight "bold"
+                     :text-transform "uppercase"
+                     :font-size "11px"
+                     :letter-spacing "1px"}
+             :on-click (fn []
+                        ;; Sync local SQL to global state on execute
+                        (let [current-sql @local-sql]
+                          (r/dispatch! [:update-block id {:sql current-sql}])
+                          (-> (r/sql-exec! current-sql)
+                              (.then (fn [response]
+                                      (if (:error response)
+                                        (r/dispatch! [:update-block id {:error (:error response) :result nil}])
+                                        (r/dispatch! [:update-block id {:result (:result response) :error nil}])))))))}
+            "Execute"]
+           ;; Error display
+           (when error
+             [:div {:style {:margin-top "10px"
+                           :padding "10px"
+                           :background "rgba(255,0,0,0.1)"
+                           :border "1px solid rgba(255,0,0,0.3)"
+                           :border-radius "4px"
+                           :color "#ff6b6b"
+                           :font-family "monospace"
+                           :font-size "11px"}}
+              error])
+           ;; Success result display
+           (when result
+             [:div {:style {:margin-top "10px"
+                           :padding "10px"
+                           :background "rgba(255,183,0,0.1)"
+                           :border "1px solid rgba(255,183,0,0.3)"
+                           :border-radius "4px"
+                           :color "#ffb700"
+                           :font-family "monospace"
+                           :font-size "11px"}}
+              (str "Success: " result)])]))})))  ; Close reagent-render and create-class
 
 (defn debug-block [{:keys [id position size debug-mode] :as block}]
   (let [;; Local state for the debug block

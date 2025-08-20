@@ -19,14 +19,14 @@
               :lineNumbers "on"
               :glyphMargin false
               :folding false
-              :lineDecorationsWidth 0
+              :lineDecorationsWidth 10  ; Add padding between line numbers and content
               :lineNumbersMinChars 3
               :renderLineHighlight "none"
               :scrollBeyondLastLine false
               :readOnly (boolean read-only?)
               :automaticLayout true
               :wordWrap "on"
-              :padding {:top 5 :bottom 5}}}])
+              :padding {:top 5 :bottom 5 :left 5}}}])  ; Also add left padding
 
 (defn text-editor [{:keys [value on-change height width theme read-only? language]}]
   [:> MonacoEditor

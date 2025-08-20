@@ -44,6 +44,100 @@
   ;; Map of session-id -> #{:keypath} for tracking which sessions have keypath subscriptions
   (atom {}))
 
+;; ============================================================================
+;; Debouncing for Subscription Re-execution
+;; ============================================================================
+
+;; Forward declaration for functions defined later
+(declare re-execute-subscription)
+
+(defonce pending-re-executions
+  ;; Map of subscription-id -> timestamp of when re-execution was requested
+  (atom {}))
+
+(defonce debounce-delay-ms 
+  ;; Configurable debounce delay in milliseconds
+  ;; 150ms provides good balance between responsiveness and efficiency
+  (atom 150))
+
+(defonce debounce-executor
+  ;; Single background thread that processes pending re-executions
+  (atom nil))
+
+(defonce debounce-running? (atom false))
+
+(defn start-debounce-executor!
+  "Start the debounce executor that processes pending re-executions"
+  []
+  (when-not @debounce-executor
+    (reset! debounce-running? true)
+    (reset! debounce-executor
+            (go-loop []
+              (when @debounce-running?
+                ;; Check for pending re-executions
+                (let [now (System/currentTimeMillis)
+                      delay @debounce-delay-ms
+                      ready-subs (->> @pending-re-executions
+                                     (filter (fn [[sub-id requested-at]]
+                                              (> (- now requested-at) delay)))
+                                     (map first)
+                                     set)]
+                  
+                  ;; Process ready subscriptions
+                  (when (seq ready-subs)
+                    (log/debug "Processing" (count ready-subs) "debounced re-executions")
+                    (doseq [sub-id ready-subs]
+                      ;; Remove from pending
+                      (swap! pending-re-executions dissoc sub-id)
+                      ;; Execute the subscription
+                      (try
+                        (re-execute-subscription sub-id)
+                        (catch Exception e
+                          (log/error e "Error in debounced re-execution of" sub-id)))))
+                  
+                  ;; Sleep briefly before next check
+                  (<! (timeout 50))
+                  (recur)))))
+    (log/info "Debounce executor started with delay:" @debounce-delay-ms "ms")))
+
+(defn stop-debounce-executor!
+  "Stop the debounce executor"
+  []
+  (reset! debounce-running? false)
+  (when-let [executor @debounce-executor]
+    (close! executor)
+    (reset! debounce-executor nil)
+    (reset! pending-re-executions {})
+    (log/info "Debounce executor stopped")))
+
+(defn request-re-execution!
+  "Request a debounced re-execution of a subscription.
+   Multiple requests within the debounce window will be coalesced."
+  [sub-id]
+  ;; Only update if not already pending or if the existing request is old
+  (let [now (System/currentTimeMillis)
+        existing (get @pending-re-executions sub-id)]
+    (when (or (nil? existing)
+              (> (- now existing) (* 2 @debounce-delay-ms))) ; Re-request if very old
+      (swap! pending-re-executions assoc sub-id now)
+      (log/debug "Debounced re-execution requested for" sub-id))))
+
+(defn set-debounce-delay!
+  "Set the debounce delay in milliseconds.
+   For hot tables like reactor_subscriptions, a higher value (200-300ms) is recommended.
+   For normal tables, 100-150ms provides good responsiveness."
+  [delay-ms]
+  (reset! debounce-delay-ms delay-ms)
+  (log/info "Debounce delay set to" delay-ms "ms"))
+
+(defn configure-hot-table-debouncing!
+  "Configure special debouncing for known hot tables"
+  []
+  ;; Hot tables that trigger many reactions
+  (def hot-tables #{"reactor_subscriptions" "reactor_events" "reactor_reactions"})
+  ;; Could implement per-table delays if needed
+  (set-debounce-delay! 200))
+
 (defn extract-tables-from-sql
   "Extract table names from SQL query string.
    Simple regex-based extraction - could be enhanced with proper SQL parsing."
@@ -204,6 +298,8 @@
     (throw (ex-info "Consumer already running" {})))
   
   (reset! running? true)
+  ;; Start the debounce executor
+  (start-debounce-executor!)
   (let [consumer-instance (jc/consumer @kafka-config)]
     (reset! consumer consumer-instance)
     
@@ -282,8 +378,9 @@
                                      ;; Track the reaction
                                      (doseq [table filtered-tables]
                                        (meta/track-reaction! table "mutation" affected-subs))
+                                     ;; Use debounced re-execution instead of immediate
                                      (doseq [sub-id affected-subs]
-                                       (re-execute-subscription sub-id))))
+                                       (request-re-execution! sub-id))))
                                  
                                  ;; Handle keypath subscriptions for todo_sessions
                                  (doseq [table filtered-tables]
@@ -301,6 +398,8 @@
   "Stop the Kafka consumer."
   []
   (reset! running? false)
+  ;; Stop the debounce executor
+  (stop-debounce-executor!)
   (when-let [c @consumer]
     (try
       (.close c)
