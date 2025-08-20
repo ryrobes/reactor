@@ -4,16 +4,14 @@
             [examples.rabbit-demo.reactive-queries :as rq]))
 
 (defn refresh-block-queries!
-  "Refresh all query blocks that don't have results (e.g., after loading from persistence)"
+  "Refresh all query blocks (auto-execute on load)"
   []
   (let [blocks @(r/subscribe [:blocks])]
-    (js/console.log "[AUTO-REFRESH] Checking blocks for missing results...")
+    (js/console.log "[AUTO-REFRESH] Auto-executing all query blocks...")
     (doseq [[block-id block] blocks]
       (when (and (= (:type block) "query")
-                 (:sql block)
-                 (not (:results block))
-                 (not (:loading block)))
-        (js/console.log "[AUTO-REFRESH] Refreshing block" block-id "with SQL:" (:sql block))
+                 (:sql block))
+        (js/console.log "[AUTO-REFRESH] Executing query for block" block-id "SQL:" (:sql block))
         (rq/execute-block-query! block-id (:sql block) nil (:as-of block))))))
 
 (defn init-auto-refresh!

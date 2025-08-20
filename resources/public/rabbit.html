@@ -73,42 +73,70 @@
             border-collapse: collapse;
         }
         
-        /* Range input styling */
+        /* Range input styling for time travel slider */
         input[type="range"] {
             -webkit-appearance: none;
             appearance: none;
             background: transparent;
             cursor: pointer;
+            outline: none;
         }
         
         input[type="range"]::-webkit-slider-track {
-            background: rgba(0, 255, 159, 0.2);
-            height: 2px;
+            background: transparent;  /* Transparent since we have custom track divs */
+            height: 20px;
+            cursor: pointer;
         }
         
         input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
             appearance: none;
             background: #00ff9f;
-            width: 12px;
-            height: 12px;
+            width: 14px;
+            height: 14px;
             border-radius: 50%;
-            margin-top: -5px;
-            box-shadow: 0 0 10px #00ff9f;
+            margin-top: -6px;
+            box-shadow: 0 0 15px rgba(0, 255, 159, 0.8), 0 0 5px #00ff9f;
+            cursor: grab;
+            transition: all 0.2s;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb:hover {
+            width: 16px;
+            height: 16px;
+            margin-top: -7px;
+            box-shadow: 0 0 20px rgba(0, 255, 159, 1), 0 0 10px #00ff9f;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb:active {
+            cursor: grabbing;
         }
         
         input[type="range"]::-moz-range-track {
-            background: rgba(0, 255, 159, 0.2);
-            height: 2px;
+            background: transparent;  /* Transparent since we have custom track divs */
+            height: 20px;
+            cursor: pointer;
         }
         
         input[type="range"]::-moz-range-thumb {
             background: #00ff9f;
-            width: 12px;
-            height: 12px;
+            width: 14px;
+            height: 14px;
             border-radius: 50%;
             border: none;
-            box-shadow: 0 0 10px #00ff9f;
+            box-shadow: 0 0 15px rgba(0, 255, 159, 0.8), 0 0 5px #00ff9f;
+            cursor: grab;
+            transition: all 0.2s;
+        }
+        
+        input[type="range"]::-moz-range-thumb:hover {
+            width: 16px;
+            height: 16px;
+            box-shadow: 0 0 20px rgba(0, 255, 159, 1), 0 0 10px #00ff9f;
+        }
+        
+        input[type="range"]::-moz-range-thumb:active {
+            cursor: grabbing;
         }
         
         /* Loading animation */

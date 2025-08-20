@@ -6,7 +6,8 @@
             [clojure.string :as str]
             [examples.rabbit-demo.monaco :as monaco]
             [examples.rabbit-demo.reactive-queries :as rq]
-            [examples.rabbit-demo.auto-refresh :as auto-refresh]))
+            [examples.rabbit-demo.auto-refresh :as auto-refresh]
+            [examples.rabbit-demo.time-travel-ui :as tt]))
 
 ;; ============= Subscriptions =============
 
@@ -133,17 +134,43 @@
 ;; ============= Block Components =============
 
 (defn query-block [{:keys [id position size sql as-of] :as block}]
-  (let [;; Get results from reactive-queries module
-        {:keys [results error loading]} (rq/get-block-results id)
-        ;; Use local position only while dragging, otherwise use state position
-        is-dragging? (= id (:block-id @drag-state))
-        is-resizing? (= id (:block-id @resize-state))
-        actual-pos (if (or is-dragging? (get @local-positions id))
-                     (get @local-positions id position)
-                     position)
-        actual-size (if (or is-resizing? (get @local-sizes id))
-                      (get @local-sizes id size)
-                      size)]
+  (let [;; Local state for SQL editing - prevents re-renders while typing
+        local-sql (reagent/atom sql)]
+    (reagent/create-class
+     {:component-did-mount
+      (fn []
+        (when sql
+          ;; Initialize subscription on mount
+          (js/console.log "[QUERY-BLOCK] Initializing subscription for block" id "with SQL:" sql)
+          (rq/execute-block-query! id sql nil nil)))
+      
+      :component-did-update
+      (fn [this [_ old-props]]
+        (let [new-props (reagent/props this)]
+          ;; Update local SQL if props change (e.g., from undo/redo or external update)
+          (when (and (:sql new-props)
+                    (not= (:sql old-props) (:sql new-props)))
+            (reset! local-sql (:sql new-props))
+            (js/console.log "[QUERY-BLOCK] SQL changed externally for block" (:id new-props) "re-subscribing")
+            (rq/execute-block-query! (:id new-props) (:sql new-props) nil nil))))
+      
+      :component-will-unmount
+      (fn []
+        (rq/unsubscribe-block! id))
+      
+      :reagent-render
+      (fn [{:keys [id position size sql as-of] :as block}]
+        (let [;; Get results from reactive-queries module - including executed-sql
+              {:keys [results error loading executed-sql]} (rq/get-block-results id)
+            ;; Use local position only while dragging, otherwise use state position
+            is-dragging? (= id (:block-id @drag-state))
+            is-resizing? (= id (:block-id @resize-state))
+            actual-pos (if (or is-dragging? (get @local-positions id))
+                         (get @local-positions id position)
+                         position)
+            actual-size (if (or is-resizing? (get @local-sizes id))
+                          (get @local-sizes id size)
+                          size)]
     [:div.block.query-block
      {:style {:position "absolute"
               :left (:x actual-pos)
@@ -156,12 +183,12 @@
                        "1px solid #00ff9f")
               :border-radius "4px"
               :padding "10px"
-              :cursor "move"
               :z-index 10
               :box-shadow (if @connection-mode
                            "0 0 30px rgba(255,0,110,0.5), inset 0 0 20px rgba(255,0,110,0.1)"
-                           "0 0 20px rgba(0,255,159,0.3), inset 0 0 20px rgba(0,255,159,0.05)")}
-      :on-mouse-down #(start-drag! id %)
+                           "0 0 20px rgba(0,255,159,0.3), inset 0 0 20px rgba(0,255,159,0.05)")
+              :display "flex"
+              :flex-direction "column"}
       :draggable false}
      ;; Resize handle
      [:div.resize-handle
@@ -174,13 +201,19 @@
                :background "linear-gradient(135deg, transparent 50%, #00ff9f 50%)"
                :opacity 0.5}
        :on-mouse-down #(start-resize! id %)}]
+     ;; Fixed header and controls container
+     [:div.fixed-content
+      {:style {:flex-shrink 0}}
      [:div.block-header
       {:style {:display "flex"
                :justify-content "space-between"
                :margin-bottom "10px"
                :padding-bottom "5px"
                :border-bottom "1px solid rgba(0,255,159,0.2)"
-               :cursor (when @connection-mode "pointer")}
+               :cursor (if @connection-mode "pointer" "move")}
+       :on-mouse-down (fn [e]
+                        (when-not @connection-mode
+                          (start-drag! id e)))
        :on-click (fn [e]
                    (when-let [conn @connection-mode]
                      (.stopPropagation ^js e)
@@ -210,59 +243,90 @@
                         :font-size "20px"
                         :line-height "20px"}}
        "×"]]
-     ;; SQL Editor
+     ;; SQL Editor with Execute button to the right
      [:div {:style {:margin "10px 0"
-                    :border "1px solid rgba(0,255,159,0.3)"
-                    :border-radius "4px"
-                    :overflow "hidden"}}
-      [monaco/sql-editor 
-       {:value (or sql "SELECT * FROM sales")
-        :on-change #(r/dispatch! [:update-block id {:sql %}])
-        :height "100px"
-        :theme "vs-dark"}]]
+                    :display "flex"
+                    :gap "10px"}}
+      ;; Editor column
+      [:div {:style {:flex 1}}
+       (when (and executed-sql (not= executed-sql sql))
+         [:div {:style {:background "rgba(0,255,159,0.1)"
+                        :border "1px solid rgba(0,255,159,0.3)"
+                        :border-radius "4px 4px 0 0"
+                        :padding "4px 8px"
+                        :font-size "10px"
+                        :font-family "monospace"
+                        :color "#00ff9f"
+                        :display "flex"
+                        :align-items "center"
+                        :gap "5px"
+                        :cursor "pointer"
+                        :transition "all 0.2s"}
+                :on-mouse-over #(set! (.. % -target -style -background) "rgba(0,255,159,0.2)")
+                :on-mouse-out #(set! (.. % -target -style -background) "rgba(0,255,159,0.1)")
+                :on-click (fn [e]
+                           (.stopPropagation e)
+                           ;; Reset to NOW - re-execute query without time travel
+                           (let [current-sql @local-sql]
+                             (rq/execute-block-query! id current-sql nil nil)
+                             ;; Reset time travel slider to NOW position
+                             (tt/reset-time-travel! id current-sql)))}
+          [:span "⏰"]
+          [:span "TIME TRAVEL MODE - Click to return to NOW"]])
+       [:div {:style {:border (if (and executed-sql (not= executed-sql sql))
+                               "1px solid rgba(0,255,159,0.5)"
+                               "1px solid rgba(0,255,159,0.3)")
+                      :border-radius (if (and executed-sql (not= executed-sql sql))
+                                       "0 0 4px 4px"
+                                       "4px")
+                      :overflow "hidden"
+                      :background (when (and executed-sql (not= executed-sql sql))
+                                    "rgba(0,255,159,0.05)")}}
+        [monaco/sql-editor 
+         {:value (or executed-sql @local-sql "SELECT * FROM sales")
+          :on-change #(reset! local-sql %)  ;; Only update local state while typing
+          :height "100px"
+          :theme "vs-dark"
+          :options (when executed-sql
+                     {:readOnly false  ;; Keep editable but show visual indicator
+                      :lineDecorationsWidth 10
+                      :minimap {:enabled false}})}]]]
+      ;; Execute button column
+      [:div {:style {:display "flex"
+                     :flex-direction "column"
+                     :justify-content "flex-end"}}
+       [:button
+        {:style {:padding "8px 12px"
+                 :background "linear-gradient(90deg, #00ff9f 0%, #00cc7f 100%)"
+                 :color "#0a0a0a"
+                 :border "none"
+                 :border-radius "4px"
+                 :cursor "pointer"
+                 :font-weight "bold"
+                 :text-transform "uppercase"
+                 :font-size "10px"
+                 :letter-spacing "0.5px"
+                 :writing-mode "vertical-rl"
+                 :text-orientation "mixed"
+                 :height "100px"
+                 :width "32px"
+                 :display "flex"
+                 :align-items "center"
+                 :justify-content "center"}
+         :on-click (fn []
+                     ;; Sync local SQL to global state and execute
+                     (let [current-sql @local-sql]
+                       (r/dispatch! [:update-block id {:sql current-sql}])
+                       ;; Use reactive query that auto-updates
+                       (rq/execute-block-query! id (or current-sql "SELECT * FROM sales") nil as-of)))}
+        "EXECUTE"]]]
      ;; Time scrubber for this query
      [:div {:style {:margin "10px 0"
                     :padding "10px"
                     :background "rgba(0,0,0,0.3)"
                     :border-radius "4px"}}
-      [:div {:style {:display "flex"
-                     :align-items "center"
-                     :gap "10px"
-                     :margin-bottom "5px"}}
-       [:span {:style {:color "#00ff9f"
-                       :font-family "monospace"
-                       :font-size "10px"
-                       :text-transform "uppercase"}} "Time:"]
-       [:input {:type "range"
-                :min 0
-                :max 10
-                :value (or as-of 0)
-                :style {:flex 1
-                        :-webkit-appearance "none"
-                        :height "2px"
-                        :background "rgba(0,255,159,0.2)"
-                        :outline "none"}
-                :on-change #(r/dispatch! [:update-block id {:as-of (.. % -target -value)}])}]
-       [:span {:style {:color "#8ff0a4"
-                       :font-family "monospace"
-                       :font-size "10px"}} 
-        (str "T-" (or as-of 0))]]
-      [:button
-       {:style {:width "100%"
-                :padding "5px 10px"
-                :background "linear-gradient(90deg, #00ff9f 0%, #00cc7f 100%)"
-                :color "#0a0a0a"
-                :border "none"
-                :border-radius "2px"
-                :cursor "pointer"
-                :font-weight "bold"
-                :text-transform "uppercase"
-                :font-size "11px"
-                :letter-spacing "1px"}
-        :on-click (fn []
-                    ;; Use reactive query that auto-updates
-                    (rq/execute-block-query! id (or sql "SELECT * FROM sales") nil as-of))}
-       "Execute Query"]]
+      ;; Time travel controls
+      [tt/time-travel-controls {:block-id id :sql sql}]]
      (when error
        [:div {:style {:margin-top "10px"
                      :padding "10px"
@@ -272,17 +336,25 @@
                      :color "#ff6b6b"
                      :font-family "monospace"
                      :font-size "11px"}}
-        error])
+        error])]  ;; Close fixed-content div
      (when results
        [:div.results
-        {:style {:margin-top "10px"
-                 :max-height "200px"
+        {:style {:flex 1
+                 :margin-top "10px"
+                 :min-height 0  ;; Important for flex children to shrink properly
                  :overflow "auto"
                  :background "rgba(0,0,0,0.3)"
                  :border "1px solid rgba(0,255,159,0.2)"
-                 :padding "5px"}}
-        [:table {:style {:width "100%" :font-size "11px"}}
-         [:thead
+                 :padding "5px"
+                 :display "flex"
+                 :flex-direction "column"}}
+        [:table {:style {:width "100%" 
+                        :font-size "11px"
+                        :table-layout "fixed"}}
+         [:thead {:style {:position "sticky"
+                         :top 0
+                         :background "rgba(26,26,46,0.95)"
+                         :z-index 1}}
           [:tr
            (for [col (keys (first results))]
              ^{:key col}
@@ -291,7 +363,8 @@
                           :color "#00ff9f"
                           :border-bottom "1px solid rgba(0,255,159,0.2)"
                           :font-family "monospace"
-                          :text-transform "uppercase"}} (name col)])]]
+                          :text-transform "uppercase"
+                          :font-size "10px"}} (name col)])]]
          [:tbody
           (for [row results]
             ^{:key (or (:ID row) (:id row) (:xt/id row) (str (hash row)))}
@@ -300,7 +373,11 @@
                ^{:key col}
                [:td {:style {:padding "4px"
                             :color "#8ff0a4"
-                            :font-family "monospace"}} (str (get row col))])])]]])]))
+                            :font-family "monospace"
+                            :font-size "10px"
+                            :overflow "hidden"
+                            :text-overflow "ellipsis"
+                            :white-space "nowrap"}} (str (get row col))])])]]])]))})))
 
 (defn chart-block [{:keys [id position size source-id chart-type]}]
   (let [;; Use local position only while dragging, otherwise use state position
@@ -522,6 +599,256 @@
                      :font-size "11px"}}
         (str "Success: " result)])]))
 
+(defn debug-block [{:keys [id position size debug-mode] :as block}]
+  (let [;; Local state for the debug block
+        local-mode (reagent/atom (or debug-mode :subscriptions))
+        ;; Use local position only while dragging, otherwise use state position
+        is-dragging? (= id (:block-id @drag-state))
+        is-resizing? (= id (:block-id @resize-state))
+        actual-pos (if (or is-dragging? (get @local-positions id))
+                     (get @local-positions id position)
+                     position)
+        actual-size (if (or is-resizing? (get @local-sizes id))
+                      (get @local-sizes id size)
+                      size)
+        ;; Get debug data reactively
+        debug-results (rq/get-block-results id)]
+    (reagent/create-class
+     {:component-did-mount
+      (fn []
+        ;; Execute initial query based on mode
+        (case (or debug-mode :subscriptions)
+          :subscriptions 
+          (rq/execute-block-query! id 
+            "SELECT sub_id, session_id, status, update_count, 
+                    last_updated, total_execution_time
+             FROM reactor_subscriptions 
+             WHERE status = 'active'
+             ORDER BY last_updated DESC" nil nil)
+          :events
+          (rq/execute-block-query! id
+            "SELECT category, event_type, session_id, created_at
+             FROM reactor_events
+             ORDER BY created_at DESC
+             LIMIT 100" nil nil)
+          :reactions
+          (rq/execute-block-query! id
+            "SELECT table_name, change_type, affected_subscriptions, triggered_at
+             FROM reactor_reactions
+             ORDER BY triggered_at DESC
+             LIMIT 50" nil nil)
+          :performance
+          (rq/execute-block-query! id
+            "SELECT metric_type, query, execution_time_ms, result_count, measured_at
+             FROM reactor_performance
+             ORDER BY measured_at DESC
+             LIMIT 100" nil nil)
+          nil))
+      
+      :component-will-unmount
+      (fn []
+        (rq/unsubscribe-block! id))
+      
+      :reagent-render
+      (fn [{:keys [id position size debug-mode] :as block}]
+        (let [is-dragging? (= id (:block-id @drag-state))
+              is-resizing? (= id (:block-id @resize-state))
+              actual-pos (if (or is-dragging? (get @local-positions id))
+                           (get @local-positions id position)
+                           position)
+              actual-size (if (or is-resizing? (get @local-sizes id))
+                            (get @local-sizes id size)
+                            size)
+              debug-results (rq/get-block-results id)
+              {:keys [results error loading]} debug-results]
+          [:div.block.debug-block
+           {:style {:position "absolute"
+                    :left (:x actual-pos)
+                    :top (:y actual-pos)
+                    :width (:width actual-size)
+                    :height (:height actual-size)
+                    :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
+                    :border "1px solid #9b59b6"
+                    :border-radius "4px"
+                    :padding "10px"
+                    :z-index 10
+                    :box-shadow "0 0 20px rgba(155,89,182,0.3), inset 0 0 20px rgba(155,89,182,0.05)"
+                    :display "flex"
+                    :flex-direction "column"}
+            :draggable false}
+           ;; Resize handle
+           [:div.resize-handle
+            {:style {:position "absolute"
+                     :bottom 0
+                     :right 0
+                     :width "15px"
+                     :height "15px"
+                     :cursor "nwse-resize"
+                     :background "linear-gradient(135deg, transparent 50%, #9b59b6 50%)"
+                     :opacity 0.5}
+             :on-mouse-down #(start-resize! id %)}]
+           ;; Header
+           [:div.block-header
+            {:style {:display "flex"
+                     :justify-content "space-between"
+                     :margin-bottom "10px"
+                     :padding-bottom "5px"
+                     :border-bottom "1px solid rgba(155,89,182,0.2)"
+                     :cursor "move"}
+             :on-mouse-down #(start-drag! id %)}
+            [:div {:style {:display "flex" :align-items "center" :gap "10px"}}
+             [:span {:style {:font-weight "bold" 
+                             :color "#9b59b6"
+                             :font-family "monospace"
+                             :text-transform "uppercase"
+                             :font-size "11px"
+                             :letter-spacing "1px"}} "REACTOR DEBUG"]
+             [:select {:style {:background "rgba(0,0,0,0.3)"
+                               :color "#9b59b6"
+                               :border "1px solid rgba(155,89,182,0.3)"
+                               :border-radius "2px"
+                               :padding "2px 5px"
+                               :font-family "monospace"
+                               :font-size "10px"
+                               :cursor "pointer"}
+                       :value (name @local-mode)
+                       :on-mouse-down (fn [e] (.stopPropagation e))
+                       :on-change (fn [e]
+                                   (let [new-mode (keyword (.. e -target -value))]
+                                     (reset! local-mode new-mode)
+                                     (case new-mode
+                                       :subscriptions 
+                                       (rq/execute-block-query! id 
+                                         "SELECT sub_id, session_id, status, update_count, 
+                                                 last_updated, total_execution_time
+                                          FROM reactor_subscriptions 
+                                          WHERE status = 'active'
+                                          ORDER BY last_updated DESC" nil nil)
+                                       :events
+                                       (rq/execute-block-query! id
+                                         "SELECT category, event_type, session_id, created_at
+                                          FROM reactor_events
+                                          ORDER BY created_at DESC
+                                          LIMIT 100" nil nil)
+                                       :reactions
+                                       (rq/execute-block-query! id
+                                         "SELECT table_name, change_type, affected_subscriptions, triggered_at
+                                          FROM reactor_reactions
+                                          ORDER BY triggered_at DESC
+                                          LIMIT 50" nil nil)
+                                       :performance
+                                       (rq/execute-block-query! id
+                                         "SELECT metric_type, query, execution_time_ms, result_count, measured_at
+                                          FROM reactor_performance
+                                          ORDER BY measured_at DESC
+                                          LIMIT 100" nil nil)
+                                       nil)))}
+              [:option {:value "subscriptions"} "Subscriptions"]
+              [:option {:value "events"} "Events"]
+              [:option {:value "reactions"} "Reactions"]
+              [:option {:value "performance"} "Performance"]]]
+            [:button {:on-click #(do (rq/unsubscribe-block! id)
+                                    (r/dispatch! [:delete-block id]))
+                      :style {:background "none"
+                              :border "none"
+                              :color "#9b59b6"
+                              :cursor "pointer"
+                              :font-size "20px"
+                              :line-height "20px"}} "×"]]
+           ;; Results
+           (cond
+             loading
+             [:div {:style {:flex 1
+                           :display "flex"
+                           :align-items "center"
+                           :justify-content "center"
+                           :color "#9b59b6"
+                           :font-family "monospace"}}
+              "Loading..."]
+             
+             error
+             [:div {:style {:flex 1
+                           :padding "10px"
+                           :background "rgba(255,0,0,0.1)"
+                           :border "1px solid rgba(255,0,0,0.3)"
+                           :border-radius "4px"
+                           :color "#ff6b6b"
+                           :font-family "monospace"
+                           :font-size "11px"}}
+              error]
+             
+             (and results (seq results))
+             [:div.results
+              {:style {:flex 1
+                       :min-height 0
+                       :overflow "auto"
+                       :background "rgba(0,0,0,0.3)"
+                       :border "1px solid rgba(155,89,182,0.2)"
+                       :padding "5px"}}
+              [:table {:style {:width "100%" 
+                              :font-size "10px"
+                              :table-layout "fixed"}}
+               [:thead {:style {:position "sticky"
+                               :top 0
+                               :background "rgba(26,26,46,0.95)"
+                               :z-index 1}}
+                [:tr
+                 (for [col (keys (first results))]
+                   ^{:key col}
+                   [:th {:style {:text-align "left" 
+                                :padding "4px"
+                                :color "#9b59b6"
+                                :border-bottom "1px solid rgba(155,89,182,0.2)"
+                                :font-family "monospace"
+                                :text-transform "uppercase"
+                                :font-size "9px"}} (name col)])]]
+               [:tbody
+                (for [row results]
+                  ^{:key (or (:_id row) (str (hash row)))}
+                  [:tr
+                   (for [col (keys (first results))]
+                     ^{:key col}
+                     [:td {:style {:padding "4px"
+                                  :color "#d8b4fe"
+                                  :font-family "monospace"
+                                  :font-size "9px"
+                                  :overflow "hidden"
+                                  :text-overflow "ellipsis"
+                                  :white-space "nowrap"}} 
+                      (str (get row col))])])]]]
+             
+             results  ;; Empty results array
+             [:div {:style {:flex 1
+                           :display "flex"
+                           :align-items "center"
+                           :justify-content "center"
+                           :color "#9b59b6"
+                           :font-family "monospace"
+                           :opacity 0.5
+                           :flex-direction "column"
+                           :gap "10px"}}
+              [:div {:style {:font-size "12px"}} "No data yet"]
+              [:div {:style {:font-size "10px"
+                            :text-align "center"
+                            :max-width "300px"
+                            :line-height "1.4"}} 
+               (case @local-mode
+                 :subscriptions "No active subscriptions being tracked"
+                 :events "No events recorded yet" 
+                 :reactions "No table reactions captured"
+                 :performance "No performance metrics available"
+                 "No data available")]]
+             
+             :else
+             [:div {:style {:flex 1
+                           :display "flex"
+                           :align-items "center"
+                           :justify-content "center"
+                           :color "#9b59b6"
+                           :font-family "monospace"
+                           :opacity 0.5}}
+              "Loading..."])]))})))
+
 (defn render-block [block]
   (js/console.log "Rendering block:" (clj->js block) "Type:" (:type block))
   (let [block-type (if (string? (:type block))
@@ -531,6 +858,7 @@
       :query [query-block block]
       :chart [chart-block block]
       :sql-exec [sql-exec-block block]
+      :debug [debug-block block]
       (do
         (js/console.warn "Unknown block type:" block-type "original:" (:type block))
         nil))))
@@ -538,7 +866,7 @@
 ;; ============= Canvas Component =============
 
 (defonce table-dropdown-open (reagent/atom false))
-(defonce table-list (reagent/atom {:public [] :system []}))
+(defonce table-list (reagent/atom {:public [] :system [] :reactor []}))
 
 (defn canvas []
   (let [blocks (r/subscribe [:blocks])]
@@ -715,13 +1043,18 @@
       :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
       :on-click (fn []
                  (swap! table-dropdown-open not)
-                 ;; Fetch tables when opening dropdown
-                 (when-not @table-dropdown-open
+                 ;; Fetch tables when opening dropdown (after toggle, so check the new value)
+                 (when @table-dropdown-open
                    (-> (js/fetch "http://localhost:5000/api/tables")
                        (.then #(.json %))
                        (.then (fn [data]
-                               (let [tables-data (js->clj data :keywordize-keys true)]
-                                 (reset! table-list tables-data)))))))}
+                               (let [tables-data (js->clj data :keywordize-keys true)
+                                     ;; Separate reactor tables from regular public tables
+                                     reactor-tables (filter #(str/starts-with? % "reactor_") (:public tables-data))
+                                     other-tables (remove #(str/starts-with? % "reactor_") (:public tables-data))]
+                                 (reset! table-list {:public other-tables
+                                                    :reactor reactor-tables
+                                                    :system (get tables-data :system [])})))))))}
      "+ TABLE"
      [:span {:style {:font-size "10px"}} "▼"]]
     ;; Dropdown menu
@@ -766,6 +1099,42 @@
                                            :sql (str "SELECT * FROM " table " LIMIT 10")}]
                              (r/dispatch! [:add-block block-data])))}
           table])
+       ;; Reactor tables
+       (when (seq (:reactor @table-list))
+         [:div
+          [:div {:style {:padding "5px 10px"
+                         :color "#9b59b6"
+                         :font-family "monospace"
+                         :font-size "10px"
+                         :text-transform "uppercase"
+                         :border-bottom "1px solid rgba(155,89,182,0.2)"
+                         :margin-top "5px"
+                         :opacity 0.7}}
+           "Reactor Debug Tables"]
+          (for [table (:reactor @table-list)]
+            ^{:key table}
+            [:div {:style {:padding "8px 15px"
+                           :color "#d8b4fe"
+                           :font-family "monospace"
+                           :font-size "11px"
+                           :cursor "pointer"
+                           :transition "all 0.2s"}
+                   :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(155,89,182,0.1)")
+                   :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+                   :on-click (fn []
+                              (reset! table-dropdown-open false)
+                              (let [block-data {:id (str (random-uuid))
+                                              :type :debug
+                                              :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
+                                              :size {:width 500 :height 400}
+                                              :debug-mode (case table
+                                                           "reactor_subscriptions" :subscriptions
+                                                           "reactor_events" :events
+                                                           "reactor_reactions" :reactions
+                                                           "reactor_performance" :performance
+                                                           :subscriptions)}]
+                                (r/dispatch! [:add-block block-data])))}
+             table])])
        ;; System tables
        (when (seq (:system @table-list))
          [:div
@@ -841,6 +1210,28 @@
                    (js/console.log "Adding SQL exec block:" (clj->js block-data))
                    (r/dispatch! [:add-block block-data])))}
     "+ EXECUTE"]
+   [:button
+    {:style {:padding "8px 16px"
+             :background "transparent"
+             :color "#9b59b6"
+             :border "1px solid #9b59b6"
+             :border-radius "2px"
+             :cursor "pointer"
+             :font-family "monospace"
+             :font-size "12px"
+             :font-weight "bold"
+             :text-transform "uppercase"
+             :letter-spacing "1px"}
+     :on-click (fn []
+                 (let [block-data {:id (str "debug-" (random-uuid))
+                                   :type :debug
+                                   :position {:x (+ 50 (rand-int 200))
+                                              :y (+ 50 (rand-int 200))}
+                                   :size {:width 500 :height 400}
+                                   :debug-mode :subscriptions}]
+                   (js/console.log "Adding debug block:" (clj->js block-data))
+                   (r/dispatch! [:add-block block-data])))}
+    "+ DEBUG"]
    [:div {:style {:flex 1}}]
    [:span {:style {:color "#00ff9f"
                    :font-family "monospace"

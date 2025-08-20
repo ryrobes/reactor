@@ -37,14 +37,23 @@
             :get
             (do
               (log/info "[REACTIVE-SERVER] SSE connection request from session:" session-id)
-              ;; Don't clean up subscriptions on reconnect - let them persist
-              ;; This way reactive updates continue to work
-              (let [existing-subs (filter (fn [[sub-id sub-info]]
-                                           (= (:session-id sub-info) session-id))
+              ;; Clean up OLD subscriptions for this session before creating new connection
+              ;; Also clean up any orphaned subscriptions (those without active SSE channels)
+              (let [session-subs (filter (fn [[sub-id sub-info]]
+                                          (= (:session-id sub-info) session-id))
+                                        @kafka/active-subscriptions)
+                    orphaned-subs (filter (fn [[sub-id sub-info]]
+                                           (let [sub-session (:session-id sub-info)]
+                                             (empty? (get @kafka/sse-channels sub-session))))
                                          @kafka/active-subscriptions)]
-                (when (seq existing-subs)
-                  (log/info "[REACTIVE-SERVER] Session" session-id "reconnecting with" (count existing-subs) "existing subscriptions:"
-                            (map first existing-subs))))
+                (when (seq session-subs)
+                  (log/info "[REACTIVE-SERVER] Cleaning up" (count session-subs) "old subscriptions for session" session-id)
+                  (doseq [[sub-id _] session-subs]
+                    (kafka/unsubscribe-query! sub-id)))
+                (when (seq orphaned-subs)
+                  (log/info "[REACTIVE-SERVER] Cleaning up" (count orphaned-subs) "orphaned subscriptions")
+                  (doseq [[sub-id _] orphaned-subs]
+                    (kafka/unsubscribe-query! sub-id))))
               
               (http/with-channel req channel
                 ;; Set up SSE headers
@@ -69,6 +78,11 @@
                 (http/on-close channel
                              (fn [status]
                                (log/info "[REACTIVE-SERVER] SSE channel closed for session" session-id "status:" status)
+                               ;; Clean up ALL subscriptions for this session
+                               (doseq [[sub-id sub-info] @kafka/active-subscriptions]
+                                 (when (= (:session-id sub-info) session-id)
+                                   (log/info "[REACTIVE-SERVER] Cleaning up subscription" sub-id "for disconnected session")
+                                   (kafka/unsubscribe-query! sub-id)))
                                (kafka/unregister-sse-channel! session-id channel)))))
             
             ;; POST request registers a SQL subscription
@@ -135,55 +149,60 @@
                                     (re-find #"(?i)INTO\s+\w*_?sessions" sql))]
             (log/debug "[REACTIVE-SERVER] /api/sql called with SQL:" sql)
             (log/debug "[REACTIVE-SERVER] Session ID:" session-id "Has SSE channels:" (seq (get @kafka/sse-channels session-id)))
-            ;; Only create subscription for non-session queries
-            (if is-session-query?
-              ;; Just execute without subscription for session tables
+            (log/info "[REACTIVE-SERVER] as-of value:" (pr-str as-of) "is-temporal?" (and as-of (not (empty? as-of))))
+            ;; Only create subscription for non-session queries AND non-temporal queries
+            ;; Note: Check for actual temporal value, not just truthy (empty string is truthy!)
+            (if (or is-session-query? (and as-of (not (empty? as-of))))
+              ;; Just execute without subscription for session tables OR temporal queries
               (let [node @session/default-node
                     result (if node
                             (if as-of
-                              (session/execute-sql-query node sql params as-of)
+                              ;; Use time-travel execution
+                              (let [time-travel-ns (require 'reactor.time-travel-sql)
+                                    exec-fn (ns-resolve 'reactor.time-travel-sql 'execute-sql-with-time-travel)]
+                                (exec-fn node sql params as-of))
                               (xts/execute-sql node sql params))
                             {:error "No XTDB node available"})]
                 {:status 200
                  :headers {"Content-Type" "application/json"
                           "Access-Control-Allow-Origin" "*"}
-                 :body (json/generate-string result)})
-              ;; Create subscription for business tables
-              (let [;; Check if there's already a subscription for this SQL query
-                    existing-sub (first (filter (fn [[sub-id sub-info]]
-                                                  (and (= (:session-id sub-info) session-id)
-                                                       (= (:query sub-info) sql)
-                                                       (= (:params sub-info) params)))
-                                               @kafka/active-subscriptions))
-                    ;; Use existing or client-provided subscription-id
-                    sub-id (cond
-                            ;; If we have an existing subscription for this query, reuse it
-                            existing-sub
-                            (let [[existing-id _] existing-sub]
-                              (log/info "[REACTIVE-SERVER] Reusing existing subscription:" existing-id "for SQL:" sql)
-                              existing-id)
-                            
-                            ;; If client provided an ID, use it
-                            (:subscription-id body)
-                            (do (log/info "[REACTIVE-SERVER] Registering client subscription:" (:subscription-id body) "for SQL:" sql)
-                                (kafka/register-query-subscription! 
-                                 (:subscription-id body) sql params 
-                                 (kafka/create-subscription-callback session-id) 
-                                 session-id)
-                                ;; Execute immediately to get initial results
-                                (kafka/re-execute-subscription (:subscription-id body))
-                                (:subscription-id body))
-                            
-                            ;; Otherwise create new subscription
-                            :else
-                            (kafka/subscribe-query! session-id sql params))]
+                 :body (json/generate-string 
+                        (if (:subscription-id body)
+                          ;; Include the client's subscription ID for tracking
+                          (assoc result :subscription-id (:subscription-id body))
+                          result))})
+              ;; Create subscription for business tables (only when NOT time traveling)
+              (let [;; Always use client-provided ID when available
+                    client-id (:subscription-id body)
+                    sub-id (or client-id (str "sub-" (java.util.UUID/randomUUID)))
+                    
+                    ;; Check if this subscription already exists
+                    existing-sub (get @kafka/active-subscriptions sub-id)]
+                
+                ;; Unregister old subscription if it exists (allows SQL updates)
+                (when existing-sub
+                  (log/info "[REACTIVE-SERVER] Updating existing subscription:" sub-id)
+                  (kafka/unregister-query-subscription! sub-id))
+                
+                ;; Register new/updated subscription
+                (log/info "[REACTIVE-SERVER] Registering subscription:" sub-id "for SQL:" sql)
+                (kafka/register-query-subscription! 
+                 sub-id sql params 
+                 (kafka/create-subscription-callback session-id) 
+                 session-id)
+                
+                ;; Execute immediately to get initial results
+                (kafka/re-execute-subscription sub-id)
                 (log/info "[REACTIVE-SERVER] Using subscription" sub-id "for session" session-id)
                 (log/info "[REACTIVE-SERVER] Active SSE channels for session:" (count (get @kafka/sse-channels session-id [])))
                 ;; Return initial results WITH the subscription ID
                 (let [node @session/default-node
+                      time-travel-ns (when as-of (require 'reactor.time-travel-sql))
+                      exec-fn (when as-of (ns-resolve 'reactor.time-travel-sql 'execute-sql-with-time-travel))
                       result (if node
                               (if as-of
-                                (session/execute-sql-query node sql params as-of)
+                                (do (log/info "[REACTIVE-SERVER] Executing time-travel query with as-of:" as-of)
+                                    (exec-fn node sql params as-of))
                                 (xts/execute-sql node sql params))
                               {:error "No XTDB node available"})
                       ;; Include subscription ID in response
@@ -196,6 +215,25 @@
           ;; Override SQL exec to trigger reactive updates
           "/api/sql-exec"
           (bridge/handle-sql-exec-reactive req)
+          
+          ;; Query history endpoint for time travel
+          "/api/query-history"
+          (let [body (json/parse-string (slurp (:body req)) true)
+                sql (:sql body)
+                limit (or (:limit body) 20)
+                node @session/default-node]
+            (if node
+              (let [time-travel (require 'reactor.time-travel-sql)
+                    history-fn (ns-resolve 'reactor.time-travel-sql 'get-query-history-range)
+                    result (history-fn node sql limit)]
+                {:status 200
+                 :headers {"Content-Type" "application/json"
+                          "Access-Control-Allow-Origin" "*"}
+                 :body (json/generate-string result)})
+              {:status 500
+               :headers {"Content-Type" "application/json"
+                        "Access-Control-Allow-Origin" "*"}
+               :body (json/generate-string {:error "No XTDB node available"})}))
           
           ;; Test endpoint to manually create subscription
           "/api/test-subscription"
@@ -246,6 +284,13 @@
   ;; Register all event handlers
   (doseq [[event-id handler] handlers]
     (session/reg-event-db event-id handler))
+  
+  ;; Initialize meta-tracking system
+  (try
+    ((requiring-resolve 'reactor.meta-tracking/init!))
+    (log/info "Meta-tracking system initialized")
+    (catch Exception e
+      (log/warn "Meta-tracking not available:" (.getMessage e))))
   
   ;; Initialize Kafka reactive system
   (when kafka-config

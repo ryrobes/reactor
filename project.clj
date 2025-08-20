@@ -27,7 +27,8 @@
                  ;; https://mvnrepository.com/artifact/org.apache.kafka/kafka-streams-test-utils
                  [org.apache.kafka/kafka-streams-test-utils "4.0.0"]
                  ;;[pjstadig/humane-test-output "0.11.0"]
-                 ]
+                 ;; SQL parsing and manipulation
+                 [com.github.jsqlparser/jsqlparser "4.9"]]
 
   :jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
              "-Dio.netty.tryReflectionSetAccessible=true"]

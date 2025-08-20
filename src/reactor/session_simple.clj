@@ -2,6 +2,7 @@
   "Simplified session-scoped reactive state management.
    Each session gets its own isolated state universe with time-travel."
   (:require [reactor.xtdb-store :as xts]
+            [reactor.sql-parser :as sql-parser]
             [xtdb.api :as xt]
             [clojure.string :as str]
             [clojure.walk :as walk]))
@@ -318,19 +319,19 @@
   "Execute a SQL query using XTDB 2.0's native SQL support."
   [node sql-string & [params as-of]]
   (try
-    (let [;; Handle time travel with FOR SYSTEM_TIME AS OF
+    (let [;; Use the SQL parser to properly add AS OF clause if needed
           sql-with-time (if as-of
-                         (let [timestamp (java.util.Date. (- (System/currentTimeMillis) 
-                                                            (* 1000 60 (Integer/parseInt (str as-of)))))
-                               iso-time (.format (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ss") timestamp)]
-                           ;; XTDB 2.0 uses FOR SYSTEM_TIME AS OF syntax
-                           (str/replace sql-string #"FROM (\w+)" 
-                                       (str "FROM $1 FOR SYSTEM_TIME AS OF TIMESTAMP '" iso-time "'")))
+                         (sql-parser/add-as-of-clause sql-string as-of)
                          sql-string)
-          result (xts/execute-sql node sql-with-time params)]
-      (if (:error result)
-        {:error (:error result) :results []}
-        {:results (:results result)}))
+          _ (when as-of (println "[SESSION] Executing SQL with time travel. Modified SQL:" sql-with-time))
+          result (xts/execute-sql node sql-with-time params)
+          ;; Only include executed-sql if it's different (time travel is active)
+          base-result (if (:error result)
+                       {:error (:error result) :results []}
+                       {:results (:results result)})]
+      (if (and as-of (not= sql-string sql-with-time))
+        (assoc base-result :executed-sql sql-with-time)
+        base-result))
     (catch Exception e
       (println "SQL execution error:" (.getMessage e))
       {:error (str "SQL Error: " (.getMessage e)) 

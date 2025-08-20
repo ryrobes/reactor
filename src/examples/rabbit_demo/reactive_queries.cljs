@@ -16,12 +16,17 @@
 (defn subscribe-block-query!
   "Subscribe a block to a SQL query with automatic updates"
   [block-id sql & [params as-of]]
-  ;; Unsubscribe from previous query if exists
+  ;; Unsubscribe from previous query if exists - PROPERLY
   (when-let [old-sub (get @block-subscriptions block-id)]
+    ;; Remove watcher first
+    (remove-watch old-sub (keyword (str "block-" block-id)))
+    ;; Note: We can't close the subscription directly because we don't have the ID
+    ;; The subscription will be garbage collected when no longer referenced
     (swap! block-subscriptions dissoc block-id))
   
-  ;; Create new subscription
-  (let [result-atom (r/sql-subscribe! sql params as-of)]
+  ;; Create new subscription - use block-id as the stable subscription ID
+  ;; This ensures the server can track subscriptions properly
+  (let [result-atom (r/sql-subscribe-with-id! (str block-id) sql params as-of)]
     ;; Store the subscription
     (swap! block-subscriptions assoc block-id result-atom)
     
@@ -33,8 +38,12 @@
                    ;; Store results in our separate atom, not in app state
                    (swap! block-results assoc block-id 
                           (if (:error new-val)
-                            {:error (:error new-val) :results nil}
-                            {:results (:data new-val) :error nil})))))
+                            {:error (:error new-val) 
+                             :results nil
+                             :executed-sql (:executed-sql new-val)}
+                            {:results (:data new-val) 
+                             :error nil
+                             :executed-sql (:executed-sql new-val)})))))
     
     ;; Return the result atom for initial value
     result-atom))
@@ -45,7 +54,15 @@
   ;; Clear old results and show loading
   (swap! block-results assoc block-id {:loading true})
   
-  ;; Subscribe to the query (this will trigger the watcher above)
+  ;; Log the actual SQL being executed
+  (when as-of
+    (js/console.log "[REACTIVE-QUERIES] Time travel query for block" block-id 
+                    "SQL:" sql "AS-OF:" as-of))
+  (when-not as-of
+    (js/console.log "[REACTIVE-QUERIES] Normal query (reactive) for block" block-id "SQL:" sql))
+  
+  ;; IMPORTANT: Always create a new subscription when changing temporal state
+  ;; This ensures that going back to NOW creates a fresh reactive subscription
   (let [result-atom (subscribe-block-query! block-id sql params as-of)]
     ;; The watcher will handle updating the results
     result-atom))

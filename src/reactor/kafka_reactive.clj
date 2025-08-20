@@ -6,6 +6,7 @@
             [taoensso.nippy :as nippy]
             [cheshire.core]
             [reactor.xtdb-store :as xts]
+            [reactor.meta-tracking :as meta]
             [reactor.session_simple :as session]
             [org.httpkit.server :as http-server]
             [clojure.tools.logging :as log]
@@ -79,6 +80,8 @@
     (doseq [table tables]
       (swap! table-to-subs update (str/lower-case table) (fnil conj #{}) sub-id))
     (log/info "Registered subscription" sub-id "for tables:" tables)
+    ;; Track subscription creation
+    (meta/track-subscription-created! sub-id session-id sql tables)
     sub-id))
 
 (defn unregister-query-subscription!
@@ -92,21 +95,32 @@
       ;; Remove empty sets
       (when (empty? (get @table-to-subs table))
         (swap! table-to-subs dissoc table)))
+    ;; Track subscription removal
+    (meta/track-subscription-removed! sub-id "manual-unregister")
     (log/info "Unregistered query subscription" sub-id)))
 
 (defn re-execute-subscription
   "Re-execute a subscription's query and invoke its callback with results."
   [sub-id]
   (log/info "[KAFKA-REACTIVE] Re-executing subscription" sub-id)
-  (if-let [{:keys [query params callback session-id]} (get @active-subscriptions sub-id)]
+  (if-let [{:keys [query params callback session-id client-id]} (get @active-subscriptions sub-id)]
     (try
       (log/info "[KAFKA-REACTIVE] Found subscription" sub-id "for session" session-id "SQL:" query)
       (if-let [node @session/default-node]
-        (let [result (if params
+        (let [start-time (System/currentTimeMillis)
+              result (if params
                       (xts/execute-sql node query params)
-                      (xts/execute-sql node query))]
-          (log/info "[KAFKA-REACTIVE] Query executed for" sub-id "got" (count (:results result [])) "results")
-          (callback {:subscription-id sub-id
+                      (xts/execute-sql node query))
+              execution-time (- (System/currentTimeMillis) start-time)
+              result-count (count (:results result []))
+              ;; Use client-id if available, otherwise fall back to sub-id
+              subscription-id (or client-id sub-id)]
+          (log/info "[KAFKA-REACTIVE] Query executed for" sub-id "sending as" subscription-id "got" result-count "results")
+          ;; Track subscription update
+          (meta/track-subscription-updated! sub-id execution-time result-count)
+          ;; Track query performance
+          (meta/track-query-performance! query execution-time result-count)
+          (callback {:subscription-id subscription-id
                     :session-id session-id
                     :query query
                     :result result}))
@@ -160,6 +174,10 @@
       (when (seq affected-subs)
         (log/info "Transaction affected tables:" affected-tables 
                  "triggering" (count affected-subs) "subscriptions")
+        
+        ;; Track the reaction
+        (doseq [table affected-tables]
+          (meta/track-reaction! table "transaction" affected-subs))
         
         ;; Re-execute affected subscriptions
         (doseq [sub-id affected-subs]

@@ -13,6 +13,17 @@
 (defonce sessions (r/atom []))
 (defonce history-info (r/atom {}))
 (defonce sql-subscriptions (atom {}))  ;; Track active SQL subscriptions
+(defonce subscription-id-map (atom {}))  ;; Map client IDs to server IDs
+
+;; ID normalization helper
+(defn normalize-id
+  "Normalize an ID to a string format"
+  [id]
+  (cond
+    (string? id) id
+    (keyword? id) (name id)
+    (uuid? id) (str id)
+    :else (str id)))
 
 ;; SQL Subscription Management  
 (defonce sql-event-source (atom nil))  ;; Single SSE connection for all SQL subscriptions
@@ -195,6 +206,18 @@
    ;; Create a subscription and return a reactive atom
    (subscribe [:sql sql params as-of])))
 
+(defn sql-subscribe-with-id!
+  "Create a reactive SQL subscription with a specific ID"
+  ([sub-id sql]
+   (sql-subscribe-with-id! sub-id sql nil nil))
+  ([sub-id sql params]
+   (sql-subscribe-with-id! sub-id sql params nil))
+  ([sub-id sql params as-of]
+   ;; Create subscription with explicit ID
+   (let [result-atom (r/atom {:loading true})]
+     (create-sql-subscription! sql params as-of result-atom sub-id)
+     result-atom)))
+
 (defn sql-exec!
   "Execute a SQL statement (INSERT/UPDATE/DELETE) on the server"
   ([sql]
@@ -330,18 +353,19 @@
                 (when (or (= (:type data) :query-update)
                           (= (:type data) "query-update"))
                   (when-let [sub-id (:subscription-id data)]
-                    (js/console.log "[CLIENT] Looking for subscription:" sub-id "in" (count @sql-subscriptions) "subscriptions")
-                    (js/console.log "[CLIENT] Available subscription IDs:" (clj->js (keys @sql-subscriptions)))
+                    ;; Just try direct lookup - keep it simple
                     (if-let [sub (get @sql-subscriptions sub-id)]
                       (do
                         (js/console.log "[CLIENT] Found subscription, updating result atom for" sub-id)
                         ;; Update the result atom
                         (reset! (:result-atom sub)
                                 (if (:error (:result data))
-                                  {:error (:error (:result data)) :loading false}
-                                  {:data (:results (:result data)) :loading false}))
+                                  {:error (:error (:result data)) :loading false :executed-sql (:executed-sql (:result data))}
+                                  {:data (:results (:result data)) :loading false :executed-sql (:executed-sql (:result data))}))
                         (js/console.log "[CLIENT] Result atom updated with" (count (:results (:result data))) "results"))
-                      (js/console.warn "[CLIENT] No subscription found for ID:" sub-id)))))))
+                      (do
+                        (js/console.warn "[CLIENT] No subscription found for ID:" sub-id)
+                        (js/console.log "[CLIENT] Available subscription IDs:" (clj->js (keys @sql-subscriptions))))))))))
       
       ;; Handle errors
       (set! (.-onerror es)
@@ -352,8 +376,9 @@
 
 (defn create-sql-subscription!
   "Create a reactive SQL subscription that updates automatically"
-  [sql params as-of result-atom]
-  (let [sub-id (str "sql-" (random-uuid))
+  [sql params as-of result-atom & [client-id]]
+  (let [;; Use client-provided ID or generate one
+        sub-id (or client-id (str "sql-" (random-uuid)))
         server-url (:server-url @config)
         session-id (:session-id @config)]
     
@@ -362,38 +387,33 @@
            {:sql sql
             :params params
             :result-atom result-atom})
+    (js/console.log "[CLIENT] Created subscription" sub-id "for SQL:" sql)
+    (js/console.log "[CLIENT] Stored in sql-subscriptions. Keys now:" (clj->js (keys @sql-subscriptions)))
     
     ;; Ensure SSE connection exists (this might trigger immediate updates)
     (ensure-sql-sse-connection!)
     
     ;; Call /api/sql which will create server-side subscription AND return initial results
+    (js/console.log "[CLIENT] Sending SQL request with as-of:" as-of "for query:" sql)
     (-> (js/fetch (str server-url "/api/sql?session=" session-id)
                   #js {:method "POST"
                        :headers #js {"Content-Type" "application/json"}
                        :body (js/JSON.stringify 
-                              (clj->js {:sql sql
-                                       :params params
-                                       :as-of as-of
-                                       :subscription-id sub-id}))})  ;; Pass sub-id to server
+                              (clj->js (merge {:sql sql
+                                              :params params
+                                              :subscription-id sub-id}
+                                             (when as-of {:as-of as-of}))))})  ;; Pass sub-id to server
         (.then #(.json %))
         (.then #(let [result (js->clj % :keywordize-keys true)]
                   (js/console.log "[CLIENT] Initial query result for" sub-id "Result:" (clj->js result))
-                  ;; Handle subscription ID from server
-                  (if-let [server-sub-id (:subscription-id result)]
-                    (if (not= server-sub-id sub-id)
-                      (do
-                        (js/console.log "[CLIENT] Server returned different subscription ID:" server-sub-id "updating mapping")
-                        ;; Move the subscription to the server's ID
-                        (let [sub-info (get @sql-subscriptions sub-id)]
-                          (swap! sql-subscriptions dissoc sub-id)
-                          (swap! sql-subscriptions assoc server-sub-id sub-info)
-                          (js/console.log "[CLIENT] Updated subscriptions map. Keys:" (clj->js (keys @sql-subscriptions)))))
-                      (js/console.log "[CLIENT] Server confirmed subscription ID:" server-sub-id))
-                    (js/console.warn "[CLIENT] Server did not return subscription ID!"))
+                  ;; Server should respect our ID - no mapping needed
+                  (when-let [server-sub-id (:subscription-id result)]
+                    (when (not= server-sub-id sub-id)
+                      (js/console.warn "[CLIENT] Server returned different ID:" server-sub-id "expected:" sub-id)))
                   (reset! result-atom 
                           (if (:error result)
-                            {:error (:error result) :loading false}
-                            {:data (:results result) :loading false}))))
+                            {:error (:error result) :loading false :executed-sql (:executed-sql result)}
+                            {:data (:results result) :loading false :executed-sql (:executed-sql result)}))))
         (.catch #(do
                   (js/console.error "[CLIENT] Query failed for" sub-id %)
                   (reset! result-atom {:error (str %) :loading false}))))
@@ -406,7 +426,13 @@
   (when-let [sub (get @sql-subscriptions sub-id)]
     (when-let [es (:event-source sub)]
       (.close es))
-    (swap! sql-subscriptions dissoc sub-id)))
+    (swap! sql-subscriptions dissoc sub-id)
+    ;; Clean up any mappings for this subscription
+    (swap! subscription-id-map dissoc sub-id)
+    ;; Also remove reverse mappings
+    (swap! subscription-id-map 
+           (fn [m]
+             (into {} (remove (fn [[k v]] (= v sub-id)) m))))))
 
 ;; Cleanup
 (defn disconnect! []
@@ -416,8 +442,10 @@
     (reset! connected? false))
   ;; Clear history info when disconnecting
   (reset! history-info {})
-  ;; Close all SQL subscriptions
-  (doseq [[sub-id sub] @sql-subscriptions]
-    (when-let [es (:event-source sub)]
-      (.close es)))
-  (reset! sql-subscriptions {}))
+  ;; Close SQL SSE connection
+  (when @sql-event-source
+    (.close @sql-event-source)
+    (reset! sql-event-source nil))
+  ;; Clear all SQL subscriptions and mappings
+  (reset! sql-subscriptions {})
+  (reset! subscription-id-map {}))

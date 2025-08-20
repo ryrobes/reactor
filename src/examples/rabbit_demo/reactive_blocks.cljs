@@ -90,12 +90,15 @@
 
 (defn reactive-query-block
   "Enhanced query block with reactive subscriptions"
-  [{:keys [id position size sql results as-of error loading] :as block}]
+  [{:keys [id position size sql] :as block}]
   (let [is-dragging (reagent/atom false)
         is-resizing (reagent/atom false)
         drag-offset (reagent/atom {:x 0 :y 0})
         initial-sql (reagent/atom sql)
-        subscription-active (reagent/atom false)]
+        subscription-active (reagent/atom false)
+        ;; Get reactive results from the separate atom
+        block-result (rq/get-block-results id)
+        {:keys [results error loading executed-sql]} block-result]
     
     ;; Set up subscription when SQL changes
     (reagent/create-class
@@ -144,8 +147,11 @@
          ;; SQL Editor
          [:div.sql-editor
           [:textarea
-           {:value (or sql "")
+           {:value (or executed-sql sql "")
             :placeholder "Enter SQL query..."
+            :style (when executed-sql
+                     {:background "rgba(0,255,159,0.05)"
+                      :border-color "#00ff9f"})
             :on-change (fn [e]
                         (let [new-sql (.. e -target -value)]
                           (r/dispatch! [:update-block id {:sql new-sql}])))}]]
@@ -154,6 +160,21 @@
          [:button.execute-btn
           {:on-click #(subscribe-block-query! id sql)}
           "↻ Re-subscribe"]
+         
+         ;; Show time travel indicator when active
+         (when (and executed-sql (not= executed-sql sql))
+           [:div.time-travel-indicator {:style {:background "rgba(0,255,159,0.1)"
+                                                :border "1px solid rgba(0,255,159,0.3)"
+                                                :padding "4px 8px"
+                                                :margin "5px 0"
+                                                :font-size "10px"
+                                                :font-family "monospace"
+                                                :color "#00ff9f"
+                                                :display "flex"
+                                                :align-items "center"
+                                                :gap "5px"}}
+            [:span "⏰"]
+            [:span "TIME TRAVEL MODE - Query is showing historical data"]])
          
          ;; Results
          [:div.results
