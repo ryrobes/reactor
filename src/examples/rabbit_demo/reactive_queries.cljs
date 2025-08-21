@@ -1,17 +1,41 @@
 (ns examples.rabbit-demo.reactive-queries
   "Reactive query management for Rabbit Demo blocks"
   (:require [reactor.core :as r]
+            [clojure.string :as cstr]
             [reagent.core :as reagent]))
 
 ;; Track which blocks have active subscriptions
 (defonce block-subscriptions (atom {}))
 ;; Store query results separately from app state to avoid conflicts
 (defonce block-results (reagent/atom {}))
+;; Hook to be called when queries execute (for time travel refresh)
+(defonce query-execution-hooks (atom {}))
 
 (defn get-block-results
   "Get the current results for a block"
   [block-id]
-  (get @block-results block-id))
+  (get @block-results (if (keyword? block-id) 
+                        block-id 
+                        (keyword (cstr/replace (str block-id) ":" ""))))) ;; ensure kw
+
+(defn register-query-hook!
+  "Register a hook to be called when a query executes"
+  [block-id hook-fn]
+  (swap! query-execution-hooks assoc block-id hook-fn))
+
+(defn unregister-query-hook!
+  "Unregister a query execution hook"
+  [block-id]
+  (swap! query-execution-hooks dissoc block-id))
+
+(defn trigger-query-hooks!
+  "Trigger hooks for a block after query execution"
+  [block-id sql]
+  (when-let [hook-fn (get @query-execution-hooks block-id)]
+    (try
+      (hook-fn block-id sql)
+      (catch js/Error e
+        (js/console.error "[REACTIVE-QUERIES] Error in query hook for block" block-id e)))))
 
 (defn subscribe-block-query!
   "Subscribe a block to a SQL query with automatic updates"
@@ -43,7 +67,9 @@
                              :executed-sql (:executed-sql new-val)}
                             {:results (:data new-val) 
                              :error nil
-                             :executed-sql (:executed-sql new-val)})))))
+                             :executed-sql (:executed-sql new-val)}))
+                   ;; Trigger any registered hooks (for time travel refresh)
+                   (trigger-query-hooks! block-id sql))))
     
     ;; Return the result atom for initial value
     result-atom))

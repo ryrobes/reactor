@@ -2,12 +2,19 @@
   "Rabbit Demo - Interactive SQL data browser with time travel"
   (:require [reactor.core :as r]
             [reagent.core :as reagent]
+            [reactor.tap :as t]
             [reagent.dom :as rdom]
             [clojure.string :as str]
+            [clojure.pprint :as pprint]
+            [cljs.reader :as reader]
             [examples.rabbit-demo.monaco :as monaco]
             [examples.rabbit-demo.reactive-queries :as rq]
             [examples.rabbit-demo.auto-refresh :as auto-refresh]
-            [examples.rabbit-demo.time-travel-ui :as tt]))
+            [examples.rabbit-demo.time-travel-ui :as tt]
+            [examples.rabbit-demo.vega-chart :as vega]
+            [examples.rabbit-demo.edn-tree :as tree]
+            [examples.rabbit-demo.sql-tap-block :as sql-tap-block]
+            [examples.rabbit-demo.rule-flow-block :as rule-flow-block]))
 
 ;; ============= Subscriptions =============
 
@@ -89,6 +96,7 @@
   (when-let [{:keys [block-id]} @drag-state]
     (when-let [pos (get @local-positions block-id)]
       ;; Immediately dispatch the final position
+      (t/tap> [:stop-drag block-id] "web dragger")
       (r/dispatch! [:move-block block-id pos])
       ;; Don't clear local position immediately - let it persist until server updates
       ;; This prevents jitter from using stale server position
@@ -433,20 +441,41 @@
                                 :text-overflow "ellipsis"
                                 :white-space "nowrap"}} (str (get row col))])])]]])))]))})))
 
-(defn chart-block [{:keys [id position size source-id chart-type]}]
-  (let [;; Use local position only while dragging, otherwise use state position
-        is-dragging? (= id (:block-id @drag-state))
-        is-resizing? (= id (:block-id @resize-state))
-        actual-pos (if (or is-dragging? (get @local-positions id))
-                     (get @local-positions id position)
-                     position)
-        actual-size (if (or is-resizing? (get @local-sizes id))
-                      (get @local-sizes id size)
-                      size)
-        source-block (when source-id @(r/subscribe [:block source-id]))
-        ;; Get results from reactive-queries for the source block
-        source-results (when source-id (rq/get-block-results source-id))
-        chart-data (:results source-results [])]
+(defn chart-block [{:keys [id position size source-id chart-config]}]
+  (reagent/create-class
+   {:component-did-update
+    (fn [this [_ old-props]]
+      (let [new-props (reagent/props this)
+            old-source (:source-id old-props)
+            new-source (:source-id new-props)]
+        ;; When source changes, trigger query execution if needed
+        (when (and new-source (not= old-source new-source))
+          (let [source-block @(r/subscribe [:block new-source])]
+            (when-let [sql (:sql source-block)]
+              (js/console.log "[CHART-BLOCK] New source connected, executing query")
+              (rq/execute-block-query! new-source sql nil nil))))))
+    
+    :reagent-render
+    (fn [{:keys [id position size source-id chart-config]}]
+      (let [;; Use local position only while dragging, otherwise use state position
+            is-dragging? (= id (:block-id @drag-state))
+            is-resizing? (= id (:block-id @resize-state))
+            actual-pos (if (or is-dragging? (get @local-positions id))
+                         (get @local-positions id position)
+                         position)
+            actual-size (if (or is-resizing? (get @local-sizes id))
+                          (get @local-sizes id size)
+                          size)
+            source-block (when source-id @(r/subscribe [:block source-id]))
+            _ (println "SOURCE BLOCK" source-block source-id (rq/get-block-results source-id) (keys @rq/block-results))
+            ;; Get results from reactive-queries for the source block - exactly like query block does it!
+            source-results (when source-id (rq/get-block-results source-id))
+            ;; Extract the data - this should be the same as what the query block shows
+            chart-data (:results source-results)
+            _ (when source-id
+                (js/console.log "[CHART-BLOCK]" id "connected to" source-id 
+                               "source-results:" (clj->js source-results)
+                               "chart-data:" (clj->js chart-data)))]
     [:div.block.chart-block
      {:style {:position "absolute"
               :left (:x actual-pos)
@@ -457,10 +486,11 @@
               :border "1px solid #ff006e"
               :border-radius "4px"
               :padding "10px"
-              :cursor "move"
               :z-index 10
-              :box-shadow "0 0 20px rgba(255,0,110,0.3), inset 0 0 20px rgba(255,0,110,0.05)"}
-      :on-mouse-down #(start-drag! id %)}
+              :box-shadow "0 0 20px rgba(255,0,110,0.3), inset 0 0 20px rgba(255,0,110,0.05)"
+              :display "flex"
+              :flex-direction "column"}
+      :draggable false}  ;; Remove the on-mouse-down from here
      ;; Resize handle
      [:div.resize-handle
       {:style {:position "absolute"
@@ -477,7 +507,9 @@
                :justify-content "space-between"
                :margin-bottom "10px"
                :padding-bottom "5px"
-               :border-bottom "1px solid rgba(255,0,110,0.2)"}}
+               :border-bottom "1px solid rgba(255,0,110,0.2)"
+               :cursor "move"}  ;; Add cursor: move to the header
+       :on-mouse-down #(start-drag! id %)}
       [:span {:style {:font-weight "bold" 
                       :color "#ff006e"
                       :font-family "monospace"
@@ -532,18 +564,16 @@
        (if @connection-mode
          "Cancel Connection"
          "Connect to Query")]]
-     ;; Chart visualization
+     ;; Chart visualization using Vega-Lite
      [:div {:style {:height "calc(100% - 100px)"
                     :overflow "auto"}}
-      (if (seq chart-data)
-        [:div {:style {:color "#ff4f99" :font-family "monospace" :font-size "10px"}}
-         [:pre (pr-str (take 3 chart-data))]]
-        [:div {:style {:color "#ff4f99" 
-                       :font-family "monospace" 
-                       :opacity 0.5
-                       :text-align "center"
-                       :margin-top "20px"}} 
-         "Link to a query block to see data"])]]))
+      [vega/vega-chart-component 
+       {:id id
+        :data chart-data
+        :config chart-config
+        :block-size actual-size
+        :on-config-change (fn [new-config]
+                            (r/dispatch! [:update-block id {:chart-config new-config}]))}]]]))}))
 
 (defn sql-exec-block [{:keys [id position size sql error result] :as block}]
   (let [;; Local state for SQL (only syncs to app state on execute)
@@ -578,10 +608,11 @@
                     :border "1px solid #ffb700"
                     :border-radius "4px"
                     :padding "10px"
-                    :cursor "move"
                     :z-index 10
-                    :box-shadow "0 0 20px rgba(255,183,0,0.3), inset 0 0 20px rgba(255,183,0,0.05)"}
-            :on-mouse-down #(start-drag! id %)}
+                    :box-shadow "0 0 20px rgba(255,183,0,0.3), inset 0 0 20px rgba(255,183,0,0.05)"
+                    :display "flex"
+                    :flex-direction "column"}
+            :draggable false}
            ;; Resize handle
            [:div.resize-handle
             {:style {:position "absolute"
@@ -598,7 +629,9 @@
                      :justify-content "space-between"
                      :margin-bottom "10px"
                      :padding-bottom "5px"
-                     :border-bottom "1px solid rgba(255,183,0,0.2)"}}
+                     :border-bottom "1px solid rgba(255,183,0,0.2)"
+                     :cursor "move"}
+             :on-mouse-down #(start-drag! id %)}
             [:span {:style {:font-weight "bold" 
                             :color "#ffb700"
                             :font-family "monospace"
@@ -694,24 +727,21 @@
                     last_updated, total_execution_time
              FROM reactor_subscriptions 
              WHERE status = 'active'
-             ORDER BY last_updated DESC" nil nil)
+             LIMIT 100" nil nil)
           :events
           (rq/execute-block-query! id
             "SELECT category, event_type, session_id, created_at
              FROM reactor_events
-             ORDER BY created_at DESC
              LIMIT 100" nil nil)
           :reactions
           (rq/execute-block-query! id
             "SELECT table_name, change_type, affected_subscriptions, triggered_at
              FROM reactor_reactions
-             ORDER BY triggered_at DESC
              LIMIT 50" nil nil)
           :performance
           (rq/execute-block-query! id
             "SELECT metric_type, query, execution_time_ms, result_count, measured_at
              FROM reactor_performance
-             ORDER BY measured_at DESC
              LIMIT 100" nil nil)
           nil))
       
@@ -793,24 +823,21 @@
                                                  last_updated, total_execution_time
                                           FROM reactor_subscriptions 
                                           WHERE status = 'active'
-                                          ORDER BY last_updated DESC" nil nil)
+                                          LIMIT 100" nil nil)
                                        :events
                                        (rq/execute-block-query! id
                                          "SELECT category, event_type, session_id, created_at
                                           FROM reactor_events
-                                          ORDER BY created_at DESC
                                           LIMIT 100" nil nil)
                                        :reactions
                                        (rq/execute-block-query! id
                                          "SELECT table_name, change_type, affected_subscriptions, triggered_at
                                           FROM reactor_reactions
-                                          ORDER BY triggered_at DESC
                                           LIMIT 50" nil nil)
                                        :performance
                                        (rq/execute-block-query! id
                                          "SELECT metric_type, query, execution_time_ms, result_count, measured_at
                                           FROM reactor_performance
-                                          ORDER BY measured_at DESC
                                           LIMIT 100" nil nil)
                                        nil)))}
               [:option {:value "subscriptions"} "Subscriptions"]
@@ -919,6 +946,288 @@
                            :opacity 0.5}}
               "Loading..."])]))})))
 
+(defn edn-browser-block [{:keys [id position size source-id field-index row-index view-mode] :as block}]
+  (let [;; Local state for view mode and search
+        local-view-mode (reagent/atom (or view-mode :monaco))
+        search-term (reagent/atom "")]
+    (fn [{:keys [id position size source-id field-index row-index view-mode] :as block}]
+      (let [;; Use local position only while dragging, otherwise use state position
+            is-dragging? (= id (:block-id @drag-state))
+            is-resizing? (= id (:block-id @resize-state))
+            actual-pos (if (or is-dragging? (get @local-positions id))
+                         (get @local-positions id position)
+                         position)
+            actual-size (if (or is-resizing? (get @local-sizes id))
+                          (get @local-sizes id size)
+                          size)
+            ;; Use the values from the block state, defaulting to 0
+            current-field-index (or field-index 0)
+            current-row-index (or row-index 0)
+            ;; Calculate available height for tree view
+            ;; Block height - header(~35px) - controls(~35px) - view toggle(~35px) - padding(20px) - border(2px)
+            tree-height (- (:height actual-size) 127)]
+        [:div.block.edn-browser-block
+     {:style {:position "absolute"
+              :left (:x actual-pos)
+              :top (:y actual-pos)
+              :width (:width actual-size)
+              :height (:height actual-size)
+              :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
+              :border (if (and @connection-mode (= (:source-id @connection-mode) id))
+                       "2px solid #00ffd4"
+                       "1px solid #00ffd4")
+              :border-radius "4px"
+              :padding "10px"
+              :z-index 10
+              :box-shadow (if @connection-mode
+                           "0 0 30px rgba(0,255,212,0.5), inset 0 0 20px rgba(0,255,212,0.1)"
+                           "0 0 20px rgba(0,255,212,0.3), inset 0 0 20px rgba(0,255,212,0.05)")
+              :display "flex"
+              :flex-direction "column"}
+      :draggable false}
+     ;; Resize handle
+     [:div.resize-handle
+      {:style {:position "absolute"
+               :bottom 0
+               :right 0
+               :width "15px"
+               :height "15px"
+               :cursor "nwse-resize"
+               :background "linear-gradient(135deg, transparent 50%, #00ffd4 50%)"
+               :opacity 0.5}
+       :on-mouse-down #(start-resize! id %)}]
+     ;; Header
+     [:div.block-header
+      {:style {:display "flex"
+               :justify-content "space-between"
+               :margin-bottom "10px"
+               :padding-bottom "5px"
+               :border-bottom "1px solid rgba(0,255,212,0.2)"
+               :cursor (if @connection-mode "pointer" "move")}
+       :on-mouse-down (fn [e]
+                        (when-not @connection-mode
+                          (start-drag! id e)))
+       :on-click (fn [e]
+                   (when-let [conn @connection-mode]
+                     (.stopPropagation ^js e)
+                     ;; Update the EDN browser block to link to this query block
+                     (r/dispatch! [:update-block (:source-id conn) {:source-id id}])
+                     (reset! connection-mode nil)))}
+      [:span {:style {:color "#00ffd4"
+                      :font-family "monospace"
+                      :font-size "12px"
+                      :text-transform "uppercase"
+                      :letter-spacing "1px"}}
+       "EDN BROWSER"]
+      [:button {:style {:padding "2px 6px"
+                        :background "transparent"
+                        :color "#00ffd4"
+                        :border "1px solid #00ffd4"
+                        :border-radius "2px"
+                        :cursor "pointer"
+                        :font-size "10px"
+                        :font-family "monospace"}
+                :on-click #(r/dispatch! [:remove-block id])}
+       "×"]]
+     ;; Connection status
+     (if source-id
+       (let [source-results (when source-id (rq/get-block-results source-id))
+             data (:results source-results)
+             fields (when (seq data) (keys (first data)))
+             selected-field (when fields (nth (vec fields) current-field-index nil))
+             selected-row (when data (nth data current-row-index nil))
+             raw-value (when selected-row (get selected-row selected-field))
+             ;; Try to parse EDN if it's a string
+             selected-value (if (string? raw-value)
+                             (try
+                               ;; Attempt to read the string as EDN
+                               (let [parsed (reader/read-string raw-value)]
+                                 ;; Check if the raw value looks like it was meant to be EDN
+                                 ;; by checking for common EDN patterns
+                                 (if (or (map? parsed) 
+                                        (vector? parsed) 
+                                        (list? parsed) 
+                                        (set? parsed)
+                                        ;; Check for EDN-specific syntax in the original string
+                                        (re-find #"^[\[\{\(:#]" raw-value)
+                                        ;; Also parse if it's a quoted string that became a string
+                                        (and (string? parsed)
+                                             (str/starts-with? raw-value "\"")))
+                                   parsed
+                                   raw-value))
+                               (catch :default _
+                                 ;; If parsing fails, just use the raw string
+                                 raw-value))
+                             ;; Non-strings pass through as-is
+                             raw-value)]
+         [:div {:style {:flex 1
+                        :display "flex"
+                        :flex-direction "column"
+                        :gap "10px"}}
+          ;; Controls
+          [:div {:style {:display "flex"
+                         :gap "10px"
+                         :align-items "center"
+                         :margin-bottom "5px"}}
+           ;; Field selector
+           [:div {:style {:display "flex"
+                          :align-items "center"
+                          :gap "5px"}}
+            [:span {:style {:color "#00ffd4"
+                            :font-family "monospace"
+                            :font-size "10px"
+                            :opacity 0.7}}
+             "FIELD:"]
+            [:select {:style {:background "rgba(0,255,212,0.1)"
+                              :color "#00ffd4"
+                              :border "1px solid rgba(0,255,212,0.3)"
+                              :border-radius "2px"
+                              :padding "2px 5px"
+                              :font-family "monospace"
+                              :font-size "10px"
+                              :cursor "pointer"}
+                      :value current-field-index
+                      :on-change (fn [e]
+                                   (let [new-index (js/parseInt (.. e -target -value))]
+                                     (r/dispatch! [:update-block id {:field-index new-index}])))}
+             (map-indexed (fn [idx field]
+                           ^{:key field}
+                           [:option {:value idx} (name field)])
+                         fields)]]
+           ;; Row selector
+           [:div {:style {:display "flex"
+                          :align-items "center"
+                          :gap "5px"}}
+            [:span {:style {:color "#00ffd4"
+                            :font-family "monospace"
+                            :font-size "10px"
+                            :opacity 0.7}}
+             "ROW:"]
+            [:select {:style {:background "rgba(0,255,212,0.1)"
+                              :color "#00ffd4"
+                              :border "1px solid rgba(0,255,212,0.3)"
+                              :border-radius "2px"
+                              :padding "2px 5px"
+                              :font-family "monospace"
+                              :font-size "10px"
+                              :cursor "pointer"}
+                      :value current-row-index
+                      :on-change (fn [e]
+                                   (let [new-index (js/parseInt (.. e -target -value))]
+                                     (r/dispatch! [:update-block id {:row-index new-index}])))}
+             (map-indexed (fn [idx _]
+                           ^{:key idx}
+                           [:option {:value idx} (str "Row " idx)])
+                         data)]]]
+          ;; View mode toggle
+          [:div {:style {:display "flex"
+                         :gap "5px"
+                         :margin-bottom "5px"}}
+           [:button {:style {:padding "3px 8px"
+                             :background (if (= @local-view-mode :monaco)
+                                          "rgba(0,255,212,0.2)"
+                                          "rgba(0,255,212,0.05)")
+                             :color "#00ffd4"
+                             :border "1px solid rgba(0,255,212,0.3)"
+                             :border-radius "2px 0 0 2px"
+                             :cursor "pointer"
+                             :font-size "9px"
+                             :font-family "monospace"}
+                     :on-click #(reset! local-view-mode :monaco)}
+            "CODE"]
+           [:button {:style {:padding "3px 8px"
+                             :background (if (= @local-view-mode :tree)
+                                          "rgba(0,255,212,0.2)"
+                                          "rgba(0,255,212,0.05)")
+                             :color "#00ffd4"
+                             :border "1px solid rgba(0,255,212,0.3)"
+                             :border-radius "0 2px 2px 0"
+                             :cursor "pointer"
+                             :font-size "9px"
+                             :font-family "monospace"
+                             :margin-left "-1px"}
+                     :on-click #(reset! local-view-mode :tree)}
+            "TREE"]
+           (when (= @local-view-mode :tree)
+             [:input {:type "text"
+                      :placeholder "Search..."
+                      :value @search-term
+                      :style {:flex 1
+                              :margin-left "10px"
+                              :background "rgba(0,255,212,0.05)"
+                              :color "#00ffd4"
+                              :border "1px solid rgba(0,255,212,0.2)"
+                              :border-radius "2px"
+                              :padding "2px 5px"
+                              :font-family "monospace"
+                              :font-size "9px"
+                              :outline "none"}
+                      :on-change #(reset! search-term (.. % -target -value))}])]
+          ;; EDN Display
+          [:div {:style {:height (str tree-height "px")
+                         :overflow "hidden"
+                         :border "1px solid rgba(0,255,212,0.2)"
+                         :border-radius "2px"
+                         :position "relative"}}
+           [:style 
+            ".edn-tree-container::-webkit-scrollbar { width: 8px; height: 8px; }
+             .edn-tree-container::-webkit-scrollbar-track { background: transparent; }
+             .edn-tree-container::-webkit-scrollbar-thumb { background: rgba(0,255,212,0.3); border-radius: 4px; }
+             .edn-tree-container::-webkit-scrollbar-thumb:hover { background: rgba(0,255,212,0.5); }"]
+           (cond
+             ;; No data
+             (nil? selected-value)
+             [:div {:style {:display "flex"
+                            :align-items "center"
+                            :justify-content "center"
+                            :height "100%"
+                            :color "#00ffd4"
+                            :font-family "monospace"
+                            :opacity 0.5}}
+              "No data"]
+             
+             ;; Tree view mode
+             (= @local-view-mode :tree)
+             [:div {:style {:height "100%"
+                            :overflow "hidden"}}
+              [tree/edn-tree-view 
+               {:data selected-value
+                :search-term @search-term
+                :initial-depth 3
+                :on-select (fn [path value]
+                            (js/console.log "Selected path:" (clj->js path) "value:" (clj->js value)))}]]
+             
+             ;; Monaco view mode (default)
+             :else
+             [monaco/edn-editor 
+              {:value (with-out-str (pprint/pprint selected-value))
+               :height (str tree-height "px")
+               :read-only? true
+               :theme "rabbit-theme"}])]])
+       ;; Not connected
+       [:div {:style {:flex 1
+                      :display "flex"
+                      :flex-direction "column"
+                      :align-items "center"
+                      :justify-content "center"
+                      :gap "10px"}}
+        [:div {:style {:color "#00ffd4"
+                       :font-family "monospace"
+                       :font-size "11px"
+                       :opacity 0.7}}
+         "Not connected to a query block"]
+        [:button {:style {:padding "6px 12px"
+                          :background "transparent"
+                          :color "#00ffd4"
+                          :border "1px solid #00ffd4"
+                          :border-radius "2px"
+                          :cursor "pointer"
+                          :font-family "monospace"
+                          :font-size "10px"}
+                  :on-click (fn []
+                              (reset! connection-mode {:source-id id}))}
+         "CONNECT TO QUERY"]])]))))
+
 (defn render-block [block]
   (js/console.log "Rendering block:" (clj->js block) "Type:" (:type block))
   (let [block-type (if (string? (:type block))
@@ -929,6 +1238,129 @@
       :chart [chart-block block]
       :sql-exec [sql-exec-block block]
       :debug [debug-block block]
+      :edn-browser [edn-browser-block block]
+      :tap (let [;; Use local position only while dragging
+                 is-dragging? (= (:id block) (:block-id @drag-state))
+                 is-resizing? (= (:id block) (:block-id @resize-state))
+                 actual-pos (if (or is-dragging? (get @local-positions (:id block)))
+                              (get @local-positions (:id block) (:position block))
+                              (:position block))
+                 actual-size (if (or is-resizing? (get @local-sizes (:id block)))
+                               (get @local-sizes (:id block) (:size block))
+                               (:size block))]
+             [:div.block
+              {:style {:position "absolute"
+                       :left (:x actual-pos)
+                       :top (:y actual-pos)
+                       :width (:width actual-size)
+                       :height (:height actual-size)
+                       :background "linear-gradient(135deg, #0a0a0a 0%, #1a1a2e 100%)"
+                       :border "1px solid #ff4f99"
+                       :border-radius "4px"
+                       :box-shadow "0 4px 20px rgba(255,79,153,0.3)"
+                       :display "flex"
+                       :flex-direction "column"
+                       :transition (when-not (or is-dragging? is-resizing?)
+                                    "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)")}}
+              ;; Header
+              [:div.block-header
+               {:style {:padding "10px"
+                        :background "rgba(255,79,153,0.1)"
+                        :border-bottom "1px solid rgba(255,79,153,0.3)"
+                        :cursor "move"
+                        :display "flex"
+                        :justify-content "space-between"
+                        :align-items "center"}
+                :on-mouse-down #(start-drag! (:id block) %)}
+               [:span {:style {:color "#ff4f99"
+                               :font-family "monospace"
+                               :text-transform "uppercase"
+                               :font-size "11px"
+                               :letter-spacing "1px"}} "TAP"]
+               [:button {:on-click #(r/dispatch! [:delete-block (:id block)])
+                         :style {:background "transparent"
+                                 :border "none"
+                                 :color "#ff4f99"
+                                 :cursor "pointer"
+                                 :font-size "16px"
+                                 :padding "0 5px"}}
+                "×"]]
+              ;; Content
+              [:div {:style {:flex 1
+                             :overflow "hidden"
+                             :display "flex"}}
+               [sql-tap-block/sql-tap-block block]]
+              ;; Resize handle
+              [:div.resize-handle
+               {:style {:position "absolute"
+                        :bottom 0
+                        :right 0
+                        :width "15px"
+                        :height "15px"
+                        :cursor "nwse-resize"
+                        :background "radial-gradient(circle at center, rgba(255,79,153,0.5) 0%, transparent 70%)"}
+                :on-mouse-down #(start-resize! (:id block) %)}]])
+      :rule-flow (let [;; Use local position only while dragging
+                       is-dragging? (= (:id block) (:block-id @drag-state))
+                       is-resizing? (= (:id block) (:block-id @resize-state))
+                       actual-pos (if (or is-dragging? (get @local-positions (:id block)))
+                                    (get @local-positions (:id block) (:position block))
+                                    (:position block))
+                       actual-size (if (or is-resizing? (get @local-sizes (:id block)))
+                                     (get @local-sizes (:id block) (:size block))
+                                     (:size block))]
+                   [:div.block
+                    {:style {:position "absolute"
+                             :left (:x actual-pos)
+                             :top (:y actual-pos)
+                             :width (:width actual-size)
+                             :height (:height actual-size)
+                             :background "linear-gradient(135deg, #0a0a0a 0%, #1a2e1a 100%)"
+                             :border "1px solid #00ff9f"
+                             :border-radius "4px"
+                             :box-shadow "0 4px 20px rgba(0,255,159,0.3)"
+                             :display "flex"
+                             :flex-direction "column"
+                             :transition (when-not (or is-dragging? is-resizing?)
+                                          "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)")}}
+                    ;; Header
+                    [:div.block-header
+                     {:style {:padding "10px"
+                              :background "rgba(0,255,159,0.1)"
+                              :border-bottom "1px solid rgba(0,255,159,0.3)"
+                              :cursor "move"
+                              :display "flex"
+                              :justify-content "space-between"
+                              :align-items "center"}
+                      :on-mouse-down #(start-drag! (:id block) %)}
+                     [:span {:style {:color "#00ff9f"
+                                     :font-family "monospace"
+                                     :text-transform "uppercase"
+                                     :font-size "11px"
+                                     :letter-spacing "1px"}} "RULES"]
+                     [:button {:on-click #(r/dispatch! [:delete-block (:id block)])
+                               :style {:background "transparent"
+                                       :border "none"
+                                       :color "#00ff9f"
+                                       :cursor "pointer"
+                                       :font-size "16px"
+                                       :padding "0 5px"}}
+                      "×"]]
+                    ;; Content
+                    [:div {:style {:flex 1
+                                   :overflow "hidden"
+                                   :display "flex"}}
+                     [rule-flow-block/rule-flow-block block]]
+                    ;; Resize handle
+                    [:div.resize-handle
+                     {:style {:position "absolute"
+                              :bottom 0
+                              :right 0
+                              :width "15px"
+                              :height "15px"
+                              :cursor "nwse-resize"
+                              :background "radial-gradient(circle at center, rgba(0,255,159,0.5) 0%, transparent 70%)"}
+                      :on-mouse-down #(start-resize! (:id block) %)}]])
       (do
         (js/console.warn "Unknown block type:" block-type "original:" (:type block))
         nil))))
@@ -1297,6 +1729,48 @@
                    (js/console.log "Adding debug block:" (clj->js block-data))
                    (r/dispatch! [:add-block block-data])))}
     "+ DEBUG"]
+   [:button
+    {:style {:padding "8px 16px"
+             :background "transparent"
+             :color "#00ffd4"
+             :border "1px solid #00ffd4"
+             :border-radius "2px"
+             :cursor "pointer"
+             :font-family "monospace"
+             :font-size "12px"
+             :text-transform "uppercase"
+             :letter-spacing "1px"
+             :transition "all 0.3s"}
+     :on-click (fn []
+                 (let [block-data {:id (str (random-uuid))
+                                   :type :edn-browser
+                                   :position {:x (+ 100 (rand-int 200))
+                                              :y (+ 100 (rand-int 200))}
+                                   :size {:width 450 :height 350}}]
+                   (js/console.log "Adding EDN browser block:" (clj->js block-data))
+                   (r/dispatch! [:add-block block-data])))}
+    "+ EDN BROWSER"]
+   [:button
+    {:style {:padding "8px 16px"
+             :background "transparent"
+             :color "#ff4f99"
+             :border "1px solid #ff4f99"
+             :border-radius "2px"
+             :cursor "pointer"
+             :font-family "monospace"
+             :font-size "12px"
+             :text-transform "uppercase"
+             :letter-spacing "1px"
+             :transition "all 0.3s"}
+     :on-click (fn []
+                 (let [block-data {:id (keyword (str "tap-" (random-uuid)))
+                                   :type :tap
+                                   :position {:x (+ 100 (rand-int 200))
+                                              :y (+ 100 (rand-int 200))}
+                                   :size {:width 450 :height 400}}]
+                   (js/console.log "Adding TAP block:" (clj->js block-data))
+                   (r/dispatch! [:add-block block-data])))}
+    "+ TAP"]
    [:div {:style {:flex 1}}]
    [:span {:style {:color "#00ff9f"
                    :font-family "monospace"

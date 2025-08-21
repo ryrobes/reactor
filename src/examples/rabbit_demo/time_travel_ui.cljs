@@ -2,10 +2,12 @@
   "Time travel UI components for query blocks"
   (:require [reagent.core :as reagent]
             [reactor.core :as r]
-            [examples.rabbit-demo.reactive-queries :as rq]))
+            [examples.rabbit-demo.reactive-queries :as rq]
+            [examples.rabbit-demo.row-count-viz :as rcv]))
 
 (defonce block-history (reagent/atom {}))  ;; block-id -> {:timestamps [...] :current-index N :hover-index N}
 (defonce debounce-timers (atom {}))  ;; block-id -> timer-id for debouncing
+(defonce cumulative-mode (reagent/atom {}))  ;; block-id -> boolean for cumulative vs differential mode
 
 (defn normalize-block-id
   "Normalize block ID to string for consistent storage"
@@ -78,6 +80,31 @@
                     delay-ms)]
       (swap! debounce-timers assoc block-id-str timer-id))))
 
+;; Forward declaration for mutual recursion
+(declare fetch-query-history!)
+
+(defn invalidate-latest-row-count!
+  "Invalidate the cached row count for the latest timestamp (NOW) when table changes"
+  [sql]
+  (let [query-key (rcv/query-hash sql)
+        cached-counts (get @rcv/row-count-cache query-key {})
+        ;; Find the latest timestamp (usually NOW)
+        latest-ts (when (seq cached-counts)
+                   (apply max (keys cached-counts)))]
+    (when latest-ts
+      ;; Remove the latest timestamp from cache so it gets recalculated
+      (swap! rcv/row-count-cache update query-key dissoc latest-ts)
+      (js/console.log "[TIME-TRAVEL] Invalidated cached row count for latest timestamp:" latest-ts))))
+
+(defn handle-table-mutation!
+  "Handle when a table mutation is detected for our query"
+  [block-id sql]
+  (js/console.log "[TIME-TRAVEL] Table mutation detected for block" block-id)
+  ;; 1. Invalidate the latest row count cache
+  (invalidate-latest-row-count! sql)
+  ;; 2. Re-fetch the query history to get new time ticks
+  (fetch-query-history! block-id sql))
+
 (defn fetch-query-history!
   "Fetch available history timestamps for a query"
   [block-id sql]
@@ -92,14 +119,22 @@
                                        :limit 20}))})
         (.then #(.json %))
         (.then (fn [data]
-                 (let [history-data (js->clj data :keywordize-keys true)]
+                 (let [history-data (js->clj data :keywordize-keys true)
+                       ;; Preserve existing current-index if available
+                       existing-history (get @block-history block-id-str)
+                       existing-index (:current-index existing-history)]
                    (js/console.log "[TIME-TRAVEL] History received:" (clj->js history-data))
                    (js/console.log "[TIME-TRAVEL] Storing under key:" block-id-str)
+                   (js/console.log "[TIME-TRAVEL] Existing index:" existing-index)
                    (let [timestamps (:timestamps history-data [])]
                      (swap! block-history assoc block-id-str 
                             {:timestamps timestamps
-                             ;; Start at NOW (last index) not the oldest (0)
-                             :current-index (dec (count timestamps))
+                             ;; Preserve existing index if valid, otherwise start at NOW
+                             :current-index (if (and existing-index 
+                                                    (>= existing-index 0)
+                                                    (< existing-index (count timestamps)))
+                                             existing-index
+                                             (dec (count timestamps)))
                              :tables (:tables history-data [])}))
                    (js/console.log "[TIME-TRAVEL] block-history now:" (clj->js @block-history)))))
         (.catch (fn [err]
@@ -108,16 +143,36 @@
 (defn time-travel-slider
   "Time travel slider component for a query block"
   [{:keys [block-id sql on-time-change]}]
-  (let [block-id-str (normalize-block-id block-id)
-        history (get @block-history block-id-str)
-        timestamps (:timestamps history [])
-        current-index (:current-index history (dec (count timestamps)))
-        hover-index (:hover-index history nil)]
-    (when (seq timestamps)
-      [:div {:style {:margin "10px 0"
-                     :padding "10px"
-                     :background "rgba(0,0,0,0.3)"
-                     :border-radius "4px"}}
+  (let [container-ref (atom nil)
+        container-width (reagent/atom 500)]  ; Default width
+    (reagent/create-class
+     {:component-did-mount
+      (fn []
+        (when @container-ref
+          ;; Measure and set initial width
+          (reset! container-width (.-offsetWidth @container-ref))
+          ;; Add resize observer
+          (when (exists? js/ResizeObserver)
+            (let [observer (js/ResizeObserver. 
+                           (fn [entries]
+                             (when-let [entry (aget entries 0)]
+                               (let [width (.. entry -contentRect -width)]
+                                 (reset! container-width width)))))]
+              (.observe observer @container-ref)))))
+      
+      :reagent-render
+      (fn [{:keys [block-id sql on-time-change]}]
+        (let [block-id-str (normalize-block-id block-id)
+              history (get @block-history block-id-str)
+              timestamps (:timestamps history [])
+              current-index (:current-index history (dec (count timestamps)))
+              hover-index (:hover-index history nil)]
+          (when (seq timestamps)
+            [:div {:ref #(reset! container-ref %)
+                   :style {:margin "10px 0"
+                          :padding "10px"
+                          :background "rgba(0,0,0,0.3)"
+                          :border-radius "4px"}}
        ;; Header with TIME TRAVEL label
        [:div {:style {:display "flex"
                       :align-items "center"
@@ -127,19 +182,61 @@
                         :font-size "11px"
                         :font-family "monospace"}}
          "TIME TRAVEL"]
-        ;; Show current or hovered time
+        ;; Show current or hovered time with row count diff
         [:span {:style {:color (if hover-index "#ffd700" "#8ff0a4")
                         :font-size "10px"
                         :font-family "monospace"
                         :flex 1}}
          (let [display-index (or hover-index current-index)
                is-now? (= display-index (dec (count timestamps)))
-               timestamp (when-not is-now? (nth timestamps display-index nil))]
+               timestamp (when-not is-now? (nth timestamps display-index nil))
+               cumulative? (get @cumulative-mode block-id-str false)
+               ;; Get row counts for diff calculation
+               row-count (when (and sql timestamp) 
+                          (rcv/get-cached-count sql timestamp))
+               prev-timestamp (when (and (> display-index 0) (not is-now?))
+                              (nth timestamps (dec display-index) nil))
+               prev-count (when (and sql prev-timestamp)
+                           (rcv/get-cached-count sql prev-timestamp))
+               ;; Calculate the difference or show absolute for first point
+               row-diff (when (and row-count prev-count)
+                         (- row-count prev-count))
+               ;; Format the diff display based on mode
+               diff-str (cond
+                         ;; Cumulative mode - always show total count
+                         (and cumulative? row-count)
+                         (str " • " row-count " total rows")
+                         ;; First data point in differential mode - show absolute count
+                         (and (= display-index 0) row-count)
+                         (str " • " row-count " rows")
+                         ;; Show the difference in differential mode
+                         row-diff
+                         (cond
+                           (pos? row-diff) (str " • +" row-diff " rows")
+                           (neg? row-diff) (str " • " row-diff " rows")
+                           :else " • no change")
+                         ;; No data available
+                         :else nil)]
            (if is-now?
              "NOW"
              (if timestamp
-               (str (format-relative-time timestamp) " • " (.toLocaleString (js/Date. timestamp)))
-               "NO HISTORY")))]]
+               (str (format-relative-time timestamp) 
+                    " • " (.toLocaleString (js/Date. timestamp))
+                    (or diff-str ""))
+               "NO HISTORY")))]
+        ;; Toggle for cumulative mode
+        [:button {:style {:padding "2px 6px"
+                          :background (if (get @cumulative-mode block-id-str false)
+                                       "rgba(0,255,159,0.3)"
+                                       "rgba(0,255,159,0.1)")
+                          :border "1px solid rgba(0,255,159,0.5)"
+                          :border-radius "3px"
+                          :color "#00ff9f"
+                          :font-size "9px"
+                          :font-family "monospace"
+                          :cursor "pointer"}
+                  :on-click #(swap! cumulative-mode update block-id-str not)}
+         (if (get @cumulative-mode block-id-str false) "CUMULATIVE" "DIFFERENTIAL")]]
        
        ;; Compact timeline visualization
        [:div {:style {:position "relative"
@@ -216,6 +313,19 @@
                                    :font-family "monospace"}}
                      "1w"]]))])))
         
+             ;; Row count area chart overlay
+             (when sql
+               [:div {:style {:position "absolute"
+                             :width "100%"
+                             :height "100%"
+                             :pointer-events "none"}}
+                [rcv/row-count-overlay 
+                 {:sql sql
+                  :timestamps (filter some? timestamps)  ; Filter out nil (NOW) markers
+                  :width @container-width  ; Use measured container width
+                  :height 40
+                  :cumulative? (get @cumulative-mode block-id-str false)}]])
+        
         ;; Data points visualization
         [:div {:style {:position "absolute"
                        :width "100%"
@@ -288,17 +398,27 @@
                                ;; Clear hover when selecting
                                (swap! block-history update block-id-str dissoc :hover-index)
                                ;; Debounce the actual query execution
-                               (debounced-time-change! block-id on-time-change timestamp 300)))}]]])))
+                               (debounced-time-change! block-id on-time-change timestamp 300)))}]]])))})))
 
 (defn time-travel-controls
   "Complete time travel controls for a query block"
   [{:keys [block-id sql]}]
-  (reagent/create-class
-   {:component-did-mount
-    (fn []
-      (when sql
-        ;; Auto-fetch history when component mounts
-        (fetch-query-history! block-id sql)))
+  (let [refresh-interval (atom nil)]
+    (reagent/create-class
+     {:component-did-mount
+      (fn []
+        (when sql
+          ;; Auto-fetch history when component mounts
+          (fetch-query-history! block-id sql)
+          ;; Set up periodic refresh to catch new time ticks
+          ;; Every 30 seconds, check for new history
+          (reset! refresh-interval
+                  (js/setInterval 
+                   #(fetch-query-history! block-id sql)
+                   30000))  ; 30 seconds
+          
+          ;; Register hook for reactive query updates
+          (rq/register-query-hook! block-id handle-table-mutation!)))
     
     :component-did-update
     (fn [this [_ old-props]]
@@ -307,7 +427,23 @@
             new-sql (:sql new-props)]
         (when (and new-sql (not= old-sql new-sql))
           ;; Re-fetch history when SQL changes
-          (fetch-query-history! (:block-id new-props) new-sql))))
+          (fetch-query-history! (:block-id new-props) new-sql)
+          ;; Reset refresh interval for new SQL
+          (when @refresh-interval
+            (js/clearInterval @refresh-interval))
+          (reset! refresh-interval
+                  (js/setInterval 
+                   #(fetch-query-history! (:block-id new-props) new-sql)
+                   30000)))))
+    
+    :component-will-unmount
+    (fn []
+      ;; Clean up the refresh interval when component unmounts
+      (when @refresh-interval
+        (js/clearInterval @refresh-interval)
+        (reset! refresh-interval nil))
+      ;; Unregister query hook
+      (rq/unregister-query-hook! block-id))
     
     :reagent-render
     (fn [{:keys [block-id sql]}]
@@ -335,7 +471,7 @@
                             :font-size "10px"
                             :font-family "monospace"}
                     :on-click #(fetch-query-history! block-id sql)}
-            "LOAD HISTORY"])]))}))
+            "LOAD HISTORY"])]))})))
 
 (defn reset-time-travel!
   "Reset time travel to current time (NOW)"

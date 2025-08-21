@@ -371,6 +371,15 @@
                                  (when (pos? (count @active-subscriptions))
                                    (log/debug "Active subscriptions:" (keys @active-subscriptions))
                                    (log/debug "Table-to-subs mapping:" @table-to-subs))
+                                 
+                                 ;; Process rules for affected tables
+                                 (try
+                                   (require '[reactor.sql-rules :as rules])
+                                   (when-let [process-fn (resolve 'reactor.sql-rules/process-table-changes)]
+                                     (process-fn @session/default-node filtered-tables tx-key))
+                                   (catch Exception e
+                                     (log/debug "Rules engine not available or failed:" (.getMessage e))))
+                                 
                                  ;; Handle SQL subscriptions
                                  (let [affected-subs (find-affected-subscriptions filtered-tables)]
                                    (when (seq affected-subs)

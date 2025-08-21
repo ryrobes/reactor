@@ -1,5 +1,5 @@
 (ns TestRabbitSQL
-  (:require [reactor.session-simple :as session]
+  (:require [reactor.session_simple :as session]
             [reactor.xtdb-store :as xts]))
 
 (defn -main [& args]

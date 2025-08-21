@@ -253,6 +253,75 @@
                :body (json/generate-string {:test-id test-id
                                            :active-count (count @kafka/active-subscriptions)})}))
           
+          ;; TAP endpoint for inserting tap entries
+          "/api/tap"
+          (case method
+            :post
+            (let [body (json/parse-string (slurp (:body req)) true)
+                  node @session/default-node]
+              (if node
+                (try
+                  (let [tap-id (str "tap-" (java.util.UUID/randomUUID))
+                        timestamp (java.time.Instant/now)
+                        value-edn (:value body)
+                        caller (or (:caller body) "anonymous")
+                        platform (or (:platform body) "CLJS")
+                        session-id (or (:session-id body) session-id)
+                        value-type (cond
+                                    (re-find #"^\{" value-edn) "map"
+                                    (re-find #"^\[" value-edn) "vector"
+                                    (re-find #"^#\{" value-edn) "set"
+                                    (re-find #"^\(" value-edn) "list"
+                                    (re-find #"^\"" value-edn) "string"
+                                    (re-find #"^-?\d" value-edn) "number"
+                                    (re-find #"^true|^false" value-edn) "boolean"
+                                    (re-find #"^nil" value-edn) "nil"
+                                    (re-find #"^:" value-edn) "keyword"
+                                    :else "other")]
+                    (xts/execute-sql node
+                      "INSERT INTO reactor_taps (_id, value_edn, caller, platform, created_at, session_id, value_type)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)"
+                      tap-id value-edn caller platform timestamp session-id value-type)
+                    {:status 200
+                     :headers {"Content-Type" "application/json"
+                                "Access-Control-Allow-Origin" "*"}
+                     :body (json/generate-string {:success true :id tap-id})})
+                  (catch Exception e
+                    (log/error e "Failed to insert tap entry")
+                    {:status 500
+                     :headers {"Content-Type" "application/json"
+                              "Access-Control-Allow-Origin" "*"}
+                     :body (json/generate-string {:error (str "Failed to insert tap: " (.getMessage e))})}))
+                {:status 503
+                 :headers {"Content-Type" "application/json"
+                          "Access-Control-Allow-Origin" "*"}
+                 :body (json/generate-string {:error "No XTDB node available"})}))
+            
+            ;; GET for fetching tap entries
+            :get
+            (let [node @session/default-node
+                  limit (Integer/parseInt (get-in req [:params :limit] "100"))]
+              (if node
+                (try
+                  (let [results (xts/execute-sql node
+                                  (str "SELECT * FROM reactor_taps "
+                                       "ORDER BY created_at DESC "
+                                       "LIMIT " limit))]
+                    {:status 200
+                     :headers {"Content-Type" "application/json"
+                              "Access-Control-Allow-Origin" "*"}
+                     :body (json/generate-string results)})
+                  (catch Exception e
+                    (log/error e "Failed to fetch tap entries")
+                    {:status 500
+                     :headers {"Content-Type" "application/json"
+                              "Access-Control-Allow-Origin" "*"}
+                     :body (json/generate-string {:error (str "Failed to fetch taps: " (.getMessage e))})}))
+                {:status 503
+                 :headers {"Content-Type" "application/json"
+                          "Access-Control-Allow-Origin" "*"}
+                 :body (json/generate-string {:error "No XTDB node available"})})))
+          
           ;; Override regular subscribe to register keypath subscriptions
           "/api/subscribe"
           (http/with-channel req channel
