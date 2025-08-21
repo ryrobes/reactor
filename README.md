@@ -1,6 +1,6 @@
-# Reactor 🚀
+# Reactor - XTDB powered full stack Re-frame (**WIP!)
 
-**Re-frame for the full stack** - Write re-frame-style reactive apps that run on both client and server, with automatic persistence, time travel, and SQL queries.
+Write re-frame-style reactive apps that run on both client and server, with automatic persistence, time travel, reactive rules, and SQL.
 
 ## Why Reactor?
 
@@ -259,14 +259,4 @@ In Reactor, you have:
 
 Reactor is an experimental proof-of-concept exploring what "re-frame for the full stack" could look like. It's not production-ready but demonstrates that we can have the same elegant state management across client and server.
 
-## Contributing
-
-This is an exploration of ideas! Feel free to:
-- Try it out and share feedback
-- Suggest API improvements
-- Share use cases where this would (or wouldn't) work
-- Contribute examples
-
-## License
-
-MIT
+Ryan Robitaille - Copyright © 2025
