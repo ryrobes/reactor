@@ -227,12 +227,8 @@
 (defn dispatch
   "Dispatch an event to a session"
   [session-id event]
-  (println "Dispatch called with session-id:" session-id "event:" event)
-  (println "Available handlers:" (keys @event-handlers))
   (let [event-key (first event)]
-    (println "Looking for handler with key:" event-key)
     (when-let [handler (get @event-handlers event-key)]
-      (println "Found handler for" event-key)
       (when-let [session (get-session session-id)]
         ;(println "Current state before:" @session)
         ;; Reset history index when new state is created
@@ -323,7 +319,7 @@
           sql-with-time (if as-of
                          (sql-parser/add-as-of-clause sql-string as-of)
                          sql-string)
-          _ (when as-of (println "[SESSION] Executing SQL with time travel. Modified SQL:" sql-with-time))
+          _ nil ;; Remove debug output
           result (xts/execute-sql node sql-with-time params)
           ;; Only include executed-sql if it's different (time travel is active)
           base-result (if (:error result)

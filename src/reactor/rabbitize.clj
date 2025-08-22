@@ -270,9 +270,9 @@
 
 (def app-urls
   "Default URLs for different reactor apps"
-  {:rabbit "http://localhost:8081/rabbit.html"
-   :todo "http://localhost:3333"
-   :magic "http://localhost:3000"})
+  {:rabbit "http://localhost:8080/rabbit.html"
+   :todo "http://localhost:8080/todo.html"
+   :magic "http://localhost:8080/magic.html"})
 
 (defn get-app-url
   "Get the URL for a specific app, with snapshot parameter if provided"
@@ -304,8 +304,9 @@
                          (get-app-url app-name snapshot-id))
                        (throw (Exception. "Must provide url, base-url, or app-name")))
           
-          client-id (str "reactor-snapshot-" snapshot-id)
-          test-id (str (System/currentTimeMillis))
+          ;; Simpler folder structure: app-name/session-id
+          client-id (or app-name "reactor")
+          test-id snapshot-id
           artifacts-dir (str "rabbitize-runs/" client-id "/" test-id "/")
           
           ;; Batch commands - just wait and capture
@@ -316,7 +317,7 @@
           cmd ["npx" "rabbitize"
                "--stability-detection" "false"
                "--exit-on-end" "true"
-               "--process-video" "true"
+               "--process-video" "false"
                "--client-id" client-id
                "--test-id" test-id
                "--width" (str width)

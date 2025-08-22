@@ -97,15 +97,23 @@
                           (>!! result-chan result)
                           (swap! results-atom conj result))]
             
-            ;; Try to initialize Kafka (may fail if Kafka not running)
-            (let [kafka-running? (try
-                                  ((resolve 'reactor.kafka-reactive/init!) 
-                                   {"bootstrap.servers" "localhost:9092"
-                                    "group.id" "test-reactor"})
+            ;; Check if Kafka consumer is already running (from server)
+            (let [consumer-already-running? (try
+                                              ;; Check if consumer exists
+                                              (let [consumer-atom (resolve 'reactor.kafka-reactive/consumer)]
+                                                (not (nil? @consumer-atom)))
+                                              (catch Exception _ false))
+                  ;; Only init if not already running
+                  kafka-running? (if consumer-already-running?
                                   true
-                                  (catch Exception e
-                                    (println "Kafka not running, skipping:" (.getMessage e))
-                                    false))]
+                                  (try
+                                    ((resolve 'reactor.kafka-reactive/init!) 
+                                     {"bootstrap.servers" "localhost:9092"
+                                      "group.id" "test-reactor"})
+                                    true
+                                    (catch Exception e
+                                      (println "Kafka not running, skipping:" (.getMessage e))
+                                      false)))]
               
               (when kafka-running?
                 (try
@@ -160,8 +168,9 @@
                     ((resolve 'reactor.kafka-reactive/unregister-query-subscription!) sub-id))
                   
                   (finally
-                    ;; Clean up
-                    ((resolve 'reactor.kafka-reactive/shutdown!))
+                    ;; Only shutdown if we started the consumer for this test
+                    (when-not consumer-already-running?
+                      ((resolve 'reactor.kafka-reactive/shutdown!)))
                     ;; Clean up test data
                     (when-let [node @session/default-node]
                       (xts/execute-sql node (str "DELETE FROM " test-table))))))))))

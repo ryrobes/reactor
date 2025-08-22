@@ -412,15 +412,27 @@
   (reset! running? false)
   ;; Stop the debounce executor
   (stop-debounce-executor!)
-  (when-let [c @consumer]
-    (try
-      (.close c)
-      (catch Exception e
-        (log/error e "Error closing consumer")))
-    (reset! consumer nil))
+  
+  ;; Cancel the consumer thread first to stop polling
   (when-let [thread @consumer-thread]
     (future-cancel thread)
+    ;; Wait a bit for thread to stop
+    (Thread/sleep 100)
     (reset! consumer-thread nil))
+  
+  ;; Now close the consumer safely
+  (when-let [c @consumer]
+    (try
+      ;; Use wakeup to interrupt any ongoing poll
+      (.wakeup c)
+      (Thread/sleep 100)
+      (.close c)
+      (catch Exception e
+        ;; Log but don't fail - consumer may already be closed
+        (when-not (str/includes? (.getMessage e) "KafkaConsumer is not safe")
+          (log/error e "Error closing consumer"))))
+    (reset! consumer nil))
+  
   (log/info "Kafka consumer stopped"))
 
 ;; ============================================================================
