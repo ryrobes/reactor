@@ -14,7 +14,9 @@
             [examples.rabbit-demo.vega-chart :as vega]
             [examples.rabbit-demo.edn-tree :as tree]
             [examples.rabbit-demo.sql-tap-block :as sql-tap-block]
-            [examples.rabbit-demo.rule-flow-block :as rule-flow-block]))
+            [examples.rabbit-demo.rule-flow-block :as rule-flow-block]
+            [examples.rabbit-demo.iframe-block :as iframe-block]
+            [examples.rabbit-demo.template-resolver :as resolver]))
 
 ;; ============= Subscriptions =============
 
@@ -1660,6 +1662,67 @@
       :debug [debug-block block]
       :edn-browser [edn-browser-block block]
       :rules [rules-block block]
+      :iframe (let [;; Use local position only while dragging
+                     is-dragging? (= (:id block) (:block-id @drag-state))
+                     is-resizing? (= (:id block) (:block-id @resize-state))
+                     actual-pos (if (or is-dragging? (get @local-positions (:id block)))
+                                  (get @local-positions (:id block) (:position block))
+                                  (:position block))
+                     actual-size (if (or is-resizing? (get @local-sizes (:id block)))
+                                   (get @local-sizes (:id block) (:size block))
+                                   (:size block))]
+                 [:div.block
+                  {:style {:position "absolute"
+                           :left (:x actual-pos)
+                           :top (:y actual-pos)
+                           :width (:width actual-size)
+                           :height (:height actual-size)
+                           :background "linear-gradient(135deg, #1a1a2e 0%, #2a1a3e 100%)"
+                           :border "1px solid #8a2be2"
+                           :border-radius "4px"
+                           :box-shadow "0 4px 20px rgba(138,43,226,0.3)"
+                           :display "flex"
+                           :flex-direction "column"
+                           :transition (when-not (or is-dragging? is-resizing?)
+                                        "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)")}}
+                  ;; Header
+                  [:div.block-header
+                   {:style {:padding "10px"
+                            :background "rgba(138,43,226,0.1)"
+                            :border-bottom "1px solid rgba(138,43,226,0.3)"
+                            :cursor "move"
+                            :display "flex"
+                            :justify-content "space-between"
+                            :align-items "center"}
+                    :on-mouse-down #(start-drag! (:id block) %)}
+                   [:span {:style {:color "#8a2be2"
+                                   :font-family "monospace"
+                                   :text-transform "uppercase"
+                                   :font-size "11px"
+                                   :letter-spacing "1px"}} "IFRAME"]
+                   [:button {:on-click #(r/dispatch! [:delete-block (:id block)])
+                             :style {:background "transparent"
+                                     :border "none"
+                                     :color "#8a2be2"
+                                     :cursor "pointer"
+                                     :font-size "16px"
+                                     :padding "0 5px"}}
+                    "×"]]
+                  ;; Content
+                  [:div {:style {:flex 1
+                                 :overflow "hidden"
+                                 :display "flex"}}
+                   [iframe-block/iframe-block (assoc block :blocks @(r/subscribe [:blocks]))]]
+                  ;; Resize handle
+                  [:div.resize-handle
+                   {:style {:position "absolute"
+                            :bottom 0
+                            :right 0
+                            :width "15px"
+                            :height "15px"
+                            :cursor "nwse-resize"
+                            :background "radial-gradient(circle at center, rgba(138,43,226,0.5) 0%, transparent 70%)"}
+                    :on-mouse-down #(start-resize! (:id block) %)}]])
       :tap (let [;; Use local position only while dragging
                  is-dragging? (= (:id block) (:block-id @drag-state))
                  is-resizing? (= (:id block) (:block-id @resize-state))
@@ -1794,7 +1857,6 @@
 (defn canvas []
   (let [blocks (r/subscribe [:blocks])]
     (fn []
-      (js/console.log "Canvas rendering, blocks:" (clj->js @blocks))
       [:div#canvas
        {:style {:position "relative"
                 :width "100%"
@@ -1826,10 +1888,12 @@
        (let [local-pos @local-positions
              local-sz @local-sizes
              all-blocks @blocks
-             ;; Build lines outside the SVG element - filter out nils immediately
-             lines (->> (for [[block-id block] all-blocks
-                              :when (:source-id block)]
-                          (let [source-id (:source-id block)
+             ;; Get implicit template connections
+             implicit-connections (resolver/get-implicit-connections)
+             ;; Build explicit connection lines
+             explicit-lines (->> (for [[block-id block] all-blocks
+                                       :when (:source-id block)]
+                                   (let [source-id (:source-id block)
                                 ;; Try both string and keyword lookup
                                 source-block (or (get all-blocks source-id)
                                                (get all-blocks (keyword source-id))
@@ -1863,8 +1927,36 @@
                                      :stroke "#00ff9f"
                                      :stroke-width "3"
                                      :opacity 1}])))
-                        (remove nil?)
-                        vec)]
+                                 (remove nil?)
+                                 vec)
+             ;; Build implicit connection lines (dashed for template dependencies)
+             implicit-lines (->> (for [{:keys [from to]} implicit-connections]
+                                  (let [source-id (keyword from)
+                                        target-id (keyword to)
+                                        source-block (get all-blocks source-id)
+                                        target-block (get all-blocks target-id)
+                                        source-pos (or (get local-pos source-id) 
+                                                      (:position source-block))
+                                        target-pos (or (get local-pos target-id)
+                                                      (:position target-block))
+                                        source-size (or (get local-sz source-id) 
+                                                       (:size source-block) 
+                                                       {:width 400 :height 300})
+                                        target-size (or (get local-sz target-id)
+                                                       (:size target-block) 
+                                                       {:width 400 :height 300})]
+                                    (when (and source-pos target-pos)
+                                      [:line {:key (str "implicit-line-" from "-" to)
+                                             :x1 (+ (:x source-pos) (/ (:width source-size) 2))
+                                             :y1 (+ (:y source-pos) (/ (:height source-size) 2))
+                                             :x2 (+ (:x target-pos) (/ (:width target-size) 2))
+                                             :y2 (+ (:y target-pos) (/ (:height target-size) 2))
+                                             :stroke "#ff4f99"
+                                             :stroke-width "2"
+                                             :stroke-dasharray "5,5"
+                                             :opacity 0.7}])))
+                                (remove nil?)
+                                vec)]
          [:svg {:style {:position "absolute"
                        :top 0
                        :left 0
@@ -1873,8 +1965,11 @@
                        :pointer-events "none"
                        :z-index 5}
                 :id "connection-svg"}
-          ;; Add the connection lines
-          (for [line lines]
+          ;; Add implicit template connection lines first (so they render behind)
+          (for [line implicit-lines]
+            line)
+          ;; Add explicit connection lines
+          (for [line explicit-lines]
             line)])
        ;; Connection mode indicator
        (when @connection-mode
@@ -2215,6 +2310,30 @@
                    (js/console.log "Adding TAP block:" (clj->js block-data))
                    (r/dispatch! [:add-block block-data])))}
     "+ TAP"]
+   [:button
+    {:style {:padding "8px 16px"
+             :background "transparent"
+             :color "#8a2be2"
+             :border "1px solid #8a2be2"
+             :border-radius "2px"
+             :cursor "pointer"
+             :font-family "monospace"
+             :font-size "12px"
+             :text-transform "uppercase"
+             :letter-spacing "1px"
+             :transition "all 0.3s"
+             :margin-left "10px"}
+     :on-click (fn []
+                 (let [block-data {:id (keyword (str "iframe-" (random-uuid)))
+                                   :type :iframe
+                                   :position {:x (+ 150 (rand-int 200))
+                                              :y (+ 150 (rand-int 200))}
+                                   :size {:width 600 :height 450}
+                                   :url "http://localhost:8080"
+                                   :zoom 100}]
+                   (js/console.log "Adding iframe block:" (clj->js block-data))
+                   (r/dispatch! [:add-block block-data])))}
+    "+ IFRAME"]
    [:div {:style {:flex 1}}]
    [:span {:style {:color "#00ff9f"
                    :font-family "monospace"

@@ -39,6 +39,124 @@
            (clojure.string/starts-with? path "/api/rabbitize/")
            (base-server/wrap-cors (rabbitize/handle-rabbitize-request req))
            
+           ;; Load current session state by ID (dynamic path)
+           (and (clojure.string/starts-with? path "/api/session-current/")
+                (not (clojure.string/includes? path "/api/session-current//")))
+           (let [path-parts (clojure.string/split path #"/")
+                 target-session-id (nth path-parts 3 nil)
+                 node @session/default-node]
+             (log/info "[SESSION-CURRENT] Loading current state for session:" target-session-id)
+             (if (and node target-session-id)
+               (try
+                 ;; Query current state (no temporal clause)
+                 (let [where-clause (if @session/app-name
+                                     " WHERE session_id = ? AND app_name = ?"
+                                     " WHERE session_id = ?")
+                       query (str "SELECT * FROM " @session/app-table where-clause)
+                       _ (log/info "[SESSION-CURRENT] Executing query:" query)
+                       query-result (if @session/app-name
+                                     (xts/execute-sql node query target-session-id (name @session/app-name))
+                                     (xts/execute-sql node query target-session-id))
+                       result (:results query-result)
+                       session-row (first result)]
+                   (if session-row
+                     (try
+                       (let [state-str (:state session-row)
+                             app-db (if state-str
+                                     (edn/read-string state-str)
+                                     {})]
+                         {:status 200
+                          :headers {"Content-Type" "application/json"
+                                   "Access-Control-Allow-Origin" "*"}
+                          :body (json/generate-string 
+                                 {:success true
+                                  :session {:session_id target-session-id
+                                           :app_name (:app_name session-row)
+                                           :app_db app-db
+                                           :created_at (:created_at session-row)}})})
+                       (catch Exception e
+                         (log/error e "Failed to parse session state EDN")
+                         {:status 500
+                          :headers {"Content-Type" "application/json"
+                                   "Access-Control-Allow-Origin" "*"}
+                          :body (json/generate-string {:error (str "Failed to parse session state: " (.getMessage e))})}))
+                     {:status 404
+                      :headers {"Content-Type" "application/json"
+                               "Access-Control-Allow-Origin" "*"}
+                      :body (json/generate-string {:error (str "Session not found: " target-session-id)})}))
+                 (catch Exception e
+                   (log/error e "Failed to load session")
+                   {:status 500
+                    :headers {"Content-Type" "application/json"
+                             "Access-Control-Allow-Origin" "*"}
+                    :body (json/generate-string {:error (str "Failed to load session: " (.getMessage e))})}))
+               {:status 400
+                :headers {"Content-Type" "application/json"
+                         "Access-Control-Allow-Origin" "*"}
+                :body (json/generate-string {:error "Missing session_id"})}))
+           
+           ;; Load session at specific timestamp (dynamic path)
+           (clojure.string/starts-with? path "/api/session-at/")
+           (let [path-parts (clojure.string/split path #"/")
+                 target-session-id (nth path-parts 3 nil)
+                 at-timestamp (nth path-parts 4 nil)
+                 node @session/default-node]
+             (log/info "[SESSION-AT] Loading session:" target-session-id "at timestamp:" at-timestamp)
+             (if (and node target-session-id at-timestamp)
+               (try
+                 ;; Decode URL-encoded timestamp
+                 (let [decoded-timestamp (java.net.URLDecoder/decode at-timestamp "UTF-8")
+                       ;; Query the session table with FOR SYSTEM_TIME AS OF
+                       ;; Include app_name filter if app-name is set
+                       where-clause (if @session/app-name
+                                     (str " WHERE session_id = ? AND app_name = ?")
+                                     " WHERE session_id = ?")
+                       temporal-query (str "SELECT * FROM " @session/app-table 
+                                         " FOR SYSTEM_TIME AS OF TIMESTAMP '" decoded-timestamp "'"
+                                         where-clause)
+                       _ (log/info "[SESSION-AT] Executing temporal query:" temporal-query "with session:" target-session-id)
+                       query-result (if @session/app-name
+                                     (xts/execute-sql node temporal-query target-session-id (name @session/app-name))
+                                     (xts/execute-sql node temporal-query target-session-id))
+                       result (:results query-result)
+                       session-row (first result)]
+                   (if session-row
+                     (try
+                       (let [state-str (:state session-row)
+                             app-db (if state-str
+                                     (edn/read-string state-str)
+                                     {})]
+                         {:status 200
+                          :headers {"Content-Type" "application/json"
+                                   "Access-Control-Allow-Origin" "*"}
+                          :body (json/generate-string 
+                                 {:success true
+                                  :session {:session_id target-session-id
+                                           :app_name (:app_name session-row)
+                                           :app_db app-db
+                                           :timestamp decoded-timestamp
+                                           :created_at (:created_at session-row)}})})
+                       (catch Exception e
+                         (log/error e "Failed to parse session state EDN")
+                         {:status 500
+                          :headers {"Content-Type" "application/json"
+                                   "Access-Control-Allow-Origin" "*"}
+                          :body (json/generate-string {:error (str "Failed to parse session state: " (.getMessage e))})}))
+                     {:status 404
+                      :headers {"Content-Type" "application/json"
+                               "Access-Control-Allow-Origin" "*"}
+                      :body (json/generate-string {:error (str "Session not found at timestamp: " decoded-timestamp)})}))
+                 (catch Exception e
+                   (log/error e "Failed to load session at timestamp")
+                   {:status 500
+                    :headers {"Content-Type" "application/json"
+                             "Access-Control-Allow-Origin" "*"}
+                    :body (json/generate-string {:error (str "Failed to load session: " (.getMessage e))})}))
+               {:status 400
+                :headers {"Content-Type" "application/json"
+                         "Access-Control-Allow-Origin" "*"}
+                :body (json/generate-string {:error "Missing session_id or timestamp"})}))
+           
            ;; Load snapshot by ID (dynamic path)
            (clojure.string/starts-with? path "/api/snapshot/")
            (let [snapshot-id (last (clojure.string/split path #"/"))

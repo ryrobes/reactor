@@ -458,9 +458,10 @@
             {:block-id block-id
              :sql sql
              :on-time-change (fn [timestamp]
-                              ;; Re-execute query with time travel
-                              ;; nil timestamp means "NOW" - query stays reactive
-                              (rq/execute-block-query! block-id sql nil timestamp))}])
+                               ;; Re-execute query with time travel
+                               ;; nil timestamp means "NOW" - query stays reactive
+                               (swap! rq/block-results assoc-in [:*timestamp block-id] timestamp)
+                               (rq/execute-block-query! block-id sql nil timestamp))}])
          (when-not (:timestamps history)
            [:button {:style {:padding "4px 8px"
                             :background "rgba(0,255,159,0.1)"

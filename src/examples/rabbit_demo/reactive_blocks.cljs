@@ -2,7 +2,8 @@
   "Reactive SQL blocks that auto-update via Kafka"
   (:require [reactor.core :as r]
             [reagent.core :as reagent]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [examples.rabbit-demo.template-resolver :as resolver]))
 
 (defonce block-subscriptions (atom {}))
 (defonce block-results (reagent/atom {}))
@@ -42,7 +43,11 @@
                   ;; Also update the block in app state
                   (r/dispatch! [:update-block block-id 
                                {:results (:results (:result data-clj))
-                                :error (:error (:result data-clj))}]))
+                                :error (:error (:result data-clj))}])
+                  ;; Trigger dependent block updates
+                  (js/setTimeout 
+                    #(resolver/trigger-dependent-updates! block-id @(r/subscribe [:blocks]))
+                    100))
                 
                 (js/console.warn "Unknown message type:" (:type data-clj))))))
     
@@ -82,7 +87,11 @@
                (r/dispatch! [:update-block block-id 
                            {:results (:results result)
                             :error (:error result)
-                            :loading false}])))
+                            :loading false}])
+               ;; Trigger dependent block updates
+               (js/setTimeout 
+                 #(resolver/trigger-dependent-updates! block-id @(r/subscribe [:blocks]))
+                 100)))
       (.catch (fn [error]
                 (r/dispatch! [:update-block block-id 
                            {:error (str error)

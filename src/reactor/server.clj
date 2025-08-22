@@ -57,6 +57,100 @@
           (str/starts-with? path "/api/rabbitize/")
           (wrap-cors (rabbitize/handle-rabbitize-request req))
           
+          ;; Handle loading current session state by ID
+          (and (= method :get)
+               (re-matches #"/api/session-current/([^/]+)" path))
+          (let [target-session-id (second (re-matches #"/api/session-current/([^/]+)" path))
+                node (or @session/default-node (xts/start-xtdb-node))]
+            (if target-session-id
+              (try
+                ;; Query current state (no temporal clause)
+                (let [where-clause (if @session/app-name
+                                    " WHERE session_id = ? AND app_name = ?"
+                                    " WHERE session_id = ?")
+                      query (str "SELECT * FROM " @session/app-table where-clause)
+                      _ (println "[SESSION-CURRENT] Executing query:" query "with session:" target-session-id)
+                      query-result (if @session/app-name
+                                    (xts/execute-sql node query target-session-id (name @session/app-name))
+                                    (xts/execute-sql node query target-session-id))
+                      result (:results query-result)
+                      session-row (first result)]
+                  (if session-row
+                    (let [state-str (:state session-row)
+                          app-db (if state-str
+                                  (read-string state-str)
+                                  {})]
+                      {:status 200
+                       :headers {"Content-Type" "application/json"}
+                       :body (json/generate-string 
+                              {:success true
+                               :session {:session_id target-session-id
+                                        :app_name (:app_name session-row)
+                                        :app_db app-db
+                                        :created_at (:created_at session-row)}})})
+                    {:status 404
+                     :headers {"Content-Type" "application/json"}
+                     :body (json/generate-string {:error (str "Session not found: " target-session-id)})}))
+                (catch Exception e
+                  (println "Failed to load session:" (.getMessage e))
+                  {:status 500
+                   :headers {"Content-Type" "application/json"}
+                   :body (json/generate-string {:error (str "Failed to load session: " (.getMessage e))})}))
+              {:status 400
+               :headers {"Content-Type" "application/json"}
+               :body (json/generate-string {:error "Missing session_id"})}))
+          
+          ;; Handle session at specific timestamp GET endpoint
+          (and (= method :get)
+               (re-matches #"/api/session-at/([^/]+)/(.+)" path))
+          (let [matches (re-matches #"/api/session-at/([^/]+)/(.+)" path)
+                target-session-id (second matches)
+                at-timestamp (nth matches 2)
+                node (or @session/default-node (xts/start-xtdb-node))]
+            (if (and target-session-id at-timestamp)
+              (try
+                ;; Decode URL-encoded timestamp
+                (let [decoded-timestamp (java.net.URLDecoder/decode at-timestamp "UTF-8")
+                      ;; Query the session table with FOR SYSTEM_TIME AS OF
+                      ;; Include app_name filter if app-name is set
+                      where-clause (if @session/app-name
+                                    (str " WHERE session_id = ? AND app_name = ?")
+                                    " WHERE session_id = ?")
+                      temporal-query (str "SELECT * FROM " @session/app-table 
+                                        " FOR SYSTEM_TIME AS OF TIMESTAMP '" decoded-timestamp "'"
+                                        where-clause)
+                      _ (println "[SESSION-AT] Executing temporal query:" temporal-query "with session:" target-session-id)
+                      query-result (if @session/app-name
+                                    (xts/execute-sql node temporal-query target-session-id (name @session/app-name))
+                                    (xts/execute-sql node temporal-query target-session-id))
+                      result (:results query-result)
+                      session-row (first result)]
+                  (if session-row
+                    (let [state-str (:state session-row)
+                          app-db (if state-str
+                                  (read-string state-str)
+                                  {})]
+                      {:status 200
+                       :headers {"Content-Type" "application/json"}
+                       :body (json/generate-string 
+                              {:success true
+                               :session {:session_id target-session-id
+                                        :app_name (:app_name session-row)
+                                        :app_db app-db
+                                        :timestamp decoded-timestamp
+                                        :created_at (:created_at session-row)}})})
+                    {:status 404
+                     :headers {"Content-Type" "application/json"}
+                     :body (json/generate-string {:error (str "Session not found at timestamp: " decoded-timestamp)})}))
+                (catch Exception e
+                  (println "Failed to load session at timestamp:" (.getMessage e))
+                  {:status 500
+                   :headers {"Content-Type" "application/json"}
+                   :body (json/generate-string {:error (str "Failed to load session: " (.getMessage e))})}))
+              {:status 400
+               :headers {"Content-Type" "application/json"}
+               :body (json/generate-string {:error "Missing session_id or timestamp"})}))
+          
           ;; Handle dynamic snapshot GET endpoint
           (and (= method :get) 
                (re-matches #"/api/snapshot/(.+)" path))
@@ -71,9 +165,16 @@
               {:status 200
                :headers {"Content-Type" "application/json"}
                :body (json/generate-string 
-                       {:snapshot {:app_db (read-string (:state snapshot))
-                                  :session_id (:session_id snapshot)}})}
-              {:status 404 :body "Snapshot not found"}))
+                       {:success true
+                        :snapshot {:snapshot_id snapshot-id
+                                   :app_name (:app_name snapshot)
+                                   :session_id (:session_id snapshot)
+                                   :app_db (read-string (:state snapshot))
+                                   :description (:description snapshot)
+                                   :created_at (:created_at snapshot)}})}
+              {:status 404 
+               :headers {"Content-Type" "application/json"}
+               :body (json/generate-string {:error "Snapshot not found"})}))
           
           ;; Regular routes
           :else

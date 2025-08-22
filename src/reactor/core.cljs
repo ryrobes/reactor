@@ -179,6 +179,50 @@
                 snapshot)))
       (.catch #(js/console.error "Failed to load snapshot:" %))))
 
+(defn load-session-at!
+  "Load a session state at a specific timestamp and replace current app-db"
+  [session-id at-timestamp]
+  (js/console.log "[CLIENT] Loading session:" session-id "at timestamp:" at-timestamp)
+  ;; URL encode the timestamp to handle special characters
+  (let [encoded-timestamp (js/encodeURIComponent at-timestamp)]
+    (-> (js/fetch (str (:server-url @config) "/api/session-at/" session-id "/" encoded-timestamp))
+        (.then (fn [response]
+                (if (.-ok response)
+                  (.json response)
+                  (throw (js/Error. (str "Session not found at timestamp: " at-timestamp))))))
+        (.then (fn [response]
+                (let [result (js->clj response :keywordize-keys true)
+                      session (:session result)]
+                  (js/console.log "[CLIENT] Session loaded:" (:session_id session) "at:" (:timestamp session))
+                  ;; Switch to the loaded session
+                  (swap! config assoc :session-id (:session_id session))
+                  (js/console.log "[CLIENT] Switched to session:" (:session_id session))
+                  ;; Replace app-db with historical state
+                  (reset! app-db (:app_db session))
+                  session)))
+        (.catch #(js/console.error "Failed to load session at timestamp:" %)))))
+
+(defn load-session-current!
+  "Load the current state of a specific session and replace current app-db"
+  [session-id]
+  (js/console.log "[CLIENT] Loading current state for session:" session-id)
+  (-> (js/fetch (str (:server-url @config) "/api/session-current/" session-id))
+      (.then (fn [response]
+              (if (.-ok response)
+                (.json response)
+                (throw (js/Error. (str "Session not found: " session-id))))))
+      (.then (fn [response]
+              (let [result (js->clj response :keywordize-keys true)
+                    session (:session result)]
+                (js/console.log "[CLIENT] Session loaded:" (:session_id session))
+                ;; Switch to the loaded session
+                (swap! config assoc :session-id (:session_id session))
+                (js/console.log "[CLIENT] Switched to session:" (:session_id session))
+                ;; Replace app-db with current state
+                (reset! app-db (:app_db session))
+                session)))
+      (.catch #(js/console.error "Failed to load session:" %))))
+
 (defn check-snapshot-param!
   "Check URL params for snapshot parameter and load if present"
   []
@@ -383,16 +427,24 @@
    ;; Install snapshot keyboard handlers
    (install-snapshot-handlers!)
    
-   ;; Check for snapshot parameter
+   ;; Check for URL parameters - priority: snapshot > session+at > session > normal
    (let [params (js/URLSearchParams. js/window.location.search)
          snapshot-id (.get params "snapshot")
-         snapshot-mode? (boolean snapshot-id)
-         ;; Track if we should skip the first SSE message
-         skip-first-sse? (atom snapshot-mode?)]
+         session-id-param (.get params "session_id")
+         at-timestamp (.get params "at")
+         ;; Determine loading mode
+         loading-mode (cond
+                       snapshot-id :snapshot
+                       (and session-id-param at-timestamp) :session-at
+                       session-id-param :session-current  ;; NEW: session_id without at
+                       :else :normal)
+         ;; Track if we should skip the first SSE message when loading historical/different state
+         skip-first-sse? (atom (not= loading-mode :normal))]
      
-     ;; Get initial state (or load snapshot)
-     (if snapshot-mode?
-       ;; Load snapshot 
+     ;; Load initial state based on mode
+     (case loading-mode
+       :snapshot
+       ;; Load from snapshot
        (do
          (js/console.log "[CLIENT] Loading from snapshot:" snapshot-id)
          (-> (load-snapshot! snapshot-id)
@@ -402,6 +454,32 @@
                       (-> (js/fetch (str (:server-url @config) "/api/state?session=" (:session-id @config)))
                           (.then #(.json %))
                           (.then #(reset! app-db (js->clj % :keywordize-keys true))))))))
+       
+       :session-at
+       ;; Load session at specific timestamp
+       (do
+         (js/console.log "[CLIENT] Loading session:" session-id-param "at timestamp:" at-timestamp)
+         (-> (load-session-at! session-id-param at-timestamp)
+             (.catch (fn [err]
+                      (js/console.error "Failed to load session at timestamp, falling back to normal init:" err)
+                      ;; Fall back to normal state loading
+                      (-> (js/fetch (str (:server-url @config) "/api/state?session=" (:session-id @config)))
+                          (.then #(.json %))
+                          (.then #(reset! app-db (js->clj % :keywordize-keys true))))))))
+       
+       :session-current
+       ;; Load current state of a specific session
+       (do
+         (js/console.log "[CLIENT] Loading current state for session:" session-id-param)
+         (-> (load-session-current! session-id-param)
+             (.catch (fn [err]
+                      (js/console.error "Failed to load session, falling back to normal init:" err)
+                      ;; Fall back to normal state loading
+                      (-> (js/fetch (str (:server-url @config) "/api/state?session=" (:session-id @config)))
+                          (.then #(.json %))
+                          (.then #(reset! app-db (js->clj % :keywordize-keys true))))))))
+       
+       :normal
        ;; Get initial state normally
        (-> (js/fetch (str (:server-url @config) "/api/state?session=" (:session-id @config)))
            (.then #(.json %))
@@ -415,10 +493,10 @@
        (set! (.-onmessage es)
              (fn [e]
                (let [data (js->clj (js/JSON.parse (.-data e)) :keywordize-keys true)]
-                 ;; Skip first message if we're in snapshot mode
+                 ;; Skip first message if we loaded from historical state
                  (if @skip-first-sse?
                    (do
-                     (js/console.log "[CLIENT] Skipping first SSE message in snapshot mode")
+                     (js/console.log "[CLIENT] Skipping first SSE message (loaded from historical state)")
                      (reset! skip-first-sse? false))
                    ;; Process normally
                    (if (:partial-update data)
@@ -499,7 +577,7 @@
             :params params
             :result-atom result-atom})
     (js/console.log "[CLIENT] Created subscription" sub-id "for SQL:" sql)
-    (js/console.log "[CLIENT] Stored in sql-subscriptions. Keys now:" (clj->js (keys @sql-subscriptions)))
+    ;; (js/console.log "[CLIENT] Stored in sql-subscriptions. Keys now:" (clj->js (keys @sql-subscriptions)))
     
     ;; Ensure SSE connection exists (this might trigger immediate updates)
     (ensure-sql-sse-connection!)
