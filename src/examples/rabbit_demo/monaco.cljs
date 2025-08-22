@@ -21,7 +21,7 @@
                    ;; Default text
                    #js {:token "" :foreground "FFFFFF88"}]
        :colors #js {;; Editor background - semi-transparent to show gradient
-                    "editor.background" "#1a1a2e00"
+                    "editor.background" "#00000088"
                     ;; Current line highlight
                     "editor.lineHighlightBackground" "#FF006E11"
                     ;; Selection

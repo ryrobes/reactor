@@ -2,7 +2,9 @@
   "SQL-based reactive rules engine for XTDB"
   (:require [reactor.xtdb-store :as xts]
             [reactor.session_simple :as session]
-            [clojure.tools.logging :as log]
+            [reactor.sql-stacks :as stacks]
+            [reactor.log :as log]
+            [clojure.string :as str]
             [clojure.core.async :as async])
   (:import [java.util UUID]
            [java.time Instant]))
@@ -22,22 +24,64 @@
   "Load all active rules from database and index by watched tables"
   [node]
   (try
-    (let [rules (xts/execute-sql node 
-                  "SELECT * FROM reactor_rules 
-                   WHERE enabled = true 
-                   ORDER BY priority DESC")]
-      (reset! active-rules
+    (log/info :sql-rules "Loading active rules from database...")
+    (let [query-result (xts/execute-sql node 
+                         "SELECT * FROM reactor_rules 
+                          WHERE enabled = true 
+                          ORDER BY priority DESC")
+          ;; Handle the :results wrapper from XTDB
+          raw-rules (if (and (map? query-result) (:results query-result))
+                     (:results query-result)
+                     query-result)]
+      (log/info :sql-rules (str "Query returned " (count raw-rules) " rules"))
+      (when (seq raw-rules)
+        (log/info :sql-rules (str "First rule type: " (type (first raw-rules)))))
+      
+      ;; Parse watch_tables from JSON string - handle both map and vector results
+      (let [rules (map (fn [rule]
+                        (log/debug :sql-rules (str "Processing rule: " (:rule_id rule)))
+                        (let [rule-map (if (map? rule) 
+                                        rule 
+                                        ;; Convert vector to map if needed
+                                        (zipmap [:_id :rule_id :description :watch_tables 
+                                                :condition_sql :action_type :action_sql 
+                                                :enabled :priority] 
+                                               rule))
+                              watch-tables-raw (:watch_tables rule-map)]
+                          (log/debug :sql-rules (str "Rule map: " rule-map))
+                          (log/debug :sql-rules (str "Watch tables raw: " watch-tables-raw))
+                          (let [parsed-tables (if (string? watch-tables-raw)
+                                               (try 
+                                                 (read-string watch-tables-raw)
+                                                 (catch Exception e
+                                                   (log/error e "Failed to parse watch_tables:" watch-tables-raw)
+                                                   []))
+                                               (or watch-tables-raw []))]
+                            (log/debug :sql-rules (str "Parsed tables: " parsed-tables))
+                            (assoc rule-map :watch_tables parsed-tables))))
+                      raw-rules)]
+        
+        (log/info :sql-rules (str "Processed " (count rules) " rules"))
+        
+        ;; Build the index
+        (let [new-active-rules
               (reduce (fn [acc rule]
                        (let [tables (or (:watch_tables rule) [])]
+                         (log/debug :sql-rules (str "Indexing rule " (:rule_id rule) " for tables " tables))
                          (reduce (fn [acc2 table]
+                                  (log/debug :sql-rules (str "Adding rule " (:rule_id rule) " to table " table))
                                   (update acc2 table (fnil conj []) rule))
                                 acc
                                 tables)))
                      {}
-                     rules))
-      (log/info "Loaded" (count rules) "active rules"))
+                     rules)]
+          (reset! active-rules new-active-rules)
+          (log/info :sql-rules (str "Active rules indexed. Total tables watched: " (count @active-rules)))
+          ;(log/info "Active rules state after loading:" @active-rules)
+          (when (seq @active-rules)
+            (log/info :sql-rules (str "Rules by table: " (into {} (map (fn [[k v]] [k (count v)]) @active-rules))))))))
     (catch Exception e
-      (log/error e "Failed to load rules"))))
+      (log/error :sql-rules (str "Failed to load rules: " (.getMessage e))))))
 
 ;; ============= Context Resolution =============
 
@@ -71,7 +115,10 @@
   (try
     (let [params (resolve-params (:condition_params rule) context)
           sql (:condition_sql rule)
-          result (xts/execute-sql node sql params)]
+          ;; Apply params correctly as variadic args
+          result (if (seq params)
+                   (apply xts/execute-sql node sql params)
+                   (xts/execute-sql node sql))]
       ;; Check various truthiness patterns
       (cond
         ;; EXISTS query or boolean result
@@ -86,16 +133,40 @@
         ;; Empty result
         :else false))
     (catch Exception e
-      (log/error e "Failed to evaluate rule condition" (:rule_id rule))
+      (log/error :sql-rules (str "Failed to evaluate rule condition " (:rule_id rule) ": " (.getMessage e)))
       false)))
 
 ;; ============= Action Execution =============
 
 (defn execute-sql-action
   [node rule context]
-  (let [params (resolve-params (:action_params rule) context)
-        sql (:action_sql rule)]
-    (xts/execute-sql node sql params)))
+  (let [action-sql (:action_sql rule)
+        ;; Parse action_sql if it's a string representation of EDN
+        parsed-sql (cond
+                     (vector? action-sql) action-sql
+                     (and (string? action-sql) 
+                          (str/starts-with? action-sql "["))
+                     (try 
+                       (read-string action-sql)
+                       (catch Exception _ action-sql))
+                     :else action-sql)]
+    ;; Check if parsed SQL is a stack (vector) or simple SQL (string)
+    (if (vector? parsed-sql)
+      ;; Execute as SQL stack with template interpolation
+      (let [params (resolve-params (:action_params rule) context)
+            stack-context (merge
+                            {:triggered_by (:triggered-by context)
+                             :transaction_id (:transaction-id context)
+                             :affected_tables (:affected-tables context)}
+                            (when params 
+                              (zipmap (map #(keyword (str "param" %)) (range))
+                                      params)))]
+        (stacks/execute-stack node parsed-sql stack-context))
+      ;; Execute as simple SQL
+      (let [params (resolve-params (:action_params rule) context)]
+        (if (seq params)
+          (apply xts/execute-sql node parsed-sql params)
+          (xts/execute-sql node parsed-sql))))))
 
 (defn execute-function-action
   [rule context]
@@ -119,7 +190,7 @@
     :sql-insert (execute-sql-action node rule context)
     :function (execute-function-action rule context)
     :event (execute-event-action rule context)
-    (log/warn "Unknown action type" (:action_type rule))))
+    (log/warn :sql-rules (str "Unknown action type: " (:action_type rule)))))
 
 ;; ============= Execution Tracking =============
 
@@ -139,7 +210,7 @@
         action-executed (pr-str action-result) execution-time 
         (Instant/now) correlation-id))
     (catch Exception e
-      (log/error e "Failed to track rule execution"))))
+      (log/error :sql-rules (str "Failed to track rule execution: " (.getMessage e))))))
 
 (defn update-execution-stats!
   "Update in-memory execution statistics"
@@ -160,12 +231,12 @@
     (try
       ;; Check rate limiting
       (when-not (check-rate-limit rule-id (:max_executions_per_minute rule))
-        (log/debug "Rule" rule-id "rate limited")
+        (log/info :sql-rules (str "Rule " rule-id " rate limited"))
         (throw (ex-info "Rate limited" {:rule-id rule-id :type :rate-limit})))
       
       ;; Evaluate condition
       (let [condition-met? (evaluate-condition node rule context)]
-        (log/debug "Rule" rule-id "condition:" condition-met?)
+        (log/info :sql-rules (str "Rule " rule-id " condition: " condition-met?))
         
         (if condition-met?
           ;; Execute action
@@ -199,7 +270,7 @@
              :executed false})))
       
       (catch Exception e
-        (log/error e "Failed to process rule" rule-id)
+        (log/error :sql-rules (str "Failed to process rule " rule-id ": " (.getMessage e)))
         {:rule-id rule-id
          :executed false
          :error (.getMessage e)}))))
@@ -233,7 +304,7 @@
     (let [affected-tables (mapcat :affected-tables initial-results)
           cascade-rules (find-cascading-rules affected-tables)]
       (when (seq cascade-rules)
-        (log/debug "Processing" (count cascade-rules) "cascade rules at depth" depth)
+        (log/info :sql-rules (str "Processing " (count cascade-rules) " cascade rules at depth " depth))
         (let [cascade-results 
               (doall (map #(process-rule node % 
                                         (assoc context 
@@ -260,12 +331,18 @@
                 :dispatch-fn dispatch-fn
                 :session-id session-id}]
     
-    (log/info "Processing rules for tables:" affected-tables)
+    (log/info :sql-rules (str "Processing rules for tables: " affected-tables))
+    (log/info :sql-rules (str "Active rules: " (count @active-rules)))
     
     ;; Find and process all rules watching these tables
-    (let [triggered-rules (mapcat #(get @active-rules %) affected-tables)]
+    (let [triggered-rules (mapcat #(do 
+                                    (log/debug :sql-rules (str "Looking for rules watching table: " %))
+                                    (let [rules (get @active-rules %)]
+                                      (log/debug :sql-rules (str "Found " (count rules) " rules for table " %))
+                                      rules))
+                                  affected-tables)]
       (when (seq triggered-rules)
-        (log/debug "Found" (count triggered-rules) "rules to evaluate")
+        (log/info :sql-rules (str "Found " (count triggered-rules) " rules to evaluate"))
         
         ;; Process initial rules
         (let [initial-results 
@@ -290,14 +367,14 @@
          VALUES (?, ?, ?, ?)"
         flow-id correlation-id (count results) (Instant/now)))
     (catch Exception e
-      (log/error e "Failed to record flow graph"))))
+      (log/error :sql-rules (str "Failed to record flow graph: " (.getMessage e))))))
 
 ;; ============= Initialization =============
 
 (defn init-rules-engine!
   "Initialize the rules engine"
   [node]
-  (log/info "Initializing SQL rules engine")
+  (log/info :sql-rules "Initializing SQL rules engine")
   (load-active-rules! node)
   
   ;; Create tables if they don't exist
@@ -305,7 +382,7 @@
     (xts/execute-sql node
       "SELECT * FROM reactor_rules LIMIT 1")
     (catch Exception e
-      (log/info "Creating rules tables...")
+      (log/info :sql-rules "Creating rules tables...")
       ;; In XTDB 2, tables are created implicitly on first insert
       nil)))
 
@@ -314,16 +391,32 @@
 (defn create-rule!
   [node rule]
   (let [rule-id (:rule_id rule)
-        _id (str "rule-" (UUID/randomUUID))]
-    (xts/execute-sql node
-      "INSERT INTO reactor_rules (_id, rule_id, description, watch_tables, 
-       condition_sql, action_type, action_sql, enabled, priority)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-      _id rule-id (:description rule) (into-array (:watch_tables rule))
-      (:condition_sql rule) (:action_type rule) (:action_sql rule)
-      (get rule :enabled true) (get rule :priority 0))
-    (load-active-rules! node)
-    rule-id))
+        ;; Check if rule already exists
+        existing (xts/execute-sql node 
+                   "SELECT _id FROM reactor_rules WHERE rule_id = ?"
+                   rule-id)]
+    (if (seq existing)
+      (do
+        (log/info :sql-rules (str "Rule already exists: " rule-id " - skipping creation"))
+        rule-id)
+      (let [_id (str "rule-" (UUID/randomUUID))
+            ;; Convert watch_tables to a JSON string for XTDB
+            watch-tables-json (pr-str (vec (:watch_tables rule)))]
+        (try
+          (log/info :sql-rules (str "Creating rule: " rule-id " watching tables: " (:watch_tables rule)))
+          (xts/execute-sql node
+            "INSERT INTO reactor_rules (_id, rule_id, description, watch_tables, 
+             condition_sql, action_type, action_sql, enabled, priority)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            _id rule-id (:description rule) watch-tables-json
+            (:condition_sql rule) (:action_type rule) (:action_sql rule)
+            (get rule :enabled true) (get rule :priority 0))
+          (log/info :sql-rules (str "Rule created successfully: " rule-id))
+          (load-active-rules! node)
+          rule-id
+        (catch Exception e
+          (log/error :sql-rules (str "Failed to create rule: " rule-id))
+          (throw e)))))))
 
 (defn enable-rule!
   [node rule-id enabled?]

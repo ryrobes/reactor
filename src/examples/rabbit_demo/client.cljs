@@ -1228,6 +1228,426 @@
                               (reset! connection-mode {:source-id id}))}
          "CONNECT TO QUERY"]])]))))
 
+(defn rules-block [{:keys [id position size] :as block}]
+  (let [;; State for rules data and stats
+        rules-data (reagent/atom nil)
+        exec-stats (reagent/atom nil)
+        cascade-data (reagent/atom nil)
+        selected-rule (reagent/atom nil)
+        view-mode (reagent/atom :overview) ;; :overview, :cascade, :details
+        
+        ;; Fetch rules and stats
+        fetch-rules! (fn []
+                       (js/console.log "[RULES-BLOCK] Fetching rules...")
+                       (-> (r/sql-query! 
+                            "SELECT * FROM reactor_rules WHERE enabled = true ORDER BY rule_id")
+                           (.then (fn [result]
+                                   (js/console.log "[RULES-BLOCK] Rules result:" (clj->js result))
+                                   (reset! rules-data (:results result))
+                                   (js/console.log "[RULES-BLOCK] Rules data atom:" (clj->js @rules-data))))
+                           (.catch (fn [err]
+                                    (js/console.error "[RULES-BLOCK] Error fetching rules:" err)))))
+        
+        fetch-stats! (fn []
+                      (-> (r/sql-query!
+                           "SELECT rule_id, 
+                                   COUNT(*) as execution_count,
+                                   SUM(CASE WHEN action_result::text NOT LIKE '%error%' THEN 1 ELSE 0 END) as success_count,
+                                   SUM(CASE WHEN action_result::text LIKE '%error%' THEN 1 ELSE 0 END) as error_count,
+                                   AVG(CAST(execution_time_ms AS DOUBLE)) as avg_time_ms,
+                                   MAX(executed_at) as last_executed
+                            FROM reactor_rule_executions
+                            GROUP BY rule_id")
+                          (.then (fn [result]
+                                  (reset! exec-stats (reduce (fn [m row]
+                                                             (assoc m (:rule_id row) row))
+                                                           {}
+                                                           (:results result)))))))
+        
+        fetch-cascade! (fn []
+                        (-> (r/sql-query!
+                             "SELECT r1.rule_id as source_rule, 
+                                     r2.rule_id as target_rule,
+                                     COUNT(*) as execution_count
+                              FROM reactor_rule_executions r1 
+                              JOIN reactor_rule_executions r2 
+                                ON r1.correlation_id = r2.correlation_id 
+                                AND r1.triggered_by = 'table_change' 
+                                AND r2.triggered_by = 'rule_cascade'
+                              GROUP BY r1.rule_id, r2.rule_id")
+                            (.then (fn [result]
+                                    (js/console.log "[RULES-BLOCK] Cascade result with counts:" (clj->js result))
+                                    (reset! cascade-data (:results result))))))]
+    
+    ;; Initial fetch
+    (reagent/create-class
+     {:component-did-mount
+      (fn []
+        (fetch-rules!)
+        (fetch-stats!)
+        (fetch-cascade!)
+        ;; Refresh every 5 seconds
+        (js/setInterval (fn []
+                         (fetch-stats!)
+                         (fetch-cascade!))
+                       5000))
+      
+      :reagent-render
+      (fn [{:keys [id position size] :as block}]
+        (let [is-dragging? (= id (:block-id @drag-state))
+              is-resizing? (= id (:block-id @resize-state))
+              actual-pos (if (or is-dragging? (get @local-positions id))
+                          (get @local-positions id position)
+                          position)
+              actual-size (if (or is-resizing? (get @local-sizes id))
+                           (get @local-sizes id size)
+                           size)]
+          [:div.block
+           {:style {:position "absolute"
+                   :left (:x actual-pos)
+                   :top (:y actual-pos)
+                   :width (:width actual-size)
+                   :height (:height actual-size)
+                   :background "linear-gradient(135deg, #1a1a2e 0%, #2d2d44 100%)"
+                   :border "1px solid #9933ff"
+                   :border-radius "8px"
+                   :padding "10px"
+                   :overflow "hidden"
+                   :display "flex"
+                   :flex-direction "column"}}
+           
+           ;; Header
+           [:div {:style {:display "flex"
+                         :justify-content "space-between"
+                         :align-items "center"
+                         :margin-bottom "10px"
+                         :border-bottom "1px solid #9933ff"
+                         :padding-bottom "5px"
+                         :cursor "move"}
+                  :on-mouse-down #(start-drag! id %)}
+            [:div {:style {:display "flex"
+                          :align-items "center"
+                          :gap "10px"}}
+             [:span {:style {:color "#9933ff"
+                            :font-weight "bold"
+                            :font-size "14px"}}
+              "⚙ RULES ENGINE"]
+             [:span {:style {:color "#666"
+                            :font-size "12px"}}
+              (str (count @rules-data) " active rules")]]
+            
+            ;; View mode toggle
+            [:div {:style {:display "flex"
+                          :gap "5px"}}
+             [:button {:style {:padding "2px 8px"
+                              :background (if (= @view-mode :overview) "#9933ff" "#333")
+                              :color "white"
+                              :border "none"
+                              :border-radius "3px"
+                              :cursor "pointer"
+                              :font-size "11px"}
+                      :on-click #(reset! view-mode :overview)}
+              "Overview"]
+             [:button {:style {:padding "2px 8px"
+                              :background (if (= @view-mode :cascade) "#9933ff" "#333")
+                              :color "white"
+                              :border "none"
+                              :border-radius "3px"
+                              :cursor "pointer"
+                              :font-size "11px"}
+                      :on-click #(reset! view-mode :cascade)}
+              "Cascades"]
+             [:button {:style {:padding "2px 8px"
+                              :background (if (= @view-mode :details) "#9933ff" "#333")
+                              :color "white"
+                              :border "none"
+                              :border-radius "3px"
+                              :cursor "pointer"
+                              :font-size "11px"}
+                      :on-click #(reset! view-mode :details)}
+              "Details"]]
+            
+            ;; Close button
+            [:button {:style {:background "transparent"
+                             :border "none"
+                             :color "#ff4f99"
+                             :cursor "pointer"
+                             :font-size "16px"}
+                     :on-click #(r/dispatch! [:delete-block id])}
+             "×"]]
+           
+           ;; Content area
+           [:div {:style {:flex 1
+                         :overflow-y "auto"
+                         :padding-right "5px"}}
+            (case @view-mode
+              :overview
+              [:div
+               ;; Rules list with stats
+               (for [rule @rules-data]
+                 (let [rule-id (:rule_id rule)
+                       stats (get @exec-stats rule-id)
+                       success-rate (if (and stats (> (:execution_count stats) 0))
+                                     (* 100 (/ (:success_count stats) 
+                                             (:execution_count stats)))
+                                     0)]
+                   ^{:key rule-id}
+                   [:div {:style {:background "rgba(0,0,0,0.3)"
+                                 :border "1px solid #444"
+                                 :border-radius "4px"
+                                 :padding "8px"
+                                 :margin-bottom "8px"
+                                 :cursor "pointer"}
+                          :on-click #(do (reset! selected-rule rule)
+                                       (reset! view-mode :details))}
+                    [:div {:style {:display "flex"
+                                  :justify-content "space-between"
+                                  :align-items "center"}}
+                     [:div
+                      [:div {:style {:color "#9933ff"
+                                    :font-weight "bold"
+                                    :font-size "12px"}}
+                       rule-id]
+                      [:div {:style {:color "#888"
+                                    :font-size "10px"}}
+                       (str (:trigger_table rule) " → " (:action_table rule))]]
+                     
+                     (when stats
+                       [:div {:style {:text-align "right"}}
+                        [:div {:style {:font-size "10px"
+                                      :color (if (>= success-rate 90) "#00ff88" 
+                                               (if (>= success-rate 50) "#ffaa00" "#ff4444"))}}
+                         (str (.toFixed success-rate 1) "% success")]
+                        [:div {:style {:font-size "9px"
+                                      :color "#666"}}
+                         (str (:execution_count stats) " runs")]])]
+                    
+                    [:div {:style {:margin-top "5px"
+                                  :font-size "10px"
+                                  :color "#aaa"}}
+                     (:description rule)]]))]
+              
+              :cascade
+              [:div {:style {:padding "10px"}}
+                (if (empty? @cascade-data)
+                  [:div {:style {:color "#666"
+                                :text-align "center"
+                                :padding "20px"
+                                :background "rgba(0,0,0,0.3)"
+                                :border-radius "4px"}}
+                   "No cascade relationships detected yet. Rules will cascade when one rule's action writes to a table that another rule watches."]
+                  (let [;; Build adjacency map with counts
+                        edge-counts (reduce (fn [m {:keys [source_rule target_rule execution_count]}]
+                                            (assoc m [source_rule target_rule] execution_count))
+                                          {}
+                                          @cascade-data)
+                        ;; Create Mermaid syntax with execution counts on edges
+                        mermaid-id (str "mermaid-" (gensym))
+                        mermaid-text (str "graph LR\n"
+                                         (clojure.string/join "\n"
+                                           (for [{:keys [source_rule target_rule execution_count]} @cascade-data]
+                                             (str "    " source_rule " -->|" execution_count "x| " target_rule))))]
+                    [:div
+                     ;; Mermaid Diagram
+                     [:div {:style {:background "rgba(0,0,0,0.4)"
+                                   :padding "20px"
+                                   :border-radius "8px"
+                                   :margin-bottom "15px"}}
+                      [:div {:style {:color "#9933ff"
+                                    :font-size "14px"
+                                    :font-weight "bold"
+                                    :margin-bottom "20px"}}
+                       "Rule Cascade Flow"]
+                      
+                      ;; Mermaid diagram container
+                      [:div {:style {:background "#1a1a1a"
+                                    :padding "20px"
+                                    :border-radius "6px"
+                                    :border "1px solid #333"
+                                    :min-height "200px"}
+                             :ref (fn [el]
+                                   (when el
+                                     ;; Render Mermaid diagram when element is mounted
+                                     (js/setTimeout
+                                      #(try
+                                        (if (and js/window js/window.mermaid)
+                                          (do
+                                            ;; Use mermaid.run for newer versions
+                                            (set! (.-innerHTML el) 
+                                                 (str "<div class='mermaid'>" mermaid-text "</div>"))
+                                            (if (.-run js/window.mermaid)
+                                              ;; Mermaid v10+ uses .run()
+                                              (.run js/window.mermaid)
+                                              ;; Older versions use .init()
+                                              (.init js/window.mermaid)))
+                                          ;; Fallback if mermaid not loaded
+                                          (set! (.-innerHTML el) 
+                                               (str "<pre style='color: #00ffd4; font-size: 11px;'>" 
+                                                   mermaid-text "</pre>")))
+                                        (catch :default e
+                                          (js/console.error "Mermaid render error:" e)
+                                          ;; Fallback to showing the text
+                                          (set! (.-innerHTML el) 
+                                               (str "<pre style='color: #00ffd4; font-size: 11px;'>" 
+                                                   mermaid-text "</pre>"))))
+                                      200)))}
+                       ;; Initial loading text
+                       [:div {:style {:color "#666"
+                                     :font-size "12px"}}
+                        "Loading diagram..."]]
+                      
+                      ;; Legend
+                      [:div {:style {:margin-top "15px"
+                                    :padding "10px"
+                                    :background "rgba(0,0,0,0.3)"
+                                    :border-radius "4px"
+                                    :font-size "10px"
+                                    :color "#888"}}
+                       [:div {:style {:margin-bottom "5px"}}
+                        [:span {:style {:color "#00ff9f"}} "→"] 
+                        " Arrows show cascade triggers"]
+                       [:div {:style {:margin-bottom "5px"}}
+                        [:span {:style {:color "#9933ff"
+                                      :background "rgba(153, 51, 255, 0.2)"
+                                      :padding "1px 4px"
+                                      :border-radius "3px"}}
+                         "Nx"] 
+                        " Numbers show execution count"]
+                       [:div
+                        "Higher counts indicate more frequently triggered cascades"]]]
+                     
+                     ;; Raw Mermaid text (collapsible)
+                     [:details {:style {:margin-top "10px"}}
+                      [:summary {:style {:color "#666"
+                                        :font-size "10px"
+                                        :cursor "pointer"}}
+                       "View Mermaid source"]
+                      [:pre {:style {:margin "10px 0 0 0"
+                                    :padding "10px"
+                                    :background "rgba(0,0,0,0.5)"
+                                    :border-radius "4px"
+                                    :color "#00ffd4"
+                                    :font-family "monospace"
+                                    :font-size "10px"
+                                    :white-space "pre-wrap"
+                                    :overflow-x "auto"}}
+                       mermaid-text]]]))]
+              
+              :details
+              (if @selected-rule
+                [:div
+                 [:button {:style {:background "#333"
+                                  :color "#9933ff"
+                                  :border "1px solid #9933ff"
+                                  :padding "4px 8px"
+                                  :border-radius "4px"
+                                  :cursor "pointer"
+                                  :margin-bottom "10px"}
+                          :on-click #(reset! view-mode :overview)}
+                  "← Back to Overview"]
+                 
+                 ;; Rule details with EDN viewer
+                 [:div {:style {:background "rgba(0,0,0,0.3)"
+                               :padding "10px"
+                               :border-radius "4px"}}
+                  [:div {:style {:color "#9933ff"
+                                :font-weight "bold"
+                                :margin-bottom "10px"}}
+                   (:rule_id @selected-rule)]
+                  
+                  ;; Parse and display condition and action
+                  (let [condition-sql (:condition_sql @selected-rule)
+                        action-sql (:action_sql @selected-rule)
+                        ;; Try to parse as EDN, fall back to string
+                        condition (if (string? condition-sql)
+                                   condition-sql
+                                   (try (reader/read-string condition-sql)
+                                        (catch :default _ condition-sql)))
+                        action (if (string? action-sql)
+                                (try (reader/read-string action-sql)
+                                     (catch :default _ action-sql))
+                                action-sql)]
+                    [:div
+                     [:div {:style {:margin-bottom "10px"}}
+                      [:div {:style {:color "#888"
+                                    :font-size "10px"
+                                    :margin-bottom "5px"}}
+                       "CONDITION SQL:"]
+                      (if (string? condition)
+                        [:div {:style {:background "rgba(0,0,0,0.4)"
+                                      :padding "8px"
+                                      :border-radius "4px"
+                                      :max-height "300px"
+                                      :overflow-y "auto"}}
+                         [:pre {:style {:margin 0
+                                       :color "#00ffd4"
+                                       :font-family "monospace"
+                                       :font-size "11px"
+                                       :white-space "pre"
+                                       :overflow-x "auto"}}
+                          condition]]
+                        [tree/edn-tree-view {:data condition
+                                            :initial-depth 2}])]
+                     
+                     [:div {:style {:margin-bottom "10px"}}
+                      [:div {:style {:color "#888"
+                                    :font-size "10px"
+                                    :margin-bottom "5px"}}
+                       "ACTION SQL:"]
+                      (if (and (string? action) (not (coll? action)))
+                        [:div {:style {:background "rgba(0,0,0,0.4)"
+                                      :padding "8px"
+                                      :border-radius "4px"
+                                      :max-height "300px"
+                                      :overflow-y "auto"}}
+                         [:pre {:style {:margin 0
+                                       :color "#00ffd4"
+                                       :font-family "monospace"
+                                       :font-size "11px"
+                                       :white-space "pre"
+                                       :overflow-x "auto"}}
+                          action]]
+                        [tree/edn-tree-view {:data action
+                                            :initial-depth 2}])]
+                     
+                     ;; Stats for this rule
+                     (when-let [stats (get @exec-stats (:rule_id @selected-rule))]
+                       [:div {:style {:margin-top "10px"
+                                     :padding-top "10px"
+                                     :border-top "1px solid #444"}}
+                        [:div {:style {:color "#888"
+                                      :font-size "10px"
+                                      :margin-bottom "5px"}}
+                         "EXECUTION STATS:"]
+                        [:div {:style {:display "grid"
+                                      :grid-template-columns "1fr 1fr"
+                                      :gap "5px"
+                                      :font-size "10px"}}
+                         [:div [:span {:style {:color "#666"}} "Runs: "] 
+                          [:span {:style {:color "#9933ff"}} (:execution_count stats)]]
+                         [:div [:span {:style {:color "#666"}} "Success: "] 
+                          [:span {:style {:color "#00ff88"}} (:success_count stats)]]
+                         [:div [:span {:style {:color "#666"}} "Errors: "] 
+                          [:span {:style {:color "#ff4444"}} (:error_count stats)]]
+                         [:div [:span {:style {:color "#666"}} "Avg time: "] 
+                          [:span {:style {:color "#ffaa00"}} 
+                           (str (.toFixed (or (:avg_time_ms stats) 0) 2) " ms")]]]])])]]
+                
+                [:div {:style {:color "#666"
+                              :text-align "center"
+                              :margin-top "20px"}}
+                 "Select a rule from Overview to see details"]))
+           
+           ;; Resize handle
+           [:div {:style {:position "absolute"
+                         :bottom 0
+                         :right 0
+                         :width "10px"
+                         :height "10px"
+                         :background "#9933ff"
+                         :cursor "se-resize"}
+                  :on-mouse-down #(start-resize! id %)}]]]))})))
+
 (defn render-block [block]
   (js/console.log "Rendering block:" (clj->js block) "Type:" (:type block))
   (let [block-type (if (string? (:type block))
@@ -1239,6 +1659,7 @@
       :sql-exec [sql-exec-block block]
       :debug [debug-block block]
       :edn-browser [edn-browser-block block]
+      :rules [rules-block block]
       :tap (let [;; Use local position only while dragging
                  is-dragging? (= (:id block) (:block-id @drag-state))
                  is-resizing? (= (:id block) (:block-id @resize-state))
@@ -1753,6 +2174,29 @@
    [:button
     {:style {:padding "8px 16px"
              :background "transparent"
+             :color "#9933ff"
+             :border "1px solid #9933ff"
+             :border-radius "2px"
+             :cursor "pointer"
+             :font-family "monospace"
+             :font-size "12px"
+             :text-transform "uppercase"
+             :letter-spacing "1px"
+             :transition "all 0.3s"}
+     :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(153,51,255,0.1)")
+     :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+     :on-click (fn []
+                 (let [block-data {:id (str (random-uuid))
+                                   :type :rules
+                                   :position {:x (+ 150 (rand-int 200))
+                                              :y (+ 150 (rand-int 200))}
+                                   :size {:width 500 :height 400}}]
+                   (js/console.log "Adding rules block:" (clj->js block-data))
+                   (r/dispatch! [:add-block block-data])))}
+    "+ RULES"]
+   [:button
+    {:style {:padding "8px 16px"
+             :background "transparent"
              :color "#ff4f99"
              :border "1px solid #ff4f99"
              :border-radius "2px"
@@ -2019,6 +2463,8 @@
 ;; ============= Initialize =============
 
 (defn ^:export init! []
+  ;; Set app name for snapshot tracking
+  (set! js/window.REACTOR_APP_NAME "rabbit")
   (r/init! {:server-url "http://localhost:5000"})
   ;; Initialize with default session or get from query params
   (let [params (js/URLSearchParams. js/window.location.search)

@@ -2,8 +2,10 @@
   "Dead simple server setup - one function to rule them all"
   (:require [reactor.session_simple :as session]
             [reactor.xtdb-store :as xts]
+            [reactor.rabbitize :as rabbitize]
             [org.httpkit.server :as http]
             [cheshire.core :as json]
+            [clojure.string :as str]
             [honeysql.core :as hsql]
             [honeysql.format :as hfmt]))
 
@@ -50,6 +52,28 @@
           ;; CORS preflight
           (= method :options)
           {:status 200 :headers {"Content-Type" "text/plain"}}
+          
+          ;; Handle rabbitize endpoints
+          (str/starts-with? path "/api/rabbitize/")
+          (wrap-cors (rabbitize/handle-rabbitize-request req))
+          
+          ;; Handle dynamic snapshot GET endpoint
+          (and (= method :get) 
+               (re-matches #"/api/snapshot/(.+)" path))
+          (let [snapshot-id (second (re-matches #"/api/snapshot/(.+)" path))
+                node (or @session/default-node (xts/start-xtdb-node))
+                query-result (xts/execute-sql node
+                                             "SELECT * FROM reactor_snapshots WHERE snapshot_id = ?"
+                                             snapshot-id)
+                result (:results query-result)
+                snapshot (first result)]
+            (if snapshot
+              {:status 200
+               :headers {"Content-Type" "application/json"}
+               :body (json/generate-string 
+                       {:snapshot {:app_db (read-string (:state snapshot))
+                                  :session_id (:session_id snapshot)}})}
+              {:status 404 :body "Snapshot not found"}))
           
           ;; Regular routes
           :else
@@ -232,6 +256,30 @@
               {:status 200
                :headers {"Content-Type" "application/json"}
                :body (json/generate-string @session)})
+            
+            "/api/snapshot"
+            (if (= method :post)
+              ;; Save snapshot
+              (let [body (json/parse-string (slurp (:body req)) true)
+                    snapshot-id (or (:snapshot_id body) 
+                                   (str "snapshot-" (System/currentTimeMillis)))
+                    app-name (or (:app_name body) "unknown")
+                    app-db (:app_db body)
+                    saved-session-id (or (:session_id body) session-id)
+                    description (or (:description body) "")
+                    timestamp (java.time.Instant/now)
+                    node (or @session/default-node (xts/start-xtdb-node))]
+                (xts/execute-sql node
+                  "INSERT INTO reactor_snapshots 
+                   (_id, snapshot_id, app_name, session_id, state, description, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)"
+                  snapshot-id snapshot-id app-name saved-session-id 
+                  (pr-str app-db) description timestamp)
+                {:status 200
+                 :headers {"Content-Type" "application/json"}
+                 :body (json/generate-string {:snapshot_id snapshot-id})})
+              ;; GET handled below
+              {:status 405 :body "Method not allowed"})
             
             ;; 404
             {:status 404 :body "Not found"}))))))

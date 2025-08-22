@@ -323,39 +323,42 @@
                            ;; Convert just enough to check for table names (first 5KB should be enough)
                            (let [sample-size (min 5000 (count tx-value))
                                  raw-sample (String. (byte-array (take sample-size tx-value)) "ISO-8859-1")
-                                 
+
                                  ;; Quick check if this is a mutation (not SELECT-only)
                                  has-mutation? (or (re-find #"(?i)(INSERT\s+INTO|UPDATE\s+|DELETE\s+FROM)" raw-sample)
-                                                 (re-find #"(?i)INSERT\s+.*RECORDS" raw-sample)
-                                                 (re-find #"(?i)VALUES\s*\(" raw-sample))
+                                                   (re-find #"(?i)INSERT\s+.*RECORDS" raw-sample)
+                                                   (re-find #"(?i)VALUES\s*\(" raw-sample))
                                  is-select? (and (re-find #"(?i)SELECT\s+" raw-sample)
-                                               (not has-mutation?))
-                                   
-                                   ;; Only look for mutation operations (INSERT, UPDATE, DELETE) in the sample
-                                   insert-tables (if-not is-select?
-                                                  (map #(str/lower-case (second %)) 
-                                                       (re-seq #"(?i)INSERT\s+INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)" raw-sample))
-                                                  [])
-                                   update-tables (if-not is-select?
-                                                  (map #(str/lower-case (second %)) 
-                                                       (re-seq #"(?i)UPDATE\s+([a-zA-Z_][a-zA-Z0-9_]*)" raw-sample))
-                                                  [])
-                                   delete-tables (if-not is-select?
-                                                  (map #(str/lower-case (second %)) 
-                                                       (re-seq #"(?i)DELETE\s+FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)" raw-sample))
-                                                  [])
-                                   ;; Don't extract FROM tables as those could be from SELECT queries
-                                   ;; Only combine mutation tables
-                                   all-tables (set (concat insert-tables update-tables delete-tables))
-                                   ;; Filter out common SQL keywords and session tables
-                                   filtered-tables (-> all-tables
-                                                      (disj "from" "into" "where" "select" "insert" "update" "delete" 
-                                                            "values" "set" "and" "or" "null" "table" "column")
-                                                      ;; EXCLUDE SESSION TABLES - they're just UI state
-                                                      (disj "rabbit_sessions" "todo_sessions" "sessions")
-                                                      ;; Remove any table ending with _sessions
-                                                      (->> (remove #(str/ends-with? % "_sessions")))
-                                                      set)]
+                                                 (not has-mutation?))
+
+                                 ;; Only look for mutation operations (INSERT, UPDATE, DELETE) in the sample
+                                 insert-tables (if-not is-select?
+                                                 (map #(str/lower-case (second %))
+                                                      (re-seq #"(?i)INSERT\s+INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)" raw-sample))
+                                                 [])
+                                 update-tables (if-not is-select?
+                                                 (map #(str/lower-case (second %))
+                                                      (re-seq #"(?i)UPDATE\s+([a-zA-Z_][a-zA-Z0-9_]*)" raw-sample))
+                                                 [])
+                                 delete-tables (if-not is-select?
+                                                 (map #(str/lower-case (second %))
+                                                      (re-seq #"(?i)DELETE\s+FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)" raw-sample))
+                                                 [])
+                                 ;; Don't extract FROM tables as those could be from SELECT queries
+                                 ;; Only combine mutation tables
+                                 all-tables (set (concat insert-tables update-tables delete-tables))
+                                 ;; Filter out common SQL keywords and session tables
+                                 filtered-tables (-> all-tables
+                                                     (disj "from" "into" "where" "select" "insert" "update" "delete"
+                                                           "values" "set" "and" "or" "null" "table" "column")
+                                                     ;; EXCLUDE SESSION TABLES - they're just UI state
+                                                     (disj "rabbit_sessions" "todo_sessions" "sessions")
+                                                     ;; Remove any table ending with _sessions
+                                                     (->> (remove #(str/ends-with? % "_sessions")))
+                                                     (->> (remove #(str/ends-with? % "_subscriptions")))
+                                                     (->> (remove #(str/ends-with? % "_taps")))
+                                                     (->> (remove #(str/ends-with? % "_reactions")))
+                                                     set)]
                                
                                ;; Log if mutation detected (without the actual SQL)
                                (when has-mutation?

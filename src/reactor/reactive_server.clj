@@ -6,8 +6,11 @@
             [reactor.session_simple :as session]
             [reactor.xtdb-store :as xts]
             [reactor.meta-tracking :as meta]
+            [reactor.time-travel-sql :as time-travel]
+            [reactor.rabbitize :as rabbitize]
             [org.httpkit.server :as http]
             [cheshire.core :as json]
+            [clojure.edn :as edn]
             [clojure.tools.logging :as log]))
 
 (defn create-reactive-handler
@@ -30,9 +33,71 @@
                     "Access-Control-Max-Age" "3600"}
            :body ""}
           
-          (case path
-          ;; Reactive SQL subscription endpoint
-          "/api/subscribe-sql"
+          ;; Handle dynamic paths first
+          (cond
+           ;; Handle rabbitize endpoints
+           (clojure.string/starts-with? path "/api/rabbitize/")
+           (base-server/wrap-cors (rabbitize/handle-rabbitize-request req))
+           
+           ;; Load snapshot by ID (dynamic path)
+           (clojure.string/starts-with? path "/api/snapshot/")
+           (let [snapshot-id (last (clojure.string/split path #"/"))
+                 node @session/default-node]
+             (log/info "[SNAPSHOT] Loading snapshot:" snapshot-id)
+             (if node
+               (try
+                 (let [query-result (xts/execute-sql node
+                               "SELECT * FROM reactor_snapshots WHERE snapshot_id = ?"
+                               snapshot-id)
+                       result (:results query-result)  ;; Extract the results array
+                       _ (log/info "[SNAPSHOT] Query result count:" (count result))
+                       snapshot (first result)
+                       _ (when snapshot
+                           (log/info "[SNAPSHOT] Snapshot type:" (type snapshot))
+                           (log/info "[SNAPSHOT] Snapshot keys:" (keys snapshot)))]
+                   (if snapshot
+                     (try
+                       (let [state-str (:state snapshot)
+                             _ (log/info "[SNAPSHOT] State string length:" (count state-str))
+                             app-db (if state-str
+                                     (edn/read-string state-str)
+                                     {})]
+                         {:status 200
+                          :headers {"Content-Type" "application/json"
+                                   "Access-Control-Allow-Origin" "*"}
+                          :body (json/generate-string 
+                                 {:success true
+                                  :snapshot {:snapshot_id (:snapshot_id snapshot)
+                                           :app_name (:app_name snapshot)
+                                           :session_id (:session_id snapshot)
+                                           :app_db app-db
+                                           :description (:description snapshot)
+                                           :created_at (:created_at snapshot)}})})
+                       (catch Exception e
+                         (log/error e "Failed to parse snapshot EDN")
+                         {:status 500
+                          :headers {"Content-Type" "application/json"
+                                   "Access-Control-Allow-Origin" "*"}
+                          :body (json/generate-string {:error (str "Failed to parse snapshot: " (.getMessage e))})}))
+                     {:status 404
+                      :headers {"Content-Type" "application/json"
+                               "Access-Control-Allow-Origin" "*"}
+                      :body (json/generate-string {:error "Snapshot not found"})}))
+                 (catch Exception e
+                   (log/error e "Failed to load snapshot")
+                   {:status 500
+                    :headers {"Content-Type" "application/json"
+                             "Access-Control-Allow-Origin" "*"}
+                    :body (json/generate-string {:error (str "Failed to load snapshot: " (.getMessage e))})}))
+               {:status 503
+                :headers {"Content-Type" "application/json"
+                         "Access-Control-Allow-Origin" "*"}
+                :body (json/generate-string {:error "No XTDB node available"})}))
+           
+           :else
+           (case path
+           ;; Reactive SQL subscription endpoint
+           "/api/subscribe-sql"
           (case method
             ;; GET request establishes SSE connection
             :get
@@ -228,9 +293,7 @@
                 limit (or (:limit body) 20)
                 node @session/default-node]
             (if node
-              (let [time-travel (require 'reactor.time-travel-sql)
-                    history-fn (ns-resolve 'reactor.time-travel-sql 'get-query-history-range)
-                    result (history-fn node sql limit)]
+              (let [result (time-travel/get-query-history-range node sql limit)]
                 {:status 200
                  :headers {"Content-Type" "application/json"
                           "Access-Control-Allow-Origin" "*"}
@@ -252,6 +315,100 @@
                         "Access-Control-Allow-Origin" "*"}
                :body (json/generate-string {:test-id test-id
                                            :active-count (count @kafka/active-subscriptions)})}))
+          
+          ;; Snapshot endpoints for saving/loading app-db states
+          "/api/snapshot"
+          (case method
+            :post
+            ;; Save a snapshot
+            (let [body (json/parse-string (slurp (:body req)) true)
+                  node @session/default-node]
+              (if node
+                (try
+                  (let [snapshot-id (or (:snapshot_id body) 
+                                       (str "snapshot-" (System/currentTimeMillis)))
+                        app-name (or (:app_name body) "unknown")
+                        app-db (:app_db body)
+                        saved-session-id (or (:session_id body) session-id)  ;; Use session from body if provided
+                        description (or (:description body) "")
+                        timestamp (java.time.Instant/now)]
+                    ;; Store as EDN, just like sessions
+                    (xts/execute-sql node
+                      "INSERT INTO reactor_snapshots 
+                       (_id, snapshot_id, app_name, session_id, state, description, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)"
+                      snapshot-id snapshot-id app-name saved-session-id 
+                      (pr-str app-db) description timestamp)
+                    {:status 200
+                     :headers {"Content-Type" "application/json"
+                              "Access-Control-Allow-Origin" "*"}
+                     :body (json/generate-string {:success true 
+                                                :snapshot_id snapshot-id})})
+                  (catch Exception e
+                    (log/error e "Failed to save snapshot")
+                    {:status 500
+                     :headers {"Content-Type" "application/json"
+                              "Access-Control-Allow-Origin" "*"}
+                     :body (json/generate-string {:error (str "Failed to save snapshot: " (.getMessage e))})}))
+                {:status 503
+                 :headers {"Content-Type" "application/json"
+                          "Access-Control-Allow-Origin" "*"}
+                 :body (json/generate-string {:error "No XTDB node available"})}))
+            
+            :get
+            ;; Load a snapshot  
+            (let [snapshot-id (get-in req [:params :id])
+                  node @session/default-node]
+              (if node
+                (try
+                  (let [query-result (xts/execute-sql node
+                                "SELECT * FROM reactor_snapshots WHERE snapshot_id = ?"
+                                snapshot-id)
+                        result (:results query-result)  ;; Extract the results array
+                        snapshot (first result)]
+                    (if snapshot
+                      (try
+                        (let [state-str (:state snapshot)
+                              app-db (if state-str
+                                      (edn/read-string state-str)
+                                      {})]
+                          {:status 200
+                           :headers {"Content-Type" "application/json"
+                                    "Access-Control-Allow-Origin" "*"}
+                           :body (json/generate-string 
+                                  {:success true
+                                   :snapshot {:snapshot_id (:snapshot_id snapshot)
+                                            :app_name (:app_name snapshot)
+                                            :session_id (:session_id snapshot)
+                                            :app_db app-db
+                                            :description (:description snapshot)
+                                            :created_at (:created_at snapshot)}})})
+                        (catch Exception e
+                          (log/error e "Failed to parse snapshot EDN in GET")
+                          {:status 500
+                           :headers {"Content-Type" "application/json"
+                                    "Access-Control-Allow-Origin" "*"}
+                           :body (json/generate-string {:error (str "Failed to parse snapshot: " (.getMessage e))})}))
+                      {:status 404
+                       :headers {"Content-Type" "application/json"
+                                "Access-Control-Allow-Origin" "*"}
+                       :body (json/generate-string {:error "Snapshot not found"})}))
+                  (catch Exception e
+                    (log/error e "Failed to load snapshot")
+                    {:status 500
+                     :headers {"Content-Type" "application/json"
+                              "Access-Control-Allow-Origin" "*"}
+                     :body (json/generate-string {:error (str "Failed to load snapshot: " (.getMessage e))})}))
+                {:status 503
+                 :headers {"Content-Type" "application/json"
+                          "Access-Control-Allow-Origin" "*"}
+                 :body (json/generate-string {:error "No XTDB node available"})}))
+            
+            ;; Default for other methods
+            {:status 405
+             :headers {"Content-Type" "application/json"
+                      "Access-Control-Allow-Origin" "*"}
+             :body (json/generate-string {:error "Method not allowed"})})
           
           ;; TAP endpoint for inserting tap entries
           "/api/tap"
@@ -338,7 +495,7 @@
                            (http/send! channel (str "data: " (json/generate-string new-state) "\n\n") false)))))
           
           ;; Fall back to base handler
-          (base-handler req)))))))
+          (base-handler req))))))))
 
 (defn start-reactive!
   "Start a reactive Reactor server with Kafka integration."

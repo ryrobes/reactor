@@ -128,6 +128,90 @@
                 (reset! app-db new-state)
                 new-state))))
 
+;; Snapshot Management
+(defn save-snapshot!
+  "Save the current app-db state as a snapshot"
+  ([description]
+   (save-snapshot! description {}))
+  ([description metadata]
+   (let [snapshot-id (str "snapshot-" (.getTime (js/Date.)))]
+     (js/console.log "[CLIENT] Saving snapshot:" snapshot-id "for session:" (:session-id @config))
+     (-> (js/fetch (str (:server-url @config) "/api/snapshot")
+                   #js {:method "POST"
+                        :headers #js {"Content-Type" "application/json"}
+                        :body (js/JSON.stringify 
+                               (clj->js {:snapshot_id snapshot-id
+                                        :app_name (or js/window.REACTOR_APP_NAME "unknown")
+                                        :app_db @app-db
+                                        :description description
+                                        :session_id (:session-id @config)
+                                        :metadata (assoc metadata :session_id (:session-id @config))}))})
+         (.then #(.json %))
+         (.then (fn [response]
+                 (let [result (js->clj response :keywordize-keys true)]
+                   (js/console.log "[CLIENT] Snapshot saved:" (:snapshot_id result))
+                   ;; Copy snapshot ID to clipboard
+                   (when js/navigator.clipboard
+                     (.writeText js/navigator.clipboard (:snapshot_id result))
+                     (js/console.log "Snapshot ID copied to clipboard!"))
+                   result)))
+         (.catch #(js/console.error "Failed to save snapshot:" %))))))
+
+(defn load-snapshot!
+  "Load a snapshot and replace current app-db"
+  [snapshot-id]
+  (js/console.log "[CLIENT] Loading snapshot:" snapshot-id)
+  (-> (js/fetch (str (:server-url @config) "/api/snapshot/" snapshot-id))
+      (.then (fn [response]
+              (if (.-ok response)
+                (.json response)
+                (throw (js/Error. (str "Snapshot not found: " snapshot-id))))))
+      (.then (fn [response]
+              (let [result (js->clj response :keywordize-keys true)
+                    snapshot (:snapshot result)]
+                (js/console.log "[CLIENT] Snapshot loaded:" (:snapshot_id snapshot) "for session:" (:session_id snapshot))
+                ;; If snapshot has a session_id, switch to that session
+                (when (:session_id snapshot)
+                  (swap! config assoc :session-id (:session_id snapshot))
+                  (js/console.log "[CLIENT] Switched to session:" (:session_id snapshot)))
+                ;; Replace app-db with snapshot data
+                (reset! app-db (:app_db snapshot))
+                snapshot)))
+      (.catch #(js/console.error "Failed to load snapshot:" %))))
+
+(defn check-snapshot-param!
+  "Check URL params for snapshot parameter and load if present"
+  []
+  (let [params (js/URLSearchParams. js/window.location.search)
+        snapshot-id (.get params "snapshot")]
+    (when snapshot-id
+      (js/console.log "[CLIENT] Snapshot parameter detected:" snapshot-id)
+      (load-snapshot! snapshot-id))))
+
+;; Keyboard shortcuts for snapshot management
+(defonce snapshot-handlers-installed? (atom false))
+
+(defn install-snapshot-handlers!
+  "Install keyboard shortcuts for snapshot management"
+  []
+  (when-not @snapshot-handlers-installed?
+    (reset! snapshot-handlers-installed? true)
+    (.addEventListener js/document "keydown"
+      (fn [e]
+        ;; Ctrl+Shift+S to save snapshot
+        (when (and (.-ctrlKey e) (.-shiftKey e) (= (.-key e) "S"))
+          (.preventDefault e)
+          (let [description (js/prompt "Snapshot description:" 
+                                      (str "Snapshot at " (.toLocaleTimeString (js/Date.))))]
+            (when description
+              (save-snapshot! description))))
+        ;; Ctrl+Shift+L to load snapshot (prompts for ID)
+        (when (and (.-ctrlKey e) (.-shiftKey e) (= (.-key e) "L"))
+          (.preventDefault e)
+          (let [snapshot-id (js/prompt "Enter snapshot ID to load:")]
+            (when snapshot-id
+              (load-snapshot! snapshot-id))))))))
+
 ;; History/Time Travel Info
 (defn get-history-info!
   "Get information about the current session's history"
@@ -296,37 +380,64 @@
   ([opts]
    (when opts (configure! opts))
    
-   ;; Get initial state
-   (-> (js/fetch (str (:server-url @config) "/api/state?session=" (:session-id @config)))
-       (.then #(.json %))
-       (.then #(reset! app-db (js->clj % :keywordize-keys true))))
+   ;; Install snapshot keyboard handlers
+   (install-snapshot-handlers!)
    
-   ;; Set up SSE for real-time updates
-   (when @event-source
-     (.close @event-source))
-   
-   (let [es (js/EventSource. (str (:server-url @config) "/api/subscribe?session=" (:session-id @config)))]
-     (set! (.-onmessage es)
-           (fn [e]
-             (let [data (js->clj (js/JSON.parse (.-data e)) :keywordize-keys true)]
-               ;; Check if this is a full state update or a partial update
-               (if (:partial-update data)
-                 ;; Partial update - merge into existing state
-                 (do
-                   (js/console.log "[CLIENT] SSE partial update received for path:" (clj->js (:path data)))
-                   (if-let [path (:path data)]
-                     (swap! app-db assoc-in path (:value data))
-                     (js/console.warn "[CLIENT] Partial update missing path")))
-                 ;; Full state update (e.g., time travel, undo/redo)
-                 (do
-                   (js/console.log "[CLIENT] SSE full state received")
-                   (reset! app-db data))))
-             (reset! connected? true)))
-     (set! (.-onerror es)
-           (fn [e]
-             (reset! connected? false)
-             (js/console.error "Connection lost")))
-     (reset! event-source es))
+   ;; Check for snapshot parameter
+   (let [params (js/URLSearchParams. js/window.location.search)
+         snapshot-id (.get params "snapshot")
+         snapshot-mode? (boolean snapshot-id)
+         ;; Track if we should skip the first SSE message
+         skip-first-sse? (atom snapshot-mode?)]
+     
+     ;; Get initial state (or load snapshot)
+     (if snapshot-mode?
+       ;; Load snapshot 
+       (do
+         (js/console.log "[CLIENT] Loading from snapshot:" snapshot-id)
+         (-> (load-snapshot! snapshot-id)
+             (.catch (fn [err]
+                      (js/console.error "Failed to load snapshot, falling back to normal init:" err)
+                      ;; Fall back to normal state loading
+                      (-> (js/fetch (str (:server-url @config) "/api/state?session=" (:session-id @config)))
+                          (.then #(.json %))
+                          (.then #(reset! app-db (js->clj % :keywordize-keys true))))))))
+       ;; Get initial state normally
+       (-> (js/fetch (str (:server-url @config) "/api/state?session=" (:session-id @config)))
+           (.then #(.json %))
+           (.then #(reset! app-db (js->clj % :keywordize-keys true)))))
+     
+     ;; Set up SSE for real-time updates
+     (when @event-source
+       (.close @event-source))
+     
+     (let [es (js/EventSource. (str (:server-url @config) "/api/subscribe?session=" (:session-id @config)))]
+       (set! (.-onmessage es)
+             (fn [e]
+               (let [data (js->clj (js/JSON.parse (.-data e)) :keywordize-keys true)]
+                 ;; Skip first message if we're in snapshot mode
+                 (if @skip-first-sse?
+                   (do
+                     (js/console.log "[CLIENT] Skipping first SSE message in snapshot mode")
+                     (reset! skip-first-sse? false))
+                   ;; Process normally
+                   (if (:partial-update data)
+                     ;; Partial update - merge into existing state
+                     (do
+                       (js/console.log "[CLIENT] SSE partial update received for path:" (clj->js (:path data)))
+                       (if-let [path (:path data)]
+                         (swap! app-db assoc-in path (:value data))
+                         (js/console.warn "[CLIENT] Partial update missing path")))
+                     ;; Full state update (e.g., time travel, undo/redo)
+                     (do
+                       (js/console.log "[CLIENT] SSE full state received")
+                       (reset! app-db data))))
+                 (reset! connected? true))))
+       (set! (.-onerror es)
+             (fn [e]
+               (reset! connected? false)
+               (js/console.error "Connection lost")))
+       (reset! event-source es)))
    
    ;; Return the app-db for convenience
    app-db))

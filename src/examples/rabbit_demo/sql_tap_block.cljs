@@ -109,7 +109,7 @@
 (defn sql-tap-block [{:keys [id position size]}]
   (let [expanded-ids (reagent/atom #{})
         search-term (reagent/atom "")
-        auto-refresh? (reagent/atom true)
+        auto-refresh? (reagent/atom false)
         limit (reagent/atom 100)
         query-result (reagent/atom nil)
         loading? (reagent/atom false)
@@ -146,7 +146,7 @@
             (start-auto-refresh []
               (when @auto-refresh?
                 (when @refresh-timer (js/clearInterval @refresh-timer))
-                (reset! refresh-timer (js/setInterval refresh-data 2000))))
+                (reset! refresh-timer (js/setInterval refresh-data 5000))))
             
             (stop-auto-refresh []
               (when @refresh-timer 

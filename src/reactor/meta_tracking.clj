@@ -4,7 +4,7 @@
   (:require [reactor.xtdb-store :as xts]
             [reactor.session_simple :as session]
             [clojure.core.async :as async :refer [go-loop <! >! chan put!]]
-            [clojure.tools.logging :as log])
+            [reactor.log :as log])
   (:import [java.util UUID]
            [java.time Instant]))
 
@@ -28,9 +28,9 @@
           :event (process-event! event)
           :reaction (process-reaction! event)
           :performance (process-performance! event)
-          (log/warn "Unknown meta event type:" (:type event)))
+          (log/warn :meta (str "Unknown meta event type: " (:type event))))
         (catch Exception e
-          (log/error e "Error processing meta event:" event)))
+          (log/error :meta (str "Error processing meta event: " event) e)))
       (recur))))
 
 (defn- generate-id []
@@ -44,9 +44,9 @@
 (defn track-subscription-created!
   "Async track when a subscription is created"
   [sub-id session-id query tables]
-  (log/info "track-subscription-created! called for" sub-id "enabled?" @tracking-enabled?)
+  (log/debug :meta (str "track-subscription-created! called for " sub-id " enabled? " @tracking-enabled?))
   (when @tracking-enabled?
-    (log/info "Putting subscription event on channel for" sub-id)
+    (log/debug :meta (str "Putting subscription event on channel for " sub-id))
     (put! meta-channel
           {:type :subscription
            :action :created
@@ -124,14 +124,14 @@
 
 (defn- process-subscription! [{:keys [action sub-id session-id query tables timestamp 
                                     execution-time-ms result-count reason]}]
-  (log/info "Processing subscription meta-event:" action sub-id)
+  (log/debug :meta (str "Processing subscription meta-event: " action " " sub-id))
   (let [node @session/default-node]
-    (log/info "Node is:" (if node "available" "nil"))
+    (log/debug :meta (str "Node is: " (if node "available" "nil")))
     (when node
       (case action
         :created
         (do
-          (log/info "Inserting subscription record for" sub-id)
+          (log/debug :meta (str "Inserting subscription record for " sub-id))
           (try
             (let [result (xts/execute-sql node
                           "INSERT INTO reactor_subscriptions (_id, sub_id, session_id, query, tables, 
@@ -139,9 +139,9 @@
                                                               total_execution_time, last_updated)
                            VALUES (?, ?, ?, ?, ?, 'active', ?, 0, 0, ?)"
                           (generate-id) sub-id session-id query (pr-str tables) timestamp timestamp)]
-              (log/info "Insert result:" result))
+              (log/debug :meta (str "Insert result: " result)))
             (catch Exception e
-              (log/error e "Failed to insert subscription"))))
+              (log/error :meta "Failed to insert subscription" e))))
         
         :updated
         (try
@@ -153,9 +153,9 @@
                              last_updated = ?
                          WHERE sub_id = ?"
                         execution-time-ms result-count timestamp sub-id)]
-            (log/info "Update result for" sub-id ":" result))
+            (log/debug :meta (str "Update result for " sub-id ": " result)))
           (catch Exception e
-            (log/error e "Failed to update subscription" sub-id)))
+            (log/error :meta (str "Failed to update subscription " sub-id) e)))
         
         :removed
         (xts/execute-sql node
@@ -198,64 +198,64 @@
   "Create meta-tracking tables if they don't exist"
   []
   (let [node @session/default-node]
-    (log/info "Node for meta-tracking:" (if node (str "exists: " (type node)) "nil"))
+    (log/info :meta (str "Node for meta-tracking: " (if node (str "exists: " (type node)) "nil")))
     (when node
-      (log/info "Creating meta-tracking tables with node:" node)
+      (log/info :meta (str "Creating meta-tracking tables with node: " node))
       
       ;; Subscriptions table - XTDB 2.0 creates tables on first insert
       (try
-        (log/info "Initializing reactor_subscriptions table...")
+        (log/info :meta "Initializing reactor_subscriptions table...")
         ;; Insert a dummy row to create the table, then delete it
         (xts/execute-sql node
           "INSERT INTO reactor_subscriptions (_id, sub_id, session_id, query, tables, status, created_at, update_count, total_execution_time, last_updated)
            VALUES ('init-dummy', 'dummy', 'system', 'init', '[]', 'init', CURRENT_TIMESTAMP, 0, 0, CURRENT_TIMESTAMP)")
         (xts/execute-sql node
           "DELETE FROM reactor_subscriptions WHERE _id = 'init-dummy'")
-        (log/info "reactor_subscriptions table initialized")
+        (log/info :meta "reactor_subscriptions table initialized")
         (catch Exception e
-          (log/error e "Failed to initialize subscriptions table")))
+          (log/error :meta "Failed to initialize subscriptions table" e)))
       
       ;; Events table - XTDB 2.0 creates tables on first insert
       (try
-        (log/info "Initializing reactor_events table...")
+        (log/info :meta "Initializing reactor_events table...")
         (xts/execute-sql node
           "INSERT INTO reactor_events (_id, category, event_type, payload, session_id, created_at)
            VALUES ('init-dummy', 'system', 'init', '{}', 'system', CURRENT_TIMESTAMP)")
         (xts/execute-sql node
           "DELETE FROM reactor_events WHERE _id = 'init-dummy'")
-        (log/info "reactor_events table initialized")
+        (log/info :meta "reactor_events table initialized")
         (catch Exception e
-          (log/error e "Failed to initialize events table")))
+          (log/error :meta "Failed to initialize events table" e)))
       
       ;; Reactions table - XTDB 2.0 creates tables on first insert
       (try
-        (log/info "Initializing reactor_reactions table...")
+        (log/info :meta "Initializing reactor_reactions table...")
         (xts/execute-sql node
           "INSERT INTO reactor_reactions (_id, table_name, change_type, affected_subscriptions, triggered_at)
            VALUES ('init-dummy', 'system', 'init', '[]', CURRENT_TIMESTAMP)")
         (xts/execute-sql node
           "DELETE FROM reactor_reactions WHERE _id = 'init-dummy'")
-        (log/info "reactor_reactions table initialized")
+        (log/info :meta "reactor_reactions table initialized")
         (catch Exception e
-          (log/error e "Failed to initialize reactions table")))
+          (log/error :meta "Failed to initialize reactions table" e)))
       
       ;; Performance table - XTDB 2.0 creates tables on first insert
       (try
-        (log/info "Initializing reactor_performance table...")
+        (log/info :meta "Initializing reactor_performance table...")
         (xts/execute-sql node
           "INSERT INTO reactor_performance (_id, metric_type, query, execution_time_ms, result_count, measured_at)
            VALUES ('init-dummy', 'system', 'init', 0, 0, CURRENT_TIMESTAMP)")
         (xts/execute-sql node
           "DELETE FROM reactor_performance WHERE _id = 'init-dummy'")
-        (log/info "reactor_performance table initialized")
+        (log/info :meta "reactor_performance table initialized")
         (catch Exception e
-          (log/error e "Failed to initialize performance table")))
+          (log/error :meta "Failed to initialize performance table" e)))
       
-      (log/info "Meta-tracking tables ready"))))
+      (log/info :meta "Meta-tracking tables ready"))))
 
 ;; Initialize on namespace load
 (defn init!
   "Initialize meta-tracking system"
   []
   (ensure-meta-tables!)
-  (log/info "Meta-tracking system initialized"))
+  (log/info :meta "Meta-tracking system initialized"))

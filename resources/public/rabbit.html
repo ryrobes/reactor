@@ -185,6 +185,45 @@
     <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
     <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
     <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+    <!-- Mermaid for diagram rendering -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        // Wait for mermaid to load
+        window.addEventListener('load', function() {
+            if (window.mermaid) {
+                mermaid.initialize({ 
+                    startOnLoad: false,
+                    theme: 'dark',
+                    themeVariables: {
+                        primaryColor: '#1a1a1a',
+                        primaryTextColor: '#00ff9f',
+                        primaryBorderColor: '#00ff9f',
+                        lineColor: '#00ff9f',
+                        secondaryColor: '#9933ff',
+                        tertiaryColor: '#333',
+                        background: '#0a0a0a',
+                        mainBkg: '#1a1a1a',
+                        secondBkg: '#2a2a2a',
+                        tertiaryBkg: '#333',
+                        textColor: '#00ffd4',
+                        edgeLabelBackground: '#9933ff',
+                        nodeBkg: '#1a1a1a',
+                        nodeBorder: '#00ff9f',
+                        clusterBkg: '#2a2a2a',
+                        clusterBorder: '#00ff9f',
+                        defaultLinkColor: '#00ff9f'
+                    },
+                    flowchart: {
+                        htmlLabels: true,
+                        curve: 'linear',
+                        nodeSpacing: 50,
+                        rankSpacing: 100
+                    }
+                });
+                console.log('Mermaid initialized');
+            }
+        });
+    </script>
 </head>
 <body>
     <div id="app">
