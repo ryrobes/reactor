@@ -11,6 +11,7 @@
             [org.httpkit.server :as http-server]
             [clojure.tools.logging :as log]
             [clojure.string :as str]
+            [clojure.set :as set]
             [clojure.core.async :as async :refer [go go-loop chan <! >! close! timeout]]))
 
 ;; ============================================================================
@@ -162,13 +163,14 @@
 
 (defn register-query-subscription!
   "Register a SQL query subscription that will be re-executed on relevant changes."
-  [sub-id sql params callback session-id]
+  [sub-id sql params callback session-id & [client-id]]
   (let [tables (extract-tables-from-sql sql)
         sub-info {:query sql
                   :params params
                   :tables tables
                   :callback callback
-                  :session-id session-id}]
+                  :session-id session-id
+                  :client-id client-id}]
     (swap! active-subscriptions assoc sub-id sub-info)
     ;; Update table index
     (doseq [table tables]
@@ -214,6 +216,97 @@
 (defonce metrics-cache (atom {}))
 (defonce cache-cleanup-executor (atom nil))
 
+;; Cache for last sent results to enable diff mode
+;; {[session-id subscription-id] -> {:results [...] :structure {...} :checksum ... :timestamp ...}}
+(defonce client-result-cache (atom {}))
+
+;; Configuration for diff mode
+(defonce diff-config 
+  (atom {:enabled true
+         :max-result-size 1000  ; Don't diff if more than N rows
+         :min-compression-ratio 0.7  ; Send full if diff > 70% of original
+         :structure-check true}))  ; Verify structure before diffing
+
+(defn extract-row-structure
+  "Extract the structure (field names and types) from results"
+  [results]
+  (when (seq results)
+    (let [first-row (first results)]
+      {:fields (set (keys first-row))
+       :field-count (count first-row)})))
+
+(defn same-structure?
+  "Check if two result sets have the same structure"
+  [old-structure new-structure]
+  (and old-structure
+       new-structure
+       (= (:fields old-structure) (:fields new-structure))
+       (= (:field-count old-structure) (:field-count new-structure))))
+
+(defn compute-row-diff
+  "Compute diff between old and new SQL results
+   Returns nil if diff is not efficient"
+  [old-results new-results]
+  (try
+    (let [;; Find the ID column - prefer _id, id, or first column
+          id-key (or (some #{:_id :id "_id" "id"} (keys (first new-results)))
+                     (first (keys (first new-results))))
+          ;; Index by ID
+          old-by-id (if id-key
+                      (into {} (map (juxt id-key identity) old-results))
+                      {})
+          new-by-id (if id-key
+                      (into {} (map (juxt id-key identity) new-results))
+                      {})
+          old-ids (set (keys old-by-id))
+          new-ids (set (keys new-by-id))
+          ;; Compute changes
+          added-ids (set/difference new-ids old-ids)
+          removed-ids (set/difference old-ids new-ids)
+          updated-ids (for [id (set/intersection old-ids new-ids)
+                           :let [old-row (old-by-id id)
+                                 new-row (new-by-id id)]
+                           :when (not= old-row new-row)]
+                       id)
+          ;; Build diff
+          diff {:type :row-diff
+                :id-key id-key
+                :added (map new-by-id added-ids)
+                :removed removed-ids
+                :updated (for [id updated-ids]
+                          {:id id 
+                           :new-values (new-by-id id)})
+                ;; Include order only if it changed
+                :order (let [old-order (mapv id-key old-results)
+                            new-order (mapv id-key new-results)]
+                        (when (not= old-order new-order)
+                          new-order))}
+          ;; Calculate efficiency
+          diff-size (+ (count added-ids)
+                      (count removed-ids)
+                      (count updated-ids))
+          total-size (count new-results)
+          has-changes? (pos? diff-size)
+          compression-ratio (if (zero? total-size)
+                             1.0  ; Empty result set - use full update
+                             (/ diff-size total-size))]
+      
+      (log/info "[DIFF] Computed diff - added:" (count added-ids) 
+               "removed:" (count removed-ids)
+               "updated:" (count updated-ids)
+               "total:" total-size
+               "compression:" compression-ratio
+               "has-changes:" has-changes?)
+      
+      ;; Return diff only if it's efficient AND there are actual changes
+      ;; Don't send empty diffs (compression 0)
+      (when (and has-changes?
+                (< compression-ratio (:min-compression-ratio @diff-config)))
+        (assoc diff :compression-ratio compression-ratio)))
+    (catch Exception e
+      (log/warn "Failed to compute diff:" e)
+      nil)))
+
 (defn cleanup-metrics-cache!
   "Remove old entries from metrics cache (older than 1 hour)"
   []
@@ -224,6 +317,13 @@
                    (filter (fn [[[_ _ timestamp] _]]
                             (or (nil? timestamp)
                                 (> timestamp cutoff)))
+                          cache))))
+    ;; Also cleanup client result cache
+    (swap! client-result-cache
+           (fn [cache]
+             (into {}
+                   (filter (fn [[_ v]]
+                            (> (:timestamp v) cutoff))
                           cache))))))
 
 (defn start-cache-cleanup!
@@ -267,17 +367,70 @@
                                                  :data-size data-size
                                                  :execution-time execution-time})
               ;; Use client-id if available, otherwise fall back to sub-id
-              subscription-id (or client-id sub-id)]
-          (log/info "[KAFKA-REACTIVE] Query executed for" sub-id "sending as" subscription-id 
-                   "got" result-count "results, size:" data-size "chars")
+              subscription-id (or client-id sub-id)
+              
+              ;; Diff mode logic - include query in cache key to avoid collisions
+              client-cache-key [session-id subscription-id query]
+              cached-data (get @client-result-cache client-cache-key)
+              new-structure (extract-row-structure results)
+              
+              ;; Determine if we should send diff or full
+              should-diff? (and (:enabled @diff-config)
+                               cached-data
+                               (:results cached-data)  ;; Must have previous results
+                               (< result-count (:max-result-size @diff-config))
+                               (same-structure? (:structure cached-data) new-structure))
+              
+              ;; Compute diff if applicable
+              diff-result (when should-diff?
+                           (compute-row-diff (:results cached-data) results))
+              
+              ;; Decide what to send
+              message (if diff-result
+                       ;; Send diff
+                       (do
+                         (log/info "[KAFKA-REACTIVE] Sending DIFF update for" subscription-id 
+                                  "compression:" (:compression-ratio diff-result)
+                                  "added:" (count (:added diff-result))
+                                  "removed:" (count (:removed diff-result))
+                                  "updated:" (count (:updated diff-result)))
+                         {:subscription-id subscription-id
+                          :session-id session-id
+                          :query query
+                          :type :diff-update
+                          :diff diff-result
+                          :checksum (hash results)
+                          :metrics (:metrics result-with-metrics)})
+                       ;; Send full results
+                       (do
+                         (log/info "[KAFKA-REACTIVE] Sending FULL update for" subscription-id
+                                  "reason:" (cond
+                                            (not (:enabled @diff-config)) "diff-disabled"
+                                            (not cached-data) "initial"
+                                            (>= result-count (:max-result-size @diff-config)) "too-many-rows"
+                                            (not (same-structure? (:structure cached-data) new-structure)) "structure-changed"
+                                            :else "diff-inefficient"))
+                         {:subscription-id subscription-id
+                          :session-id session-id
+                          :query query
+                          :type :full-update
+                          :result result-with-metrics
+                          :checksum (hash results)}))]
+          
+          ;; Update cache for next diff
+          (swap! client-result-cache assoc client-cache-key
+                {:results results
+                 :structure new-structure
+                 :checksum (hash results)
+                 :timestamp (System/currentTimeMillis)})
+          
           ;; Track subscription update
           (meta/track-subscription-updated! sub-id execution-time result-count)
           ;; Track query performance
           (meta/track-query-performance! query execution-time result-count)
-          (callback {:subscription-id subscription-id
-                    :session-id session-id
-                    :query query
-                    :result result-with-metrics}))
+          
+          ;; Send the message
+          (callback message))
         (log/warn "[KAFKA-REACTIVE] No XTDB node available for re-execution"))
       (catch Exception e
         (log/error e "[KAFKA-REACTIVE] Error re-executing subscription" sub-id)))
@@ -544,14 +697,22 @@
 (defn create-subscription-callback
   "Create a callback that pushes query results via SSE."
   [session-id]
-  (fn [{:keys [subscription-id query result]}]
-    (log/debug "Pushing update for subscription" subscription-id "to session" session-id)
-    (push-to-session session-id
-                    {:type :query-update
-                     :subscription-id subscription-id
-                     :query query
-                     :result result
-                     :timestamp (System/currentTimeMillis)})))
+  (fn [message]
+    ;; Check if this is a new-style message (already formatted) or old-style
+    (if (contains? message :type)
+      ;; New style - pass through as-is
+      (do
+        (log/debug "Pushing" (:type message) "for subscription" (:subscription-id message) "to session" session-id)
+        (push-to-session session-id message))
+      ;; Old style - wrap in legacy format
+      (let [{:keys [subscription-id query result]} message]
+        (log/debug "Pushing legacy update for subscription" subscription-id "to session" session-id)
+        (push-to-session session-id
+                        {:type :query-update
+                         :subscription-id subscription-id
+                         :query query
+                         :result result
+                         :timestamp (System/currentTimeMillis)})))))
 
 (defn register-keypath-subscription!
   "Register that a session has keypath subscriptions to todo_sessions table"

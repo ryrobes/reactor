@@ -611,6 +611,82 @@
 
 
 
+(defn apply-row-diff!
+  "Apply a row diff to the current result atom data"
+  [result-atom diff new-checksum metrics]
+  (try
+    (swap! result-atom
+           (fn [{:keys [data] :as current}]
+             (let [;; Get ID key from diff
+                   id-key (:id-key diff)
+                   ;; Helper to safely get ID from a row  
+                   get-id (fn [row]
+                           ;; Try multiple ways to get the ID
+                           (cond
+                             ;; If id-key is a keyword, use it directly
+                             (keyword? id-key) (get row id-key)
+                             ;; If id-key is a string, try both string and keyword versions
+                             (string? id-key) (or (get row id-key)
+                                                 (get row (keyword id-key)))
+                             ;; Fallback
+                             :else (get row id-key)))
+                   ;; Index current data by ID
+                   indexed (if (and id-key data)
+                            (reduce (fn [acc row]
+                                     (if-let [id (get-id row)]
+                                       (assoc acc id row)
+                                       acc))
+                                   {}
+                                   data)
+                            {})
+                   ;; Apply removals
+                   after-remove (apply dissoc indexed (:removed diff))
+                   ;; Apply additions  
+                   after-add (reduce (fn [acc row]
+                                      (if-let [id (get-id row)]
+                                        (assoc acc id row)
+                                        acc))
+                                    after-remove
+                                    (:added diff))
+                   ;; Apply updates
+                   after-update (reduce (fn [acc {:keys [id new-values]}]
+                                         (assoc acc id new-values))
+                                       after-add
+                                       (:updated diff))
+                   ;; Apply order if provided, otherwise use values
+                   final-data (if-let [order (:order diff)]
+                               (mapv after-update order)
+                               (vals after-update))]
+               (js/console.log "[CLIENT] Diff applied - added:" (count (:added diff))
+                              "removed:" (count (:removed diff)) 
+                              "updated:" (count (:updated diff))
+                              "final count:" (count final-data))
+               (assoc current 
+                     :data final-data
+                     :loading false
+                     :checksum new-checksum
+                     :metrics metrics))))
+    ;; Store the new checksum for validation
+    (swap! sql-subscriptions 
+           (fn [subs]
+             (reduce-kv (fn [acc sub-id sub]
+                         (if (= (:result-atom sub) result-atom)
+                           (assoc-in acc [sub-id :last-checksum] new-checksum)
+                           acc))
+                       subs
+                       subs)))
+    (catch :default e
+      (js/console.error "[CLIENT] Error applying diff:" e)
+      ;; On error, request full refresh by clearing checksum
+      (swap! sql-subscriptions 
+             (fn [subs]
+               (reduce-kv (fn [acc sub-id sub]
+                           (if (= (:result-atom sub) result-atom)
+                             (update acc sub-id dissoc :last-checksum)
+                             acc))
+                         subs
+                         subs))))))
+
 (defn ensure-sql-sse-connection!
   "Ensure we have a single SSE connection for SQL subscriptions"
   []
@@ -626,25 +702,53 @@
               (let [data (js->clj (js/JSON.parse (.-data e)) :keywordize-keys true)]
                 ;(js/console.log "[CLIENT] SSE SQL update received:" (clj->js data))
                 ;(js/console.log "[CLIENT] Message type:" (:type data) "is keyword?" (keyword? (:type data)))
-                ;; Skip "connected" messages - only process query updates
-                ;; Handle both keyword and string types (JSON serialization converts keywords to strings)
-                (when (or (= (:type data) :query-update)
-                          (= (:type data) "query-update"))
+                ;; Handle different message types
+                (cond
+                  ;; Full update (initial or fallback)
+                  (or (= (:type data) :full-update)
+                      (= (:type data) "full-update"))
                   (when-let [sub-id (:subscription-id data)]
-                    ;; Just try direct lookup - keep it simple
                     (if-let [sub (get @sql-subscriptions sub-id)]
                       (do
-                        (js/console.log "[CLIENT] Found subscription, updating result atom for" sub-id)
-                        ;; Update the result atom
+                        (js/console.log "[CLIENT] Received full update for" sub-id)
+                        ;; Store checksum for validation
+                        (swap! sql-subscriptions assoc-in [sub-id :last-checksum] (:checksum data))
+                        ;; Update the result atom with full data
+                        (reset! (:result-atom sub)
+                                (if (:error (:result data))
+                                  {:error (:error (:result data)) :loading false :executed-sql (:executed-sql (:result data))}
+                                  {:data (:results (:result data)) 
+                                   :loading false 
+                                   :executed-sql (:executed-sql (:result data))
+                                   :metrics (:metrics (:result data))}))
+                        (js/console.log "[CLIENT] Full update applied -" (count (:results (:result data))) "results"))
+                      (js/console.warn "[CLIENT] No subscription found for ID:" sub-id)))
+                  
+                  ;; Diff update
+                  (or (= (:type data) :diff-update)
+                      (= (:type data) "diff-update"))
+                  (when-let [sub-id (:subscription-id data)]
+                    (if-let [sub (get @sql-subscriptions sub-id)]
+                      (do
+                        (js/console.log "[CLIENT] Received diff update for" sub-id 
+                                       "compression:" (get-in data [:diff :compression-ratio]))
+                        ;; Apply diff to current data
+                        (apply-row-diff! (:result-atom sub) (:diff data) (:checksum data) (:metrics data)))
+                      (js/console.warn "[CLIENT] No subscription found for diff ID:" sub-id)))
+                  
+                  ;; Legacy query-update (backward compatibility)
+                  (or (= (:type data) :query-update)
+                      (= (:type data) "query-update"))
+                  (when-let [sub-id (:subscription-id data)]
+                    (if-let [sub (get @sql-subscriptions sub-id)]
+                      (do
+                        (js/console.log "[CLIENT] Found subscription (legacy), updating result atom for" sub-id)
                         (reset! (:result-atom sub)
                                 (if (:error (:result data))
                                   {:error (:error (:result data)) :loading false :executed-sql (:executed-sql (:result data))}
                                   {:data (:results (:result data)) :loading false :executed-sql (:executed-sql (:result data))}))
                         (js/console.log "[CLIENT] Result atom updated with" (count (:results (:result data))) "results"))
-                      (do
-                        (js/console.warn "[CLIENT] No subscription found for ID:" sub-id)
-                        ;(js/console.log "[CLIENT] Available subscription IDs:" (clj->js (keys @sql-subscriptions)))
-                        )))))))
+                      (js/console.warn "[CLIENT] No subscription found for ID:" sub-id)))))))
       
       ;; Handle errors
       (set! (.-onerror es)

@@ -477,8 +477,8 @@
             chart-data (:results source-results)
             _ (when (and source-id source-results)
                 (js/console.log "[CHART-BLOCK]" id "connected to" source-id 
-                               "source-results:" (clj->js source-results)
-                               "chart-data:" (clj->js chart-data)
+                               ;"source-results:" (clj->js source-results)
+                               ;"chart-data:" (clj->js chart-data)
                                "chart-data count:" (count chart-data)))]
     [:div.block.chart-block
      {:style {:position "absolute"
