@@ -3,6 +3,7 @@
   (:require [reactor.core :as r]
             [reagent.core :as reagent]
             [reactor.tap :as t]
+            [reactor.console-tap :as console-tap]
             [reagent.dom :as rdom]
             [clojure.string :as str]
             [clojure.pprint :as pprint]
@@ -246,12 +247,12 @@
       [:div {:style {:display "flex" :align-items "center" :gap "10px"}}
        [:span {:style {:font-weight "bold" 
                        :color "#00ff9f"
-                       :font-family "monospace"
+                       :font-family "'JetBrains Mono', monospace"
                        :text-transform "uppercase"
                        :font-size "11px"
                        :letter-spacing "1px"}} "SQL QUERY"]
        [:span {:style {:color "#8ff0a4"
-                       :font-family "monospace"
+                       :font-family "'JetBrains Mono', monospace"
                        :font-size "9px"
                        :opacity 0.7}} 
         (str "#" id)]]
@@ -278,7 +279,7 @@
                         :border-radius "4px 4px 0 0"
                         :padding "4px 8px"
                         :font-size "10px"
-                        :font-family "monospace"
+                        :font-family "'JetBrains Mono', monospace"
                         :color "#00ff9f"
                         :display "flex"
                         :align-items "center"
@@ -357,7 +358,7 @@
                      :border "1px solid rgba(255,0,0,0.3)"
                      :border-radius "4px"
                      :color "#ff6b6b"
-                     :font-family "monospace"
+                     :font-family "'JetBrains Mono', monospace"
                      :font-size "11px"}}
         error])]  ;; Close fixed-content div
      (when results
@@ -426,7 +427,7 @@
                               :padding "4px"
                               :color "#00ff9f"
                               :border-bottom "1px solid rgba(0,255,159,0.2)"
-                              :font-family "monospace"
+                              :font-family "'JetBrains Mono', monospace"
                               :text-transform "uppercase"
                               :font-size "10px"}} (name col)])]]
              [:tbody
@@ -437,7 +438,7 @@
                    ^{:key col}
                    [:td {:style {:padding "4px"
                                 :color "#8ff0a4"
-                                :font-family "monospace"
+                                :font-family "'JetBrains Mono', monospace"
                                 :font-size "10px"
                                 :overflow "hidden"
                                 :text-overflow "ellipsis"
@@ -468,16 +469,17 @@
             actual-size (if (or is-resizing? (get @local-sizes id))
                           (get @local-sizes id size)
                           size)
-            source-block (when source-id @(r/subscribe [:block source-id]))
+            ;source-block (when source-id @(r/subscribe [:block source-id]))
             #_ (println "SOURCE BLOCK" source-block source-id (rq/get-block-results source-id) (keys @rq/block-results))
             ;; Get results from reactive-queries for the source block - exactly like query block does it!
             source-results (when source-id (rq/get-block-results source-id))
             ;; Extract the data - this should be the same as what the query block shows
             chart-data (:results source-results)
-            _ (when source-id
+            _ (when (and source-id source-results)
                 (js/console.log "[CHART-BLOCK]" id "connected to" source-id 
                                "source-results:" (clj->js source-results)
-                               "chart-data:" (clj->js chart-data)))]
+                               "chart-data:" (clj->js chart-data)
+                               "chart-data count:" (count chart-data)))]
     [:div.block.chart-block
      {:style {:position "absolute"
               :left (:x actual-pos)
@@ -514,7 +516,7 @@
        :on-mouse-down #(start-drag! id %)}
       [:span {:style {:font-weight "bold" 
                       :color "#ff006e"
-                      :font-family "monospace"
+                      :font-family "'JetBrains Mono', monospace"
                       :text-transform "uppercase"
                       :font-size "11px"
                       :letter-spacing "1px"}} "CHART"]
@@ -530,17 +532,17 @@
      [:div {:style {:margin "10px 0"}}
       [:div {:style {:display "flex" :align-items "center" :gap "10px"}}
        [:label {:style {:color "#ff006e"
-                        :font-family "monospace"
+                        :font-family "'JetBrains Mono', monospace"
                         :font-size "10px"
                         :text-transform "uppercase"}}
         "Source:"]
        (if source-id
          [:span {:style {:color "#ff4f99"
-                        :font-family "monospace"
+                        :font-family "'JetBrains Mono', monospace"
                         :font-size "11px"}} 
           (str "#" source-id)]
          [:span {:style {:color "#ff4f99"
-                        :font-family "monospace"
+                        :font-family "'JetBrains Mono', monospace"
                         :font-size "11px"
                         :opacity 0.5}} 
           "Not connected"])]
@@ -554,7 +556,7 @@
                        :border "1px solid #ff006e"
                        :border-radius "2px"
                        :cursor "pointer"
-                       :font-family "monospace"
+                       :font-family "'JetBrains Mono', monospace"
                        :font-size "10px"
                        :text-transform "uppercase"
                        :letter-spacing "1px"}
@@ -636,7 +638,7 @@
              :on-mouse-down #(start-drag! id %)}
             [:span {:style {:font-weight "bold" 
                             :color "#ffb700"
-                            :font-family "monospace"
+                            :font-family "'JetBrains Mono', monospace"
                             :text-transform "uppercase"
                             :font-size "11px"
                             :letter-spacing "1px"}} "SQL EXECUTE"]
@@ -689,7 +691,7 @@
                            :border "1px solid rgba(255,0,0,0.3)"
                            :border-radius "4px"
                            :color "#ff6b6b"
-                           :font-family "monospace"
+                           :font-family "'JetBrains Mono', monospace"
                            :font-size "11px"}}
               error])
            ;; Success result display
@@ -700,7 +702,7 @@
                            :border "1px solid rgba(255,183,0,0.3)"
                            :border-radius "4px"
                            :color "#ffb700"
-                           :font-family "monospace"
+                           :font-family "'JetBrains Mono', monospace"
                            :font-size "11px"}}
               (str "Success: " result)])]))})))  ; Close reagent-render and create-class
 
@@ -801,7 +803,7 @@
             [:div {:style {:display "flex" :align-items "center" :gap "10px"}}
              [:span {:style {:font-weight "bold" 
                              :color "#9b59b6"
-                             :font-family "monospace"
+                             :font-family "'JetBrains Mono', monospace"
                              :text-transform "uppercase"
                              :font-size "11px"
                              :letter-spacing "1px"}} "REACTOR DEBUG"]
@@ -810,7 +812,7 @@
                                :border "1px solid rgba(155,89,182,0.3)"
                                :border-radius "2px"
                                :padding "2px 5px"
-                               :font-family "monospace"
+                               :font-family "'JetBrains Mono', monospace"
                                :font-size "10px"
                                :cursor "pointer"}
                        :value (name @local-mode)
@@ -862,7 +864,7 @@
                            :align-items "center"
                            :justify-content "center"
                            :color "#9b59b6"
-                           :font-family "monospace"}}
+                           :font-family "'JetBrains Mono', monospace"}}
               "Loading..."]
              
              error
@@ -872,7 +874,7 @@
                            :border "1px solid rgba(255,0,0,0.3)"
                            :border-radius "4px"
                            :color "#ff6b6b"
-                           :font-family "monospace"
+                           :font-family "'JetBrains Mono', monospace"
                            :font-size "11px"}}
               error]
              
@@ -898,7 +900,7 @@
                                 :padding "4px"
                                 :color "#9b59b6"
                                 :border-bottom "1px solid rgba(155,89,182,0.2)"
-                                :font-family "monospace"
+                                :font-family "'JetBrains Mono', monospace"
                                 :text-transform "uppercase"
                                 :font-size "9px"}} (name col)])]]
                [:tbody
@@ -909,7 +911,7 @@
                      ^{:key col}
                      [:td {:style {:padding "4px"
                                   :color "#d8b4fe"
-                                  :font-family "monospace"
+                                  :font-family "'JetBrains Mono', monospace"
                                   :font-size "9px"
                                   :overflow "hidden"
                                   :text-overflow "ellipsis"
@@ -922,7 +924,7 @@
                            :align-items "center"
                            :justify-content "center"
                            :color "#9b59b6"
-                           :font-family "monospace"
+                           :font-family "'JetBrains Mono', monospace"
                            :opacity 0.5
                            :flex-direction "column"
                            :gap "10px"}}
@@ -944,7 +946,7 @@
                            :align-items "center"
                            :justify-content "center"
                            :color "#9b59b6"
-                           :font-family "monospace"
+                           :font-family "'JetBrains Mono', monospace"
                            :opacity 0.5}}
               "Loading..."])]))})))
 
@@ -1016,20 +1018,21 @@
                      (r/dispatch! [:update-block (:source-id conn) {:source-id id}])
                      (reset! connection-mode nil)))}
       [:span {:style {:color "#00ffd4"
-                      :font-family "monospace"
+                      :font-family "'JetBrains Mono', monospace"
                       :font-size "12px"
                       :text-transform "uppercase"
                       :letter-spacing "1px"}}
        "EDN BROWSER"]
-      [:button {:style {:padding "2px 6px"
-                        :background "transparent"
+      [:button {:style {:background "none"
+                        :border "none"
                         :color "#00ffd4"
-                        :border "1px solid #00ffd4"
-                        :border-radius "2px"
                         :cursor "pointer"
-                        :font-size "10px"
-                        :font-family "monospace"}
-                :on-click #(r/dispatch! [:remove-block id])}
+                        :font-size "20px"
+                        :line-height "20px"
+                        :padding "0 5px"}
+                :on-click (fn [e]
+                           (.stopPropagation ^js e)
+                           (r/dispatch! [:delete-block id]))}
        "×"]]
      ;; Connection status
      (if source-id
@@ -1076,7 +1079,7 @@
                           :align-items "center"
                           :gap "5px"}}
             [:span {:style {:color "#00ffd4"
-                            :font-family "monospace"
+                            :font-family "'JetBrains Mono', monospace"
                             :font-size "10px"
                             :opacity 0.7}}
              "FIELD:"]
@@ -1085,7 +1088,7 @@
                               :border "1px solid rgba(0,255,212,0.3)"
                               :border-radius "2px"
                               :padding "2px 5px"
-                              :font-family "monospace"
+                              :font-family "'JetBrains Mono', monospace"
                               :font-size "10px"
                               :cursor "pointer"}
                       :value current-field-index
@@ -1101,7 +1104,7 @@
                           :align-items "center"
                           :gap "5px"}}
             [:span {:style {:color "#00ffd4"
-                            :font-family "monospace"
+                            :font-family "'JetBrains Mono', monospace"
                             :font-size "10px"
                             :opacity 0.7}}
              "ROW:"]
@@ -1110,7 +1113,7 @@
                               :border "1px solid rgba(0,255,212,0.3)"
                               :border-radius "2px"
                               :padding "2px 5px"
-                              :font-family "monospace"
+                              :font-family "'JetBrains Mono', monospace"
                               :font-size "10px"
                               :cursor "pointer"}
                       :value current-row-index
@@ -1134,7 +1137,7 @@
                              :border-radius "2px 0 0 2px"
                              :cursor "pointer"
                              :font-size "9px"
-                             :font-family "monospace"}
+                             :font-family "'JetBrains Mono', monospace"}
                      :on-click #(reset! local-view-mode :monaco)}
             "CODE"]
            [:button {:style {:padding "3px 8px"
@@ -1146,7 +1149,7 @@
                              :border-radius "0 2px 2px 0"
                              :cursor "pointer"
                              :font-size "9px"
-                             :font-family "monospace"
+                             :font-family "'JetBrains Mono', monospace"
                              :margin-left "-1px"}
                      :on-click #(reset! local-view-mode :tree)}
             "TREE"]
@@ -1161,7 +1164,7 @@
                               :border "1px solid rgba(0,255,212,0.2)"
                               :border-radius "2px"
                               :padding "2px 5px"
-                              :font-family "monospace"
+                              :font-family "'JetBrains Mono', monospace"
                               :font-size "9px"
                               :outline "none"}
                       :on-change #(reset! search-term (.. % -target -value))}])]
@@ -1184,7 +1187,7 @@
                             :justify-content "center"
                             :height "100%"
                             :color "#00ffd4"
-                            :font-family "monospace"
+                            :font-family "'JetBrains Mono', monospace"
                             :opacity 0.5}}
               "No data"]
              
@@ -1214,7 +1217,7 @@
                       :justify-content "center"
                       :gap "10px"}}
         [:div {:style {:color "#00ffd4"
-                       :font-family "monospace"
+                       :font-family "'JetBrains Mono', monospace"
                        :font-size "11px"
                        :opacity 0.7}}
          "Not connected to a query block"]
@@ -1224,7 +1227,7 @@
                           :border "1px solid #00ffd4"
                           :border-radius "2px"
                           :cursor "pointer"
-                          :font-family "monospace"
+                          :font-family "'JetBrains Mono', monospace"
                           :font-size "10px"}
                   :on-click (fn []
                               (reset! connection-mode {:source-id id}))}
@@ -1386,7 +1389,8 @@
               :overview
               [:div
                ;; Rules list with stats
-               (for [rule @rules-data]
+               (doall 
+                (for [rule @rules-data]
                  (let [rule-id (:rule_id rule)
                        stats (get @exec-stats rule-id)
                        success-rate (if (and stats (> (:execution_count stats) 0))
@@ -1427,7 +1431,7 @@
                     [:div {:style {:margin-top "5px"
                                   :font-size "10px"
                                   :color "#aaa"}}
-                     (:description rule)]]))]
+                     (:description rule)]])))]
               
               :cascade
               [:div {:style {:padding "10px"}}
@@ -1529,7 +1533,7 @@
                                     :background "rgba(0,0,0,0.5)"
                                     :border-radius "4px"
                                     :color "#00ffd4"
-                                    :font-family "monospace"
+                                    :font-family "'JetBrains Mono', monospace"
                                     :font-size "10px"
                                     :white-space "pre-wrap"
                                     :overflow-x "auto"}}
@@ -1583,7 +1587,7 @@
                                       :overflow-y "auto"}}
                          [:pre {:style {:margin 0
                                        :color "#00ffd4"
-                                       :font-family "monospace"
+                                       :font-family "'JetBrains Mono', monospace"
                                        :font-size "11px"
                                        :white-space "pre"
                                        :overflow-x "auto"}}
@@ -1604,7 +1608,7 @@
                                       :overflow-y "auto"}}
                          [:pre {:style {:margin 0
                                        :color "#00ffd4"
-                                       :font-family "monospace"
+                                       :font-family "'JetBrains Mono', monospace"
                                        :font-size "11px"
                                        :white-space "pre"
                                        :overflow-x "auto"}}
@@ -1651,7 +1655,7 @@
                   :on-mouse-down #(start-resize! id %)}]]]))})))
 
 (defn render-block [block]
-  (js/console.log "Rendering block:" (clj->js block) "Type:" (:type block))
+  ;(js/console.log "Rendering block:" (clj->js block) "Type:" (:type block))
   (let [block-type (if (string? (:type block))
                      (keyword (:type block))
                      (:type block))]
@@ -1681,6 +1685,7 @@
                            :border "1px solid #8a2be2"
                            :border-radius "4px"
                            :box-shadow "0 4px 20px rgba(138,43,226,0.3)"
+                           :z-index 10
                            :display "flex"
                            :flex-direction "column"
                            :transition (when-not (or is-dragging? is-resizing?)
@@ -1696,7 +1701,7 @@
                             :align-items "center"}
                     :on-mouse-down #(start-drag! (:id block) %)}
                    [:span {:style {:color "#8a2be2"
-                                   :font-family "monospace"
+                                   :font-family "'JetBrains Mono', monospace"
                                    :text-transform "uppercase"
                                    :font-size "11px"
                                    :letter-spacing "1px"}} "IFRAME"]
@@ -1742,6 +1747,7 @@
                        :border "1px solid #ff4f99"
                        :border-radius "4px"
                        :box-shadow "0 4px 20px rgba(255,79,153,0.3)"
+                       :z-index 10
                        :display "flex"
                        :flex-direction "column"
                        :transition (when-not (or is-dragging? is-resizing?)
@@ -1751,13 +1757,21 @@
                {:style {:padding "10px"
                         :background "rgba(255,79,153,0.1)"
                         :border-bottom "1px solid rgba(255,79,153,0.3)"
-                        :cursor "move"
+                        :cursor (if @connection-mode "pointer" "move")
                         :display "flex"
                         :justify-content "space-between"
                         :align-items "center"}
-                :on-mouse-down #(start-drag! (:id block) %)}
+                :on-mouse-down (fn [e]
+                                (when-not @connection-mode
+                                  (start-drag! (:id block) e)))
+                :on-click (fn [e]
+                           (when-let [conn @connection-mode]
+                             (.stopPropagation ^js e)
+                             ;; Update the block that initiated connection to link to this TAP block
+                             (r/dispatch! [:update-block (:source-id conn) {:source-id (:id block)}])
+                             (reset! connection-mode nil)))}
                [:span {:style {:color "#ff4f99"
-                               :font-family "monospace"
+                               :font-family "'JetBrains Mono', monospace"
                                :text-transform "uppercase"
                                :font-size "11px"
                                :letter-spacing "1px"}} "TAP"]
@@ -1773,7 +1787,7 @@
               [:div {:style {:flex 1
                              :overflow "hidden"
                              :display "flex"}}
-               [sql-tap-block/sql-tap-block block]]
+               [sql-tap-block/sql-tap-block (assoc block :connection-mode connection-mode)]]
               ;; Resize handle
               [:div.resize-handle
                {:style {:position "absolute"
@@ -1803,6 +1817,7 @@
                              :border "1px solid #00ff9f"
                              :border-radius "4px"
                              :box-shadow "0 4px 20px rgba(0,255,159,0.3)"
+                             :z-index 10
                              :display "flex"
                              :flex-direction "column"
                              :transition (when-not (or is-dragging? is-resizing?)
@@ -1818,7 +1833,7 @@
                               :align-items "center"}
                       :on-mouse-down #(start-drag! (:id block) %)}
                      [:span {:style {:color "#00ff9f"
-                                     :font-family "monospace"
+                                     :font-family "'JetBrains Mono', monospace"
                                      :text-transform "uppercase"
                                      :font-size "11px"
                                      :letter-spacing "1px"}} "RULES"]
@@ -1925,7 +1940,7 @@
                                      :x2 (+ (:x target-pos) (/ (:width target-size) 2))
                                      :y2 (+ (:y target-pos) (/ (:height target-size) 2))
                                      :stroke "#00ff9f"
-                                     :stroke-width "3"
+                                     :stroke-width 4
                                      :opacity 1}])))
                                  (remove nil?)
                                  vec)
@@ -1952,7 +1967,7 @@
                                              :x2 (+ (:x target-pos) (/ (:width target-size) 2))
                                              :y2 (+ (:y target-pos) (/ (:height target-size) 2))
                                              :stroke "#ff4f99"
-                                             :stroke-width "2"
+                                             :stroke-width 4
                                              :stroke-dasharray "5,5"
                                              :opacity 0.7}])))
                                 (remove nil?)
@@ -1963,7 +1978,7 @@
                        :width "100%"
                        :height "100%"
                        :pointer-events "none"
-                       :z-index 5}
+                       :z-index 1}
                 :id "connection-svg"}
           ;; Add implicit template connection lines first (so they render behind)
           (for [line implicit-lines]
@@ -1981,7 +1996,7 @@
                        :color "#0a0a0a"
                        :padding "10px 20px"
                        :border-radius "4px"
-                       :font-family "monospace"
+                       :font-family "'JetBrains Mono', monospace"
                        :font-size "12px"
                        :font-weight "bold"
                        :text-transform "uppercase"
@@ -1991,7 +2006,7 @@
           "Click on a Query Block header to connect"])
        (if (empty? @blocks)
          [:div {:style {:color "#00ff9f"
-                       :font-family "monospace"
+                       :font-family "'JetBrains Mono', monospace"
                        :position "absolute"
                        :top "50%"
                        :left "50%"
@@ -2024,7 +2039,7 @@
              :border "1px solid #00ff9f"
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "monospace"
+             :font-family "'JetBrains Mono', monospace"
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
@@ -2049,7 +2064,7 @@
               :border "1px solid #00ff9f"
               :border-radius "2px"
               :cursor "pointer"
-              :font-family "monospace"
+              :font-family "'JetBrains Mono', monospace"
               :font-size "12px"
               :text-transform "uppercase"
               :letter-spacing "1px"
@@ -2092,7 +2107,7 @@
        ;; User tables (dynamically loaded)
        [:div {:style {:padding "5px 10px"
                       :color "#00ff9f"
-                      :font-family "monospace"
+                      :font-family "'JetBrains Mono', monospace"
                       :font-size "10px"
                       :text-transform "uppercase"
                       :border-bottom "1px solid rgba(0,255,159,0.2)"
@@ -2102,7 +2117,7 @@
          ^{:key table}
          [:div {:style {:padding "8px 15px"
                         :color "#8ff0a4"
-                        :font-family "monospace"
+                        :font-family "'JetBrains Mono', monospace"
                         :font-size "11px"
                         :cursor "pointer"
                         :transition "all 0.2s"}
@@ -2122,7 +2137,7 @@
          [:div
           [:div {:style {:padding "5px 10px"
                          :color "#9b59b6"
-                         :font-family "monospace"
+                         :font-family "'JetBrains Mono', monospace"
                          :font-size "10px"
                          :text-transform "uppercase"
                          :border-bottom "1px solid rgba(155,89,182,0.2)"
@@ -2133,7 +2148,7 @@
             ^{:key table}
             [:div {:style {:padding "8px 15px"
                            :color "#d8b4fe"
-                           :font-family "monospace"
+                           :font-family "'JetBrains Mono', monospace"
                            :font-size "11px"
                            :cursor "pointer"
                            :transition "all 0.2s"}
@@ -2153,7 +2168,7 @@
          [:div
           [:div {:style {:padding "5px 10px"
                          :color "#ff006e"
-                         :font-family "monospace"
+                         :font-family "'JetBrains Mono', monospace"
                          :font-size "10px"
                          :text-transform "uppercase"
                          :border-bottom "1px solid rgba(255,0,110,0.2)"
@@ -2164,7 +2179,7 @@
             ^{:key table}
             [:div {:style {:padding "8px 15px"
                            :color "#ff4f99"
-                           :font-family "monospace"
+                           :font-family "'JetBrains Mono', monospace"
                            :font-size "11px"
                            :cursor "pointer"
                            :transition "all 0.2s"}
@@ -2186,7 +2201,7 @@
              :border "1px solid #ff006e"
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "monospace"
+             :font-family "'JetBrains Mono', monospace"
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
@@ -2208,7 +2223,7 @@
              :border "1px solid #ffb700"
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "monospace"
+             :font-family "'JetBrains Mono', monospace"
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
@@ -2230,7 +2245,7 @@
              :border "1px solid #9b59b6"
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "monospace"
+             :font-family "'JetBrains Mono', monospace"
              :font-size "12px"
              :font-weight "bold"
              :text-transform "uppercase"
@@ -2252,7 +2267,7 @@
              :border "1px solid #00ffd4"
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "monospace"
+             :font-family "'JetBrains Mono', monospace"
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
@@ -2273,7 +2288,7 @@
              :border "1px solid #9933ff"
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "monospace"
+             :font-family "'JetBrains Mono', monospace"
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
@@ -2296,7 +2311,7 @@
              :border "1px solid #ff4f99"
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "monospace"
+             :font-family "'JetBrains Mono', monospace"
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
@@ -2317,7 +2332,7 @@
              :border "1px solid #8a2be2"
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "monospace"
+             :font-family "'JetBrains Mono', monospace"
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
@@ -2335,8 +2350,67 @@
                    (r/dispatch! [:add-block block-data])))}
     "+ IFRAME"]
    [:div {:style {:flex 1}}]
+   ;; Console tap toggle
+   [:button
+    {:style {:padding "6px 12px"
+             :background (if @console-tap/hijacked? 
+                          "rgba(0,255,212,0.1)" 
+                          "transparent")
+             :color "#00ffd4"
+             :border (str "1px solid " (if @console-tap/hijacked? "#00ffd4" "rgba(0,255,212,0.5)"))
+             :border-radius "2px"
+             :cursor "pointer"
+             :font-family "'JetBrains Mono', monospace"
+             :font-size "10px"
+             :margin-right "10px"}
+     :title (if @console-tap/hijacked? 
+             "Console is being tapped - click to disable" 
+             "Click to send console.log to tap>")
+     :on-click #(console-tap/toggle-console-tap!)}
+    (if @console-tap/hijacked? "CONSOLE→TAP ✓" "CONSOLE→TAP")]
+   
+   ;; Test buttons for console hijacking
+   (when @console-tap/hijacked?
+     [:div {:style {:display "flex" :gap "5px" :margin-right "10px"}}
+      [:button
+       {:style {:padding "4px 8px"
+                :background "transparent"
+                :color "#ff9f00"
+                :border "1px solid #ff9f00"
+                :border-radius "2px"
+                :cursor "pointer"
+                :font-family "'JetBrains Mono', monospace"
+                :font-size "9px"}
+        :title "Test console.log"
+        :on-click #(js/console.log "Test message from console.log" {:data "test" :timestamp (js/Date.now)})}
+       "TEST LOG"]
+      [:button
+       {:style {:padding "4px 8px"
+                :background "transparent"
+                :color "#ff4444"
+                :border "1px solid #ff4444"
+                :border-radius "2px"
+                :cursor "pointer"
+                :font-family "'JetBrains Mono', monospace"
+                :font-size "9px"}
+        :title "Test console.error"
+        :on-click #(js/console.error "Test error from console.error" (js/Error. "Test error"))}
+       "TEST ERROR"]
+      [:button
+       {:style {:padding "4px 8px"
+                :background "transparent"
+                :color "#ffff00"
+                :border "1px solid #ffff00"
+                :border-radius "2px"
+                :cursor "pointer"
+                :font-family "'JetBrains Mono', monospace"
+                :font-size "9px"}
+        :title "Test console.warn"
+        :on-click #(js/console.warn "Test warning from console.warn" "Warning details")}
+       "TEST WARN"]])
+   
    [:span {:style {:color "#00ff9f"
-                   :font-family "monospace"
+                   :font-family "'JetBrains Mono', monospace"
                    :font-size "14px"
                    :text-transform "uppercase"
                    :letter-spacing "2px"}} "RABBIT//SQL_BROWSER"]])
@@ -2378,7 +2452,7 @@
                  :border "1px solid rgba(0,255,159,0.5)"
                  :border-radius "2px"
                  :cursor "pointer"
-                 :font-family "monospace"
+                 :font-family "'JetBrains Mono', monospace"
                  :font-size "11px"
                  :text-transform "uppercase"
                  :display "flex"
@@ -2419,7 +2493,7 @@
                              :border "1px solid rgba(0,255,159,0.3)"
                              :border-radius "2px"
                              :color "#00ff9f"
-                             :font-family "monospace"
+                             :font-family "'JetBrains Mono', monospace"
                              :font-size "11px"}
                      :on-key-down #(when (= (.-which %) 13)
                                     (when (seq @new-session-name)
@@ -2434,7 +2508,7 @@
                               :border "none"
                               :border-radius "2px"
                               :cursor "pointer"
-                              :font-family "monospace"
+                              :font-family "'JetBrains Mono', monospace"
                               :font-size "10px"
                               :font-weight "bold"}
                       :on-click (fn []
@@ -2448,7 +2522,8 @@
           
           ;; Session list
           [:div {:style {:max-height "200px" :overflow-y "auto"}}
-           (for [session @sessions-list]
+           (doall 
+            (for [session @sessions-list]
              ^{:key (:session-id session)}
              [:div {:style {:display "flex"
                             :align-items "center"
@@ -2467,11 +2542,11 @@
                                (reset! session-dropdown-open false))}
               [:div {:style {:flex 1}}
                [:div {:style {:color "#00ff9f"
-                              :font-family "monospace"
+                              :font-family "'JetBrains Mono', monospace"
                               :font-size "11px"}} 
                 (:session-id session)]
                [:div {:style {:color "#8ff0a4"
-                              :font-family "monospace"
+                              :font-family "'JetBrains Mono', monospace"
                               :font-size "9px"
                               :opacity 0.7}} 
                 (str (count (get-in session [:canvas :blocks] {})) " blocks")]]
@@ -2483,7 +2558,7 @@
                                   :border-radius "2px"
                                   :color "#ff6b6b"
                                   :cursor "pointer"
-                                  :font-family "monospace"
+                                  :font-family "'JetBrains Mono', monospace"
                                   :font-size "9px"}
                           :on-click (fn [e]
                                      (.stopPropagation ^js e)
@@ -2498,7 +2573,7 @@
                                                      (reset! current-session "default")
                                                      (r/switch-session! "default"))
                                                    (load-sessions!))))))}
-                 "DELETE"])])]])])))
+                 "DELETE"])]))]])])))
 
 ;; ============= Timeline Component =============
 
@@ -2524,7 +2599,7 @@
                          :border "1px solid rgba(0,255,159,0.5)"
                          :border-radius "2px"
                          :cursor "pointer"
-                         :font-family "monospace"
+                         :font-family "'JetBrains Mono', monospace"
                          :font-size "11px"
                          :text-transform "uppercase"
                          :opacity (if (:can-undo @history-info) 1 0.5)}
@@ -2536,16 +2611,16 @@
                          :border "1px solid rgba(0,255,159,0.5)"
                          :border-radius "2px"
                          :cursor "pointer"
-                         :font-family "monospace"
+                         :font-family "'JetBrains Mono', monospace"
                          :font-size "11px"
                          :text-transform "uppercase"
                          :opacity (if (:can-redo @history-info) 1 0.5)}
                  :disabled (not (:can-redo @history-info))
                  :on-click #(r/redo!)} "REDO →"]
        [:div {:style {:flex 1 :display "flex" :align-items "center" :gap "15px"}}
-        [:span {:style {:color "#00ff9f" :font-family "monospace" :font-size "11px" :text-transform "uppercase"}} 
+        [:span {:style {:color "#00ff9f" :font-family "'JetBrains Mono', monospace" :font-size "11px" :text-transform "uppercase"}} 
          "TIMELINE:"]
-        [:span {:style {:color "#8ff0a4" :font-family "monospace" :font-size "10px"}}
+        [:span {:style {:color "#8ff0a4" :font-family "'JetBrains Mono', monospace" :font-size "10px"}}
          (str "State " (- (:total-states @history-info 0) (:current-index @history-info 0))
               " of " (:total-states @history-info 0))]
         [:input {:type "range"
@@ -2585,6 +2660,8 @@
   ;; Set app name for snapshot tracking
   (set! js/window.REACTOR_APP_NAME "rabbit")
   (r/init! {:server-url "http://localhost:5000"})
+  ;; Hijack console by default to send to tap>
+  (console-tap/hijack-console!)
   ;; Initialize with default session or get from query params
   (let [params (js/URLSearchParams. js/window.location.search)
         session-id (or (.get params "session") "default")]

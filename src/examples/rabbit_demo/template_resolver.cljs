@@ -111,14 +111,20 @@
   [blocks {:keys [block-id path] :as ref}]
   (let [block-data (get-block-data blocks block-id)
         data (rq/get-block-results block-id)
-        block-id-kw (if (keyword? block-id) block-id (keyword (cstr/replace (str block-id) ":" ""))) ;; ensure kw 
+        ;; Normalize to string for consistent lookup
+        block-id-str (cond
+                      (string? block-id) block-id
+                      (keyword? block-id) (name block-id)
+                      :else (str block-id))
         path2 (vec (for [p path]
                      (if (try (number? (edn/read-string p)) (catch :default _ false))
                        (edn/read-string p)
                        (keyword (cstr/replace (str p) ":" "")))))
-        path2 (if (= (get path2 0) :*timestamp) [:*timestamp block-id-kw] path2)
-        result (when data (if (= path2 [:*timestamp block-id-kw])
-                            (get-in @rq/block-results path2)
+        path2 (if (= (get path2 0) :*timestamp) [:*timestamp block-id-str] path2)
+        result (when data (if (= path2 [:*timestamp block-id-str])
+                            (let [ts (get-in @rq/block-results path2)]
+                              (js/console.log "[TEMPLATE] Resolving timestamp for" block-id-str "got:" ts)
+                              ts)
                             (get-in data path2)))]
     (when (nil? result)
       (js/console.log "Template resolution failed:"

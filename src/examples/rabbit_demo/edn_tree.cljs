@@ -100,7 +100,7 @@
                         :padding "1px 3px"
                         :border-radius "2px"
                         :margin-right "6px"
-                        :font-family "monospace"
+                        :font-family "'JetBrains Mono', monospace"
                         :font-size "11px"}}
          (str label)])
       ;; Type label
@@ -109,7 +109,7 @@
                       :padding "1px 4px"
                       :border-radius "2px"
                       :opacity 0.9
-                      :font-family "monospace"
+                      :font-family "'JetBrains Mono', monospace"
                       :font-size "10px"}}
        type-label]
       ;; Item count
@@ -117,7 +117,7 @@
         [:span {:style {:margin-left "6px"
                         :color "rgba(255,255,255,0.3)"
                         :font-size "9px"
-                        :font-family "monospace"}}
+                        :font-family "'JetBrains Mono', monospace"}}
          (str (count children) " items")])]
      ;; Children (when expanded)
      (when expanded?
@@ -168,7 +168,7 @@
                        :padding "1px 3px"
                        :border-radius "2px"
                        :margin-right "6px"
-                       :font-family "monospace"
+                       :font-family "'JetBrains Mono', monospace"
                        :font-size "11px"}}
         (str label)])
      ;; Value
@@ -176,7 +176,7 @@
                      :background (get-type-bg-color value)
                      :padding "1px 4px"
                      :border-radius "2px"
-                     :font-family "monospace"
+                     :font-family "'JetBrains Mono', monospace"
                      :font-size "11px"
                      :max-width "300px"
                      :overflow "hidden"
@@ -218,7 +218,7 @@
       (expand-fn data [] 0)))
   
   [:div {:class "edn-tree-container"
-         :style {:font-family "monospace"
+         :style {:font-family "'JetBrains Mono', monospace"
                  :font-size "12px"
                  :color "#fff"
                  :padding "10px"
@@ -259,7 +259,7 @@
                      :border-radius "2px"
                      :cursor "pointer"
                      :font-size "9px"
-                     :font-family "monospace"}
+                     :font-family "'JetBrains Mono', monospace"}
              :on-click on-expand-all}
     "EXPAND ALL"]
    [:button {:style {:padding "2px 6px"
@@ -269,7 +269,7 @@
                      :border-radius "2px"
                      :cursor "pointer"
                      :font-size "9px"
-                     :font-family "monospace"}
+                     :font-family "'JetBrains Mono', monospace"}
              :on-click on-collapse-all}
     "COLLAPSE"]
    [:input {:type "text"
@@ -280,7 +280,7 @@
                     :border "1px solid rgba(0,255,212,0.2)"
                     :border-radius "2px"
                     :padding "2px 5px"
-                    :font-family "monospace"
+                    :font-family "'JetBrains Mono', monospace"
                     :font-size "10px"
                     :outline "none"}
             :on-change (fn [e]

@@ -38,10 +38,12 @@
   (let [value (reagent/atom "")]
     (fn []
       [:header.header
-       [:h1 "todos"]
+       [:h1 {:style {:font-family "Homemade Apple" :font-size "76px"  :font-weight 700 :margin-bottom "-25px"}} "todos"]
+       
        [:input.new-todo
         {:placeholder "What needs to be done?"
          :value @value
+         :margin-bottom "10px"
          :on-change #(reset! value (-> % .-target .-value))
          :on-key-down #(when (= (.-which %) 13)
                         (let [text (str/trim @value)]
@@ -49,7 +51,9 @@
                             (r/dispatch! [:add-todo {:id (random-uuid)
                                                     :text text
                                                     :completed false}])
-                            (reset! value ""))))}]])))
+                            (reset! value ""))))}]
+       
+       ])))
 
 (defn todo-item [{:keys [id text completed]}]
   (let [editing (reagent/atom false)
@@ -108,11 +112,13 @@
         all-completed? (r/subscribe [:all-completed?])]
     (fn []
       [:section.main
+       [:br]
        [:input#toggle-all.toggle-all
         {:type "checkbox"
+          :style {:font-size "23px"}
          :checked @all-completed?
          :on-change #(r/dispatch! [:toggle-all (not @all-completed?)])}]
-       [:label {:for "toggle-all"} "Mark all as complete"]
+       [:label {:for "toggle-all" :style {:font-size "23px" :color "#00000066"}} " Mark all as complete"]
        [:ul.todo-list
         (doall
          (for [todo @todos]
@@ -158,7 +164,7 @@
                 :border-radius "5px"
                 :box-shadow "0 2px 4px rgba(0,0,0,0.1)"
                 :max-width "350px"}}
-       [:h3 {:style {:margin-top 0}} "Time Travel"]
+       [:h3 {:style {:margin-top 0 :font-family "Homemade Apple" :font-size "30px" :color "#00000077" :font-weight 700}} "time travel"]
        [:div {:style {:margin-bottom "10px"}}
         [:button {:on-click #(r/undo!)
                   :disabled (not (:can-undo @history-info))
@@ -281,22 +287,27 @@
                   :padding "15px"
                   :border-radius "5px"
                   :box-shadow "0 2px 4px rgba(0,0,0,0.1)"}}
-         [:div {:style {:display "flex" :align-items "center" :margin-bottom "10px"}}
-          [:h3 {:style {:margin 0 :flex 1}} "Sessions"]
+         [:div {:style {:display "flex" :align-items "center" 
+                        ;:margin-bottom "10px"
+                        :font-size "34px"}}
+          [:h3 {:style {:margin 0 :flex 1 :font-family "Homemade Apple" :font-size "30px" :color "#00000077" :font-weight 700}}
+           "sessions"]
           [:div {:style {:width "8px" 
                         :height "8px" 
                         :border-radius "50%"
+                         
                         :background (if @connected? "#4caf50" "#f44336")
                         :margin-left "10px"
                         :title (if @connected? "Connected" "Disconnected")}}]]
-         [:div {:style {:margin-bottom "10px"}}
+         [:div {:style {;:margin-bottom "10px" 
+                        :font-size "24px"}}
           [:select {:value (or @current-session "default")
                     :on-change #(r/switch-session! (-> % .-target .-value))
-                    :style {:width "100%" :padding "4px"}}
+                    :style {:width "100%" :padding "4px" :font-size "24px"}}
            (doall
             (for [session @sessions]
               ^{:key (:session-id session)}
-              [:option {:value (:session-id session)}
+              [:option {:value (:session-id session) :style {:font-size "24px"}}
                (str (:session-id session) 
                     " (" (:todo-count session 0) " todos)")]))]
           ]

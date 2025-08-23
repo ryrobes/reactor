@@ -19,3 +19,5 @@ node_modules
 cljs-runtime
 *.log
 rabbitize-runs
+todo_out
+todo-out

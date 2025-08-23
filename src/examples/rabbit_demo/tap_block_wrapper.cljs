@@ -44,7 +44,7 @@
                :justify-content "space-between"
                :align-items "center"}}
       [:span {:style {:color "#ff4f99"
-                      :font-family "monospace"
+                      :font-family "'JetBrains Mono', monospace"
                       :text-transform "uppercase"
                       :font-size "11px"
                       :letter-spacing "1px"}} "TAP"]

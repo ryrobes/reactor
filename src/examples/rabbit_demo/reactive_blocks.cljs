@@ -177,7 +177,7 @@
                                                 :padding "4px 8px"
                                                 :margin "5px 0"
                                                 :font-size "10px"
-                                                :font-family "monospace"
+                                                :font-family "'JetBrains Mono', monospace"
                                                 :color "#00ff9f"
                                                 :display "flex"
                                                 :align-items "center"

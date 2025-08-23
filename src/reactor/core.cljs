@@ -335,7 +335,7 @@
                      "session=" (:session-id @config)))
       (.then #(.json %))
       (.then #(do
-                (js/console.log "[CLIENT] history-info received:" (clj->js %))
+                ;(js/console.log "[CLIENT] history-info received:" (clj->js %))
                 (reset! history-info (js->clj % :keywordize-keys true))))))
 
 ;; Time travel API
@@ -440,7 +440,7 @@
   (-> (js/fetch (str (:server-url @config) "/api/sessions"))
       (.then #(.json %))
       (.then #(do
-                (js/console.log "[CLIENT] Sessions received:" (clj->js %))
+                ;(js/console.log "[CLIENT] Sessions received:" (clj->js %))
                 (reset! sessions (js->clj % :keywordize-keys true))))
       (.catch #(js/console.error "[CLIENT] Failed to get sessions:" %))))
 
@@ -624,8 +624,8 @@
       (set! (.-onmessage es)
             (fn [e]
               (let [data (js->clj (js/JSON.parse (.-data e)) :keywordize-keys true)]
-                (js/console.log "[CLIENT] SSE SQL update received:" (clj->js data))
-                (js/console.log "[CLIENT] Message type:" (:type data) "is keyword?" (keyword? (:type data)))
+                ;(js/console.log "[CLIENT] SSE SQL update received:" (clj->js data))
+                ;(js/console.log "[CLIENT] Message type:" (:type data) "is keyword?" (keyword? (:type data)))
                 ;; Skip "connected" messages - only process query updates
                 ;; Handle both keyword and string types (JSON serialization converts keywords to strings)
                 (when (or (= (:type data) :query-update)
@@ -643,7 +643,8 @@
                         (js/console.log "[CLIENT] Result atom updated with" (count (:results (:result data))) "results"))
                       (do
                         (js/console.warn "[CLIENT] No subscription found for ID:" sub-id)
-                        (js/console.log "[CLIENT] Available subscription IDs:" (clj->js (keys @sql-subscriptions))))))))))
+                        ;(js/console.log "[CLIENT] Available subscription IDs:" (clj->js (keys @sql-subscriptions)))
+                        )))))))
       
       ;; Handle errors
       (set! (.-onerror es)
@@ -665,14 +666,16 @@
            {:sql sql
             :params params
             :result-atom result-atom})
-    (js/console.log "[CLIENT] Created subscription" sub-id "for SQL:" sql)
+    ;; (js/console.log "[CLIENT] Created subscription" sub-id 
+    ;;                 ;"for SQL:" sql
+    ;;                 )
     ;; (js/console.log "[CLIENT] Stored in sql-subscriptions. Keys now:" (clj->js (keys @sql-subscriptions)))
     
     ;; Ensure SSE connection exists (this might trigger immediate updates)
     (ensure-sql-sse-connection!)
     
     ;; Call /api/sql which will create server-side subscription AND return initial results
-    (js/console.log "[CLIENT] Sending SQL request with as-of:" as-of "for query:" sql)
+    ;(js/console.log "[CLIENT] Sending SQL request with as-of:" as-of "for query:" sql)
     (-> (js/fetch (str server-url "/api/sql?session=" session-id)
                   #js {:method "POST"
                        :headers #js {"Content-Type" "application/json"}

@@ -1,0 +1,13 @@
+{
+  "name": "reactor-todo-simple",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Simple ClojureScript TODO app without shadow-cljs",
+  "scripts": {
+    "clean": "rm -rf resources/public/js/todo.js resources/public/js/todo-out/",
+    "build": "lein cljsbuild once todo",
+    "watch": "lein cljsbuild auto todo",
+    "build-min": "lein cljsbuild once todo-min",
+    "serve": "cd resources/public && python3 -m http.server 8083"
+  }
+}

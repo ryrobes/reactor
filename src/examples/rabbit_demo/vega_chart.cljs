@@ -81,7 +81,7 @@
   "Render a Vega-Lite chart into a DOM element"
   ([element-id spec data] (render-vega-chart! element-id spec data nil))
   ([element-id spec data height]
-   (js/console.log "[VEGA] Rendering chart with spec:" (clj->js spec) "and data:" (clj->js data) "height:" height "element-id:" element-id)
+   ;(js/console.log "[VEGA] Rendering chart with spec:" (clj->js spec) "and data:" (clj->js data) "height:" height "element-id:" element-id)
    (when-let [elem (.getElementById js/document element-id)]
      (try
        ;; Clear any existing chart content first to avoid duplicates
@@ -124,7 +124,7 @@
                    :gap "10px"
                    :margin "5px 0"}}
      [:label {:style {:color "#ff006e"
-                      :font-family "monospace"
+                      :font-family "'JetBrains Mono', monospace"
                       :font-size "10px"
                       :text-transform "uppercase"
                       :min-width "80px"}}
@@ -135,7 +135,7 @@
                        :border "1px solid rgba(255,0,110,0.3)"
                        :border-radius "2px"
                        :padding "4px 8px"
-                       :font-family "monospace"
+                       :font-family "'JetBrains Mono', monospace"
                        :font-size "11px"
                        :cursor "pointer"}
                :value (or value "")
@@ -153,7 +153,7 @@
                  :gap "10px"
                  :margin "5px 0"}}
    [:label {:style {:color "#ff006e"
-                    :font-family "monospace"
+                    :font-family "'JetBrains Mono', monospace"
                     :font-size "10px"
                     :text-transform "uppercase"
                     :min-width "80px"}}
@@ -164,7 +164,7 @@
                      :border "1px solid rgba(255,0,110,0.3)"
                      :border-radius "2px"
                      :padding "4px 8px"
-                     :font-family "monospace"
+                     :font-family "'JetBrains Mono', monospace"
                      :font-size "11px"
                      :cursor "pointer"}
              :value value
@@ -350,7 +350,7 @@
                             :border "1px solid #ff006e"
                             :border-radius "2px"
                             :cursor "pointer"
-                            :font-family "monospace"
+                            :font-family "'JetBrains Mono', monospace"
                             :font-size "12px"
                             :line-height "1"
                             :display "flex"
@@ -376,7 +376,7 @@
                             :border "1px solid #ff006e"
                             :border-radius "2px 0 0 2px"
                             :cursor "pointer"
-                            :font-family "monospace"
+                            :font-family "'JetBrains Mono', monospace"
                             :font-size "10px"
                             :font-weight "bold"}
                      :on-click (fn []
@@ -403,7 +403,7 @@
                             :border "1px solid #ff006e"
                             :border-radius "0 2px 2px 0"
                             :cursor "pointer"
-                            :font-family "monospace"
+                            :font-family "'JetBrains Mono', monospace"
                             :font-size "10px"
                             :font-weight "bold"}
                      :on-click (fn []
@@ -415,7 +415,7 @@
             "EDIT"]]
           (when (seq data)
             [:span {:style {:color "#ff4f99"
-                           :font-family "monospace"
+                           :font-family "'JetBrains Mono', monospace"
                            :font-size "10px"
                            :opacity 0.7}}
              (str (count data) " rows")])]
@@ -456,7 +456,7 @@
                                 :border-radius "2px"
                                 :cursor "pointer"
                                 :font-weight "bold"
-                                :font-family "monospace"
+                                :font-family "'JetBrains Mono', monospace"
                                 :font-size "11px"
                                 :text-transform "uppercase"}
                          :on-click (fn []
@@ -550,7 +550,7 @@
                                :margin-bottom "10px"
                                :text-align "center"
                                :color "#ff4f99"
-                               :font-family "monospace"
+                               :font-family "'JetBrains Mono', monospace"
                                :opacity 0.7}}
                   "Waiting for query results..."])
                ;; Chart container 

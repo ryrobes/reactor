@@ -2,6 +2,7 @@
   "Time travel UI components for query blocks"
   (:require [reagent.core :as reagent]
             [reactor.core :as r]
+            [clojure.string :as str]
             [examples.rabbit-demo.reactive-queries :as rq]
             [examples.rabbit-demo.row-count-viz :as rcv]))
 
@@ -117,7 +118,7 @@
                        :headers #js {"Content-Type" "application/json"}
                        :body (js/JSON.stringify 
                               (clj->js {:sql sql
-                                       :limit 20}))})
+                                       :limit 50}))})  ;; Increased from 20 to get more timestamps
         (.then #(.json %))
         (.then (fn [data]
                  (let [history-data (js->clj data :keywordize-keys true)
@@ -183,12 +184,12 @@
                       :margin-bottom "8px"}}
         [:span {:style {:color "#00ff9f"
                         :font-size "11px"
-                        :font-family "monospace"}}
+                        :font-family "'JetBrains Mono', monospace"}}
          "TIME TRAVEL"]
         ;; Show current or hovered time with row count diff
         [:span {:style {:color (if hover-index "#ffd700" "#8ff0a4")
                         :font-size "10px"
-                        :font-family "monospace"
+                        :font-family "'JetBrains Mono', monospace"
                         :flex 1}}
          (let [display-index (or hover-index current-index)
                is-now? (= display-index (dec (count timestamps)))
@@ -236,7 +237,7 @@
                           :border-radius "3px"
                           :color "#00ff9f"
                           :font-size "9px"
-                          :font-family "monospace"
+                          :font-family "'JetBrains Mono', monospace"
                           :cursor "pointer"}
                   :on-click #(swap! cumulative-mode update block-id-str not)}
          (if (get @cumulative-mode block-id-str false) "CUMULATIVE" "DIFFERENTIAL")]]
@@ -279,7 +280,7 @@
                                    :left "2px"
                                    :font-size "8px"
                                    :color "rgba(0,255,159,0.6)"
-                                   :font-family "monospace"}}
+                                   :font-family "'JetBrains Mono', monospace"}}
                      "1h"]]))
                ;; Day marker
                (when (> range-ms (* 24 60 60 1000))
@@ -296,7 +297,7 @@
                                    :left "2px"
                                    :font-size "8px"
                                    :color "rgba(0,255,159,0.7)"
-                                   :font-family "monospace"}}
+                                   :font-family "'JetBrains Mono', monospace"}}
                      "1d"]]))
                ;; Week marker
                (when (> range-ms (* 7 24 60 60 1000))
@@ -313,7 +314,7 @@
                                    :left "2px"
                                    :font-size "8px"
                                    :color "rgba(0,255,159,0.8)"
-                                   :font-family "monospace"}}
+                                   :font-family "'JetBrains Mono', monospace"}}
                      "1w"]]))])))
         
              ;; Row count area chart overlay
@@ -414,11 +415,11 @@
           ;; Auto-fetch history when component mounts
           (fetch-query-history! block-id sql)
           ;; Set up periodic refresh to catch new time ticks
-          ;; Every 30 seconds, check for new history
+          ;; Every 5 seconds, check for new history (reduced from 30s for responsiveness)
           (reset! refresh-interval
                   (js/setInterval 
                    #(fetch-query-history! block-id sql)
-                   30000))  ; 30 seconds
+                   5000))  ; 5 seconds
           
           ;; Register hook for reactive query updates
           (rq/register-query-hook! block-id handle-table-mutation!)))
@@ -437,7 +438,7 @@
           (reset! refresh-interval
                   (js/setInterval 
                    #(fetch-query-history! (:block-id new-props) new-sql)
-                   30000)))))
+                   5000)))))  ; 5 seconds
     
     :component-will-unmount
     (fn []
@@ -463,8 +464,11 @@
              :on-time-change (fn [timestamp]
                                ;; Re-execute query with time travel
                                ;; nil timestamp means "NOW" - query stays reactive
-                               (swap! rq/block-results assoc-in [:*timestamp block-id] timestamp)
-                               (rq/execute-block-query! block-id sql nil timestamp))}])
+                               ;; Use string block-id for consistent storage
+                               (let [block-id-str (normalize-block-id block-id)]
+                                 (swap! rq/block-results assoc-in [:*timestamp block-id-str] timestamp)
+                                 ;(js/console.log "[TIME-TRAVEL] Setting timestamp for" block-id-str "to" timestamp)
+                                 (rq/execute-block-query! block-id sql nil timestamp)))}])
          (when-not (:timestamps history)
            [:button {:style {:padding "4px 8px"
                             :background "rgba(0,255,159,0.1)"
@@ -473,7 +477,7 @@
                             :border-radius "3px"
                             :cursor "pointer"
                             :font-size "10px"
-                            :font-family "monospace"}
+                            :font-family "'JetBrains Mono', monospace"}
                     :on-click #(fetch-query-history! block-id sql)}
             "LOAD HISTORY"])]))})))
 
@@ -487,5 +491,8 @@
     (when history
       (swap! block-history update block-id-str assoc 
              :current-index (dec (count timestamps))))
+    ;; Clear the timestamp in block-results (nil means NOW) - use string ID
+    (swap! rq/block-results assoc-in [:*timestamp block-id-str] nil)
+    ;(js/console.log "[TIME-TRAVEL] Resetting to NOW for" block-id-str)
     ;; Execute query without time travel (nil as-of means NOW)
     (rq/execute-block-query! block-id sql nil nil)))

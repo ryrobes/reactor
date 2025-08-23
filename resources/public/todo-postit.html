@@ -1,46 +1,54 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="UTF-8">
     <title>Reactor • Todo Notes</title>
+    <link href="fonts.css" rel="stylesheet" type="text/css">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Kalam:wght@300;400;700&display=swap');
-        
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: 'Kalam', cursive;
-            background: linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 100%);
+            background:
+                linear-gradient(135deg, rgba(15, 15, 15, 0.8) 0%, rgba(0, 0, 0, 0.8) 100%),
+                url(https://www.remindmagazine.com/wp-content/uploads/2024/08/saved-by-the-bell-collage.jpg);
+
+            background-size: cover;
+            background-position: center;
             min-height: 100vh;
             color: #333;
             overflow-x: hidden;
         }
-        
+
         /* Post-it note styles */
         .postit {
             background: linear-gradient(135deg, #ffeb3b 0%, #fdd835 100%);
             padding: 20px;
             margin: 15px;
             border-radius: 3px;
-            box-shadow: 
-                2px 2px 10px rgba(0,0,0,0.5),
-                inset 0 1px 0 rgba(255,255,255,0.4);
+            font-family: 'Kalam', cursive;
+            box-shadow:
+                2px 2px 10px rgba(0, 0, 0, 0.5),
+                inset 0 1px 0 rgba(255, 255, 255, 0.4);
             position: relative;
             transform: rotate(-1deg);
             transition: all 0.2s ease;
         }
-        
+
         .postit:hover {
             transform: rotate(0deg) scale(1.02);
-            box-shadow: 
-                4px 4px 20px rgba(0,0,0,0.6),
-                inset 0 1px 0 rgba(255,255,255,0.4);
+            box-shadow:
+                4px 4px 20px rgba(0, 0, 0, 0.6),
+                inset 0 1px 0 rgba(255, 255, 255, 0.4);
         }
-        
+
         .postit::before {
             content: '';
             position: absolute;
@@ -49,35 +57,35 @@
             transform: translateX(-50%);
             width: 80px;
             height: 20px;
-            background: rgba(255,255,255,0.2);
+            background: rgba(255, 255, 255, 0.2);
             border-radius: 10px 10px 0 0;
         }
-        
+
         .postit-blue {
             background: linear-gradient(135deg, #64b5f6 0%, #42a5f5 100%);
             transform: rotate(1deg);
         }
-        
+
         .postit-green {
             background: linear-gradient(135deg, #81c784 0%, #66bb6a 100%);
             transform: rotate(-0.5deg);
         }
-        
+
         .postit-pink {
             background: linear-gradient(135deg, #f48fb1 0%, #f06292 100%);
             transform: rotate(0.5deg);
         }
-        
+
         .postit-purple {
             background: linear-gradient(135deg, #ba68c8 0%, #ab47bc 100%);
             transform: rotate(-1.5deg);
         }
-        
+
         .postit-orange {
             background: linear-gradient(135deg, #ffb74d 0%, #ffa726 100%);
             transform: rotate(1.5deg);
         }
-        
+
         /* Controls styling */
         .time-travel-controls,
         .session-selector {
@@ -85,18 +93,18 @@
             background: linear-gradient(135deg, #81c784 0%, #66bb6a 100%) !important;
             color: #1a1a1a !important;
             border: none !important;
-            box-shadow: 
-                2px 2px 10px rgba(0,0,0,0.5),
-                inset 0 1px 0 rgba(255,255,255,0.4) !important;
+            box-shadow:
+                2px 2px 10px rgba(0, 0, 0, 0.5),
+                inset 0 1px 0 rgba(255, 255, 255, 0.4) !important;
             transform: rotate(-1deg);
-            font-family: 'Kalam', cursive !important;
+            font-family: 'Kalam', 'Kalam', cursive !important;
         }
-        
+
         .time-travel-controls {
             background: linear-gradient(135deg, #ba68c8 0%, #ab47bc 100%) !important;
             transform: rotate(1deg) !important;
         }
-        
+
         /* Todo app container */
         #app {
             display: flex;
@@ -105,82 +113,84 @@
             padding: 60px 20px;
             min-height: 100vh;
         }
-        
+
         .todoapp {
             background: linear-gradient(135deg, #ffeb3b 0%, #fdd835 100%);
             padding: 30px;
             border-radius: 5px;
-            box-shadow: 
-                4px 4px 20px rgba(0,0,0,0.6),
-                inset 0 1px 0 rgba(255,255,255,0.4);
+            box-shadow:
+                4px 4px 20px rgba(0, 0, 0, 0.6),
+                inset 0 1px 0 rgba(255, 255, 255, 0.4);
             transform: rotate(-0.5deg);
             max-width: 550px;
             width: 100%;
             margin: 20px 0;
         }
-        
+
         .header h1 {
             font-size: 48px;
             font-weight: 700;
             color: #1a1a1a;
             text-align: center;
             margin-bottom: 20px;
-            text-shadow: 2px 2px 0px rgba(255,255,255,0.3);
+            text-shadow: 2px 2px 0px rgba(255, 255, 255, 0.3);
         }
-        
+
         .new-todo {
             width: 100%;
             padding: 15px;
             font-size: 20px;
             font-family: 'Kalam', cursive;
-            background: rgba(255,255,255,0.7);
+            background: rgba(255, 255, 255, 0.7);
             border: 2px dashed #333;
             border-radius: 3px;
             outline: none;
             color: #333;
         }
-        
+
         .todo-list {
             list-style: none;
+            
             margin-top: 20px;
         }
-        
+
         .todo-list li {
             background: linear-gradient(135deg, #64b5f6 0%, #42a5f5 100%);
-            padding: 15px;
-            margin: 10px 0;
+            padding: 10px;
+            margin: 8px 0;
             border-radius: 3px;
-            box-shadow: 
-                2px 2px 8px rgba(0,0,0,0.3),
-                inset 0 1px 0 rgba(255,255,255,0.3);
+            box-shadow:
+                2px 2px 8px rgba(0, 0, 0, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.3);
             transform: rotate(0.5deg);
             transition: all 0.2s ease;
-            font-size: 18px;
+            
+            font-size: 33px;
             color: #fff;
         }
-        
+
         .todo-list li:nth-child(odd) {
             background: linear-gradient(135deg, #f48fb1 0%, #f06292 100%);
             transform: rotate(-0.5deg);
         }
-        
+
         .todo-list li:nth-child(3n) {
             background: linear-gradient(135deg, #ffb74d 0%, #ffa726 100%);
             transform: rotate(0.3deg);
         }
-        
+
         .todo-list li.completed {
             opacity: 0.6;
             text-decoration: line-through;
         }
-        
+
         .todo-list li:hover {
             transform: rotate(0deg) scale(1.02);
-            box-shadow: 
-                3px 3px 12px rgba(0,0,0,0.4),
-                inset 0 1px 0 rgba(255,255,255,0.3);
+            box-shadow:
+                3px 3px 12px rgba(0, 0, 0, 0.4),
+                inset 0 1px 0 rgba(255, 255, 255, 0.3);
         }
-        
+
         .todo-list li .destroy {
             position: absolute;
             top: 50%;
@@ -196,21 +206,21 @@
             opacity: 0;
             transition: all 0.2s;
         }
-        
+
         .todo-list li:hover .destroy {
             opacity: 1;
         }
-        
+
         .todo-list li .destroy:hover {
             color: #af5b5e;
             transform: translateY(-50%) scale(1.2);
         }
-        
+
         .todo-list li .view {
             position: relative;
             padding-right: 45px;
         }
-        
+
         .todo-list li label {
             word-break: break-word;
             padding: 15px 60px 15px 15px;
@@ -218,7 +228,7 @@
             display: block;
             line-height: 1.2;
         }
-        
+
         .todo-list li .toggle {
             position: absolute;
             top: 50%;
@@ -227,33 +237,34 @@
             width: 20px;
             height: 20px;
         }
-        
+
         button {
             background: linear-gradient(135deg, #333 0%, #555 100%);
             color: #fff;
             border: none;
             padding: 8px 16px;
             border-radius: 3px;
-            font-family: 'Kalam', cursive;
+            font-family: 'Kalam', 'Kalam', cursive;
             font-size: 16px;
             cursor: pointer;
-            box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+            box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.3);
             transition: all 0.2s ease;
             margin: 2px;
         }
-        
+
         button:hover {
             transform: translateY(-2px);
-            box-shadow: 3px 3px 8px rgba(0,0,0,0.4);
+            box-shadow: 3px 3px 8px rgba(0, 0, 0, 0.4);
         }
-        
+
         button:disabled {
             opacity: 0.5;
             cursor: not-allowed;
         }
-        
-        select, input[type="text"] {
-            background: rgba(255,255,255,0.8);
+
+        select,
+        input[type="text"] {
+            background: rgba(255, 255, 255, 0.8);
             border: 2px dashed #333;
             padding: 5px;
             font-family: 'Kalam', cursive;
@@ -261,18 +272,18 @@
             border-radius: 3px;
             color: #333;
         }
-        
+
         input[type="range"] {
             background: transparent;
             -webkit-appearance: none;
         }
-        
+
         input[type="range"]::-webkit-slider-track {
-            background: rgba(0,0,0,0.2);
+            background: rgba(0, 0, 0, 0.2);
             height: 6px;
             border-radius: 3px;
         }
-        
+
         input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
             background: #333;
@@ -281,30 +292,30 @@
             border-radius: 50%;
             cursor: pointer;
         }
-        
+
         .footer {
             background: linear-gradient(135deg, #ffb74d 0%, #ffa726 100%);
             padding: 15px;
             margin-top: 20px;
             border-radius: 3px;
-            box-shadow: 
-                2px 2px 8px rgba(0,0,0,0.3),
-                inset 0 1px 0 rgba(255,255,255,0.3);
+            box-shadow:
+                2px 2px 8px rgba(0, 0, 0, 0.3),
+                inset 0 1px 0 rgba(255, 255, 255, 0.3);
             transform: rotate(0.5deg);
             color: #333;
         }
-        
+
         .filters {
             list-style: none;
             display: flex;
             justify-content: center;
             margin: 10px 0;
         }
-        
+
         .filters li {
             margin: 0 5px;
         }
-        
+
         .filters a {
             color: #333;
             text-decoration: none;
@@ -312,16 +323,16 @@
             border-radius: 3px;
             transition: all 0.2s ease;
         }
-        
+
         .filters a:hover {
-            background: rgba(255,255,255,0.3);
+            background: rgba(255, 255, 255, 0.3);
         }
-        
+
         .filters a.selected {
-            background: rgba(0,0,0,0.2);
+            background: rgba(0, 0, 0, 0.2);
             font-weight: bold;
         }
-        
+
         .info {
             position: fixed;
             bottom: 10px;
@@ -331,17 +342,18 @@
             font-size: 12px;
             text-align: center;
         }
-        
+
         .info a {
             color: #aaa;
             text-decoration: none;
         }
-        
+
         .info a:hover {
             color: #fff;
         }
     </style>
 </head>
+
 <body>
     <div id="app">
         <div class="postit postit-yellow" style="text-align: center; max-width: 400px;">
@@ -351,4 +363,5 @@
     </div>
     <script src="/js/todo.js"></script>
 </body>
+
 </html>

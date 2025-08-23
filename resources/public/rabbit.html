@@ -1,36 +1,54 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="UTF-8">
     <title>RABBIT // SQL_BROWSER</title>
+    <link href="fonts.css" rel="stylesheet" type="text/css">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;700&display=swap');
-        
+
         * {
             margin: 0;
             padding: 0;
+            font-family: 'Fira Code', 'JetBrains Mono', 'Courier New', monospace;
             box-sizing: border-box;
         }
-        
+
         body {
-            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            font-family: 'Fira Code', 'JetBrains Mono', 'Courier New', monospace;
             overflow: hidden;
             background: #0a0a0a;
             color: #00ff9f;
         }
-        
+
+
+
         /* Cyberpunk glow effects */
         @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.7; }
-            100% { opacity: 1; }
+            0% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.7;
+            }
+
+            100% {
+                opacity: 1;
+            }
         }
-        
+
         @keyframes scan {
-            0% { transform: translateY(-100%); }
-            100% { transform: translateY(100%); }
+            0% {
+                transform: translateY(-100%);
+            }
+
+            100% {
+                transform: translateY(100%);
+            }
         }
-        
+
         /* Block resize handles */
         .resize-handle {
             position: absolute;
@@ -42,37 +60,37 @@
             background: linear-gradient(135deg, transparent 50%, #00ff9f 50%);
             opacity: 0.5;
         }
-        
+
         .resize-handle:hover {
             opacity: 1;
         }
-        
+
         /* Scrollbar styling */
         ::-webkit-scrollbar {
             width: 8px;
             height: 8px;
         }
-        
+
         ::-webkit-scrollbar-track {
             background: rgba(0, 0, 0, 0.5);
             border: 1px solid rgba(0, 255, 159, 0.1);
         }
-        
+
         ::-webkit-scrollbar-thumb {
             background: linear-gradient(180deg, #00ff9f, #00cc7f);
             border-radius: 2px;
         }
-        
+
         ::-webkit-scrollbar-thumb:hover {
             background: #00ff9f;
             box-shadow: 0 0 10px #00ff9f;
         }
-        
+
         /* Grid styling */
         table {
             border-collapse: collapse;
         }
-        
+
         /* Range input styling for time travel slider */
         input[type="range"] {
             -webkit-appearance: none;
@@ -81,13 +99,14 @@
             cursor: pointer;
             outline: none;
         }
-        
+
         input[type="range"]::-webkit-slider-track {
-            background: transparent;  /* Transparent since we have custom track divs */
+            background: transparent;
+            /* Transparent since we have custom track divs */
             height: 20px;
             cursor: pointer;
         }
-        
+
         input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
             appearance: none;
@@ -100,24 +119,25 @@
             cursor: grab;
             transition: all 0.2s;
         }
-        
+
         input[type="range"]::-webkit-slider-thumb:hover {
             width: 16px;
             height: 16px;
             margin-top: -7px;
             box-shadow: 0 0 20px rgba(0, 255, 159, 1), 0 0 10px #00ff9f;
         }
-        
+
         input[type="range"]::-webkit-slider-thumb:active {
             cursor: grabbing;
         }
-        
+
         input[type="range"]::-moz-range-track {
-            background: transparent;  /* Transparent since we have custom track divs */
+            background: transparent;
+            /* Transparent since we have custom track divs */
             height: 20px;
             cursor: pointer;
         }
-        
+
         input[type="range"]::-moz-range-thumb {
             background: #00ff9f;
             width: 14px;
@@ -128,17 +148,17 @@
             cursor: grab;
             transition: all 0.2s;
         }
-        
+
         input[type="range"]::-moz-range-thumb:hover {
             width: 16px;
             height: 16px;
             box-shadow: 0 0 20px rgba(0, 255, 159, 1), 0 0 10px #00ff9f;
         }
-        
+
         input[type="range"]::-moz-range-thumb:active {
             cursor: grabbing;
         }
-        
+
         /* Loading animation */
         .loading {
             display: flex;
@@ -149,7 +169,7 @@
             position: relative;
             overflow: hidden;
         }
-        
+
         .loading::before {
             content: "";
             position: absolute;
@@ -160,22 +180,22 @@
             background: linear-gradient(90deg, transparent, #00ff9f, transparent);
             animation: scan 2s linear infinite;
         }
-        
+
         .loading h2 {
             color: #00ff9f;
-            font-family: 'JetBrains Mono', monospace;
+            font-family: 'Roboto Mono', 'JetBrains Mono', monospace;
             font-weight: 300;
             text-transform: uppercase;
             letter-spacing: 3px;
             animation: pulse 1.5s ease-in-out infinite;
             text-shadow: 0 0 20px rgba(0, 255, 159, 0.5);
         }
-        
+
         /* Button hover effects */
         button {
             transition: all 0.3s ease;
         }
-        
+
         button:hover {
             transform: translateY(-1px);
             box-shadow: 0 5px 15px rgba(0, 255, 159, 0.3);
@@ -189,9 +209,9 @@
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script>
         // Wait for mermaid to load
-        window.addEventListener('load', function() {
+        window.addEventListener('load', function () {
             if (window.mermaid) {
-                mermaid.initialize({ 
+                mermaid.initialize({
                     startOnLoad: false,
                     theme: 'dark',
                     themeVariables: {
@@ -225,6 +245,7 @@
         });
     </script>
 </head>
+
 <body>
     <div id="app">
         <div class="loading">
@@ -233,4 +254,5 @@
     </div>
     <script src="/js/rabbit.js"></script>
 </body>
+
 </html>

@@ -3,6 +3,7 @@
   (:require [reactor.core :as r]
             [reagent.core :as reagent]
             [reagent.ratom :as ratom]
+            [clojure.string :as str]
             [examples.rabbit-demo.template-resolver :as resolver]
             [examples.rabbit-demo.reactive-queries :as rq]))
 
@@ -56,8 +57,8 @@
                                                               "*")
                                                  (js/console.log "[IFRAME] PostMessage sent successfully!")
                                                  (catch js/Error e
-                                                   (js/console.error "[IFRAME] Error sending postMessage:" e))))))))))
-                                   (reset! resolved-url url-str)))
+                                                   (js/console.error "[IFRAME] Error sending postMessage:" e)))))))))
+                                   (reset! resolved-url url-str))))
         ;; Track last known results to detect changes
         last-results (atom nil)
         ;; Periodic check for changes (instead of watcher to avoid feedback loops)
@@ -67,11 +68,15 @@
     (reagent/create-class
      {:component-did-mount
       (fn [this]
-        (let [props (reagent/props this)]
+        (let [props (reagent/props this)
+              block-id (:id props)]
           (js/console.log "[IFRAME] Component mounted with props:" (clj->js props))
           ;; Initialize current-blocks with the blocks from props
           (reset! current-blocks (:blocks props))
           (js/console.log "[IFRAME] Initial blocks set:" (clj->js @current-blocks))
+          ;; Register template dependencies for implicit connection lines
+          (when block-id
+            (resolver/update-dependencies! block-id @local-url))
           (update-resolved-url!))
         ;; Set up periodic check for template changes (every 2 seconds)
         (let [url-str @local-url
@@ -80,23 +85,36 @@
             (reset! check-interval
                     (js/setInterval
                       (fn []
-                        ;; Get current results for referenced blocks
+                        ;; Get current results AND timestamps for referenced blocks
                         (let [current-results (into {}
                                                 (for [{:keys [block-id]} refs]
-                                                  [block-id (rq/get-block-results block-id)]))]
-                          ;; Only update if results actually changed
+                                                  (let [;; Normalize to string for consistent lookup
+                                                        block-id-str (cond
+                                                                      (string? block-id) block-id
+                                                                      (keyword? block-id) (name block-id)
+                                                                      :else (str block-id))]
+                                                    [block-id {:results (rq/get-block-results block-id)
+                                                              :timestamp (get-in @rq/block-results [:*timestamp block-id-str])}])))]
+                          ;; Update if results OR timestamps changed
                           (when (not= @last-results current-results)
-                            (js/console.log "[IFRAME] Block results changed at" (.toISOString (js/Date.)))
+                            (js/console.log "[IFRAME] Block results or timestamp changed at" (.toISOString (js/Date.)))
+                            (js/console.log "[IFRAME] Timestamps:" (clj->js (into {} (map (fn [[k v]] [k (:timestamp v)]) current-results))))
+                            (js/console.log "[IFRAME] Previous timestamps:" (clj->js (into {} (map (fn [[k v]] [k (:timestamp v)]) @last-results))))
                             (reset! last-results current-results)
                             ;; Update the resolved URL which will trigger postMessage
                             (update-resolved-url!))))
                       500)))))  ;; Reduced from 2000ms to 500ms for faster updates
       
       :component-will-unmount
-      (fn []
-        ;; Clean up interval
-        (when @check-interval
-          (js/clearInterval @check-interval)))
+      (fn [this]
+        (let [props (reagent/props this)
+              block-id (:id props)]
+          ;; Clean up interval
+          (when @check-interval
+            (js/clearInterval @check-interval))
+          ;; Clear template dependencies
+          (when block-id
+            (resolver/clear-dependencies! block-id))))
       
       :component-did-update
       (fn [this [_ old-props]]
@@ -145,7 +163,7 @@
                     :color "#8a2be2"
                     :padding "4px 8px"
                     :border-radius "4px"
-                    :font-family "monospace"
+                    :font-family "'JetBrains Mono', monospace"
                     :font-size "12px"}
             :on-change #(reset! temp-url (.. % -target -value))
             :on-key-down (fn [e]
@@ -154,6 +172,8 @@
                                      (.preventDefault e)
                                      (reset! local-url @temp-url)
                                      (reset! editing-url? false)
+                                     ;; Update template dependencies for implicit connection lines
+                                     (resolver/update-dependencies! id @temp-url)
                                      ;; Update block state
                                      (r/dispatch! [:update-block id {:url @temp-url}]))
                             "Escape" (do
@@ -169,7 +189,7 @@
            ;; Template URL display
            [:div
             {:style {:color (if @has-templates? "#00ff9f" "#8a2be2")
-                     :font-family "monospace"
+                     :font-family "'JetBrains Mono', monospace"
                      :font-size "11px"
                      :padding "4px 8px"
                      :background (if @has-templates? 
@@ -188,13 +208,16 @@
            (when @has-templates?
              [:div
               {:style {:color "#666"
-                       :font-family "monospace"
+                       :font-family "'JetBrains Mono', monospace"
                        :font-size "10px"
                        :padding "2px 8px"
                        :white-space "nowrap"
                        :overflow "hidden"
                        :text-overflow "ellipsis"}}
-              "→ " current-resolved-url])])
+              "→ " 
+              current-resolved-url
+              ;(str refs)
+              ])])
         
         ;; Zoom controls
         [:div.zoom-controls
@@ -225,7 +248,7 @@
          ;; Zoom percentage display
          [:span
           {:style {:color "#8a2be2"
-                   :font-family "monospace"
+                   :font-family "'JetBrains Mono', monospace"
                    :font-size "11px"
                    :min-width "45px"
                    :text-align "center"}}
@@ -259,7 +282,7 @@
                    :padding "2px 6px"
                    :border-radius "4px"
                    :cursor "pointer"
-                   :font-family "monospace"
+                   :font-family "'JetBrains Mono', monospace"
                    :font-size "10px"
                    :margin-left "4px"}
            :on-click (fn []

@@ -63,7 +63,7 @@
                 (fn [new-value]
                   (on-change new-value)))
     :options {:minimap {:enabled false}
-              :fontSize 12
+              :fontSize 16
               :fontFamily "'JetBrains Mono', 'Courier New', monospace"
               :lineNumbers "on"
               :glyphMargin false

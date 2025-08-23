@@ -29,7 +29,12 @@
                  [org.apache.kafka/kafka-streams-test-utils "4.0.0"]
                  ;;[pjstadig/humane-test-output "0.11.0"]
                  ;; SQL parsing and manipulation
-                 [com.github.jsqlparser/jsqlparser "4.9"]]
+                 [com.github.jsqlparser/jsqlparser "4.9"]
+                 ;; ClojureScript
+                 [org.clojure/clojurescript "1.11.132"]
+                 [reagent "1.2.0"]
+                 [cljsjs/react "18.2.0-1"]
+                 [cljsjs/react-dom "18.2.0-1"]]
 
   :jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
              "-Dio.netty.tryReflectionSetAccessible=true"]
@@ -37,7 +42,30 @@
             [lein-shell "0.5.0"]
             [lein-eftest "0.6.0"]
             [lein-ancient "0.6.15"]
-            [lein-changelog "0.3.2"]]
+            [lein-changelog "0.3.2"]
+            [lein-cljsbuild "1.1.8"]]
+  
+  ;; :cljsbuild {:repl-listen-port 9000
+  ;;             :repl-launch-commands
+  ;;             {"phantom" ["phantomjs" :stdout ".repl-phantom-out" :stderr ".repl-phantom-err"]}
+  ;;             :test-commands
+  ;;             {"test" ["phantomjs" :runner "target/test.js"]}
+  ;;             :builds [{:id "todo"
+  ;;                       :source-paths ["src"]
+  ;;                       :compiler {:main examples.todo-app.client
+  ;;                                  :output-to "resources/public/js/todo.js"
+  ;;                                  :output-dir "resources/public/js/todo-out"
+  ;;                                  :asset-path "/js/todo-out"
+  ;;                                  :optimizations :none
+  ;;                                  :source-map true
+  ;;                                  :source-map-timestamp true}}
+  ;;                      {:id "todo-min"
+  ;;                       :source-paths ["src"]
+  ;;                       :compiler {:main examples.todo-app.client
+  ;;                                  :output-to "resources/public/js/todo.min.js"
+  ;;                                  :optimizations :advanced
+  ;;                                  :pretty-print false}}]}
+  
   :profiles {:dev {:dependencies [[nrepl "1.0.0"]]}}
   :deploy-repositories [["releases" :clojars]]
   :aliases {"update-readme-version" ["shell" "sed" "-i" "s/\\\\[reactor \"[0-9.]*\"\\\\]/[reactor \"${:version}\"]/" "README.md"]}

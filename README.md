@@ -1,5 +1,13 @@
 # Reactor - XTDB powered full stack Re-frame (**WIP!)
 
+![alt text](http://textfiles.com/underconstruction/ViennaStrasse9671construction.gif "do not use, yet!")
+![alt text](http://textfiles.com/underconstruction/ththe300exhavenunderconstruction.gif "do not use, yet!")
+![alt text](http://textfiles.com/underconstruction/ViennaStrasse9671construction.gif "do not use, yet!")
+
+```clj
+[reactor "0.1.0"]
+```
+
 Write re-frame-style reactive apps that run on both client and server, with automatic persistence, time travel, reactive rules, and SQL.
 
 ## Why Reactor?

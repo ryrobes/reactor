@@ -1,0 +1,4 @@
+src/reactor/*.clj
+src/examples/rabbit_demo/
+src/examples/magic_counter/
+src/examples/*.clj

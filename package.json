@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "devDependencies": {
+    "@cljs-oss/module-deps": "^1.1.1",
     "shadow-cljs": "^2.25.2"
   },
   "dependencies": {
