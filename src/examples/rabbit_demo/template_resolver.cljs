@@ -47,13 +47,9 @@
   "Resolve a path in a nested data structure
    Handles both keyword and index access"
   [data path]
-  (js/console.log "Resolving path:" (clj->js {:data data :path path}))
-  (let [result (reduce
-                 (fn [current-data path-part]
-                   (js/console.log "  Step:" (clj->js {:path-part path-part 
-                                                       :current-data current-data
-                                                       :type (type current-data)}))
-                   (cond
+  (reduce
+    (fn [current-data path-part]
+      (cond
                      ;; Nil check - stop traversing if we hit nil
                      (nil? current-data)
                      nil
@@ -87,10 +83,8 @@
                      ;; Keyword access for maps
                      :else
                      (get current-data (keyword path-part))))
-                 data
-                 path)]
-    (js/console.log "  Final result:" (clj->js result))
-    result))
+    data
+    path))
 
 ;; =============================================================================
 ;; Block Data Resolution
@@ -109,13 +103,6 @@
             query-results (rq/get-block-results (:id block))
             ;; Merge the base block with query results
             merged (merge block query-results)]
-        (js/console.log "Query block data fetch:" 
-                       (clj->js {:block-id block-id
-                                :original-id (:id block)
-                                :block block
-                                :query-results query-results
-                                :merged merged
-                                :all-result-keys (vec (keys @examples.rabbit-demo.reactive-queries/block-results))}))
         merged)
       block)))
 
@@ -125,19 +112,11 @@
   (let [block-data (get-block-data blocks block-id)
         data (rq/get-block-results block-id)
         block-id-kw (if (keyword? block-id) block-id (keyword (cstr/replace (str block-id) ":" ""))) ;; ensure kw 
-        _ (println "!!!!!!block-data!!!!!!" block-id block-data)
-        _ (println "*timestamp" (get-in @rq/block-results [:*timestamp block-id-kw]))
-        ;; _ (println "!!!!!!data!!!!!!" block-id data)  
-        _ (println "!!!!!!Bdata!!!!!!" (str @rq/block-results))
-
         path2 (vec (for [p path]
                      (if (try (number? (edn/read-string p)) (catch :default _ false))
                        (edn/read-string p)
                        (keyword (cstr/replace (str p) ":" "")))))
         path2 (if (= (get path2 0) :*timestamp) [:*timestamp block-id-kw] path2)
-        _ (println "!!!!!!PATH!!!!!!!" (str path2))
-        ;result (when block-data (resolve-path block-data path))
-        _ (println "!!!!!!!!RES!!!!!!!!!" (get-in data path2))
         result (when data (if (= path2 [:*timestamp block-id-kw])
                             (get-in @rq/block-results path2)
                             (get-in data path2)))]
@@ -151,17 +130,42 @@
 
 (defn resolve-template
   "Resolve all template references in a string
-   Returns the string with all {refs} replaced with actual values"
+   Returns the string with all {refs} replaced with actual values
+   Special handling: if a URL parameter value is null/empty, remove the entire parameter"
   [template-str blocks]
   (if-not template-str
     ""
-    (let [refs (parse-template-refs template-str)]
-      (reduce
-        (fn [result-str {:keys [full-ref] :as ref}]
-          (let [value (resolve-template-ref blocks ref)]
-            (str/replace result-str full-ref (str value))))
-        template-str
-        refs))))
+    (let [_ (js/console.log "[TEMPLATE] Input template:" template-str)
+          refs (parse-template-refs template-str)
+          ;; First pass - resolve all template values
+          resolved (reduce
+                     (fn [result-str {:keys [full-ref] :as ref}]
+                       (let [value (resolve-template-ref blocks ref)
+                             new-str (str/replace result-str full-ref (if (nil? value) "" (str value)))]
+                         (js/console.log "[TEMPLATE] Replacing" full-ref "with" value "=>" new-str)
+                         new-str))
+                     template-str
+                     refs)
+          _ (js/console.log "[TEMPLATE] After replacements:" resolved)]
+      ;; Second pass - clean up URL parameters
+      (let [;; Match timestamps with or without milliseconds and Z
+            with-at-fix (str/replace resolved 
+                                     #"&(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)" 
+                                     "&at=$1")]
+        (when (not= resolved with-at-fix)
+          (js/console.log "[TEMPLATE] Fixed missing at= parameter:" resolved "->" with-at-fix))
+        (-> with-at-fix
+          ;; Remove empty parameters that come after other parameters
+          ;; Match &param= when followed by & or end of string
+          (str/replace #"&[^=&?]+=(?=&|$)" "")
+          ;; Remove empty parameters that are first (after ?)
+          (str/replace #"\?[^=&?]+=(?=&|$)" "")
+          ;; If first parameter was removed and there's another, fix the ?
+          (str/replace #"^\?&" "?")
+          ;; Clean up any double & that might result
+          (str/replace #"&&+" "&")
+          ;; Clean up trailing & or ?
+          (str/replace #"[&?]$" ""))))))
 
 ;; =============================================================================
 ;; Dependency Tracking

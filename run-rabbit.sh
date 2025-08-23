@@ -20,7 +20,7 @@ lsof -ti:5000 | xargs kill -9 2>/dev/null
 lsof -ti:8080 | xargs kill -9 2>/dev/null
 lsof -ti:8081 | xargs kill -9 2>/dev/null
 lsof -ti:8082 | xargs kill -9 2>/dev/null
-lsof -ti:9630 | xargs kill -9 2>/dev/null
+#lsof -ti:9630 | xargs kill -9 2>/dev/null
 sleep 1
 
 # Start the server

@@ -227,7 +227,7 @@
                                          chart-height (- block-height ui-height 55) ;(max 150 (- block-height ui-height))
                                          ;;_ (println "!!!!!!CHART_SIZES!!!!!!" block-size block-height ui-height @collapsed? @edit-mode?)
                                          ]
-                                     (js/console.log "[VEGA-CHART] Block height:" block-height "UI height:" ui-height "Chart height:" chart-height)
+                                     ;(js/console.log "[VEGA-CHART] Block height:" block-height "UI height:" ui-height "Chart height:" chart-height)
                                      chart-height)
                                    ;; Default height if no block-size
                                    300))
@@ -244,7 +244,7 @@
         (let [props (reagent/props this)
               ;; Props come from the reagent-render function, which passes the original props
               {:keys [data]} props]
-          (js/console.log "[VEGA-CHART] component-did-mount with data:" (clj->js data))
+          ;(js/console.log "[VEGA-CHART] component-did-mount with data:" (clj->js data))
           (when (and data (seq data) (not @edit-mode?))
             ;; Auto-select fields if not set
             (when (and (empty? @x-field) (empty? @y-field))
@@ -269,7 +269,7 @@
         (let [new-props (reagent/props this)
               new-data (:data new-props)
               old-data (:data old-props)]
-          (js/console.log "[VEGA-CHART] component-did-update - old data:" (clj->js old-data) "new data:" (clj->js new-data))
+          ;(js/console.log "[VEGA-CHART] component-did-update - old data:" (clj->js old-data) "new data:" (clj->js new-data))
           ;; Re-render when data changes or collapsed state changes
           (when (and (not= new-data old-data) 
                      (seq new-data)
@@ -295,7 +295,7 @@
       
       :reagent-render
       (fn [{:keys [id data on-config-change config block-size]}]
-        (js/console.log "[VEGA-CHART]" id "rendering with data:" (clj->js data) "edit-mode?" @edit-mode? "x-field:" @x-field "y-field:" @y-field "initialized?" @initialized?)
+        ;(js/console.log "[VEGA-CHART]" id "rendering with data:" (clj->js data) "edit-mode?" @edit-mode? "x-field:" @x-field "y-field:" @y-field "initialized?" @initialized?)
         ;; Auto-initialize and render when we have data and fields aren't set
         (when (and data (seq data) (empty? @x-field) (empty? @y-field) (not @edit-mode?))
           (let [fields (keys (first data))
@@ -306,7 +306,7 @@
                 second-field (if (keyword? (second fields))
                                (name (second fields)) 
                                (str (second fields)))]
-            (js/console.log "[VEGA-CHART] Auto-initializing with fields:" first-field "and" second-field "from fields:" (clj->js fields))
+            ;(js/console.log "[VEGA-CHART] Auto-initializing with fields:" first-field "and" second-field "from fields:" (clj->js fields))
             (when first-field 
               (reset! x-field first-field)
               (reset! initialized? true))
@@ -321,13 +321,13 @@
               (reset! current-config spec)
               ;; Render chart immediately after a delay to ensure DOM is ready
               (js/setTimeout #(do 
-                               (js/console.log "[VEGA-CHART] Rendering chart now with spec:" (clj->js spec) "and data:" (clj->js data))
+                               ;(js/console.log "[VEGA-CHART] Rendering chart now with spec:" (clj->js spec) "and data:" (clj->js data))
                                (render-vega-chart! (get-chart-elem-id) spec data)) 
                             100))))
         ;; Also render if we have data and fields are already set
         (when (and data (seq data) (not (empty? @x-field)) (not (empty? @y-field)) (not @edit-mode?) @initialized?)
           (js/setTimeout #(do 
-                           (js/console.log "[VEGA-CHART] Re-rendering with existing fields")
+                           ;(js/console.log "[VEGA-CHART] Re-rendering with existing fields")
                            (render-vega-chart! (get-chart-elem-id) @current-config data)) 
                         50))
         [:div {:style {:height "100%"

@@ -94,12 +94,13 @@
     (when latest-ts
       ;; Remove the latest timestamp from cache so it gets recalculated
       (swap! rcv/row-count-cache update query-key dissoc latest-ts)
-      (js/console.log "[TIME-TRAVEL] Invalidated cached row count for latest timestamp:" latest-ts))))
+      ;(js/console.log "[TIME-TRAVEL] Invalidated cached row count for latest timestamp:" latest-ts)
+      )))
 
 (defn handle-table-mutation!
   "Handle when a table mutation is detected for our query"
   [block-id sql]
-  (js/console.log "[TIME-TRAVEL] Table mutation detected for block" block-id)
+  ;(js/console.log "[TIME-TRAVEL] Table mutation detected for block" block-id)
   ;; 1. Invalidate the latest row count cache
   (invalidate-latest-row-count! sql)
   ;; 2. Re-fetch the query history to get new time ticks
@@ -110,7 +111,7 @@
   [block-id sql]
   ;; Ensure block-id is a string (handle keywords properly)
   (let [block-id-str (normalize-block-id block-id)]
-    (js/console.log "[TIME-TRAVEL] Fetching history for block" block-id-str "SQL:" sql)
+    ;(js/console.log "[TIME-TRAVEL] Fetching history for block" block-id-str "SQL:" sql)
     (-> (js/fetch (str (:server-url @r/config) "/api/query-history")
                   #js {:method "POST"
                        :headers #js {"Content-Type" "application/json"}
@@ -123,9 +124,9 @@
                        ;; Preserve existing current-index if available
                        existing-history (get @block-history block-id-str)
                        existing-index (:current-index existing-history)]
-                   (js/console.log "[TIME-TRAVEL] History received:" (clj->js history-data))
-                   (js/console.log "[TIME-TRAVEL] Storing under key:" block-id-str)
-                   (js/console.log "[TIME-TRAVEL] Existing index:" existing-index)
+                  ;;  (js/console.log "[TIME-TRAVEL] History received:" (clj->js history-data))
+                  ;;  (js/console.log "[TIME-TRAVEL] Storing under key:" block-id-str)
+                  ;;  (js/console.log "[TIME-TRAVEL] Existing index:" existing-index)
                    (let [timestamps (:timestamps history-data [])]
                      (swap! block-history assoc block-id-str 
                             {:timestamps timestamps
@@ -136,9 +137,11 @@
                                              existing-index
                                              (dec (count timestamps)))
                              :tables (:tables history-data [])}))
-                   (js/console.log "[TIME-TRAVEL] block-history now:" (clj->js @block-history)))))
+                   ;(js/console.log "[TIME-TRAVEL] block-history now:" (clj->js @block-history))
+                   )))
         (.catch (fn [err]
-                  (js/console.error "[TIME-TRAVEL] Failed to fetch history:" err))))))
+                  (js/console.error "[TIME-TRAVEL] Failed to fetch history:" err)
+                  )))))
 
 (defn time-travel-slider
   "Time travel slider component for a query block"
@@ -448,10 +451,10 @@
     :reagent-render
     (fn [{:keys [block-id sql]}]
       (let [block-id-str (normalize-block-id block-id)
-            _ (js/console.log "[TIME-TRAVEL-UI] Rendering for block-id:" block-id "-> str:" block-id-str)
-            _ (js/console.log "[TIME-TRAVEL-UI] block-history keys:" (clj->js (keys @block-history)))
+            #_ (js/console.log "[TIME-TRAVEL-UI] Rendering for block-id:" block-id "-> str:" block-id-str)
+            #_ (js/console.log "[TIME-TRAVEL-UI] block-history keys:" (clj->js (keys @block-history)))
             history (get @block-history block-id-str)
-            _ (js/console.log "[TIME-TRAVEL-UI] History for" block-id-str ":" (clj->js history))]
+            #_ (js/console.log "[TIME-TRAVEL-UI] History for" block-id-str ":" (clj->js history))]
         [:div
          (when (:timestamps history)
            [time-travel-slider 

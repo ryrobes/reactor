@@ -1,6 +1,8 @@
 (ns reactor.core
   "Clean re-frame-like API for Reactor - just subscribe and dispatch!"
-  (:require [reagent.core :as r]))
+  (:require 
+   [clojure.string :as cstr]
+   [reagent.core :as r]))
 
 ;; Configuration
 (defonce config (atom {:server-url "http://localhost:4000"
@@ -201,6 +203,74 @@
                   (reset! app-db (:app_db session))
                   session)))
         (.catch #(js/console.error "Failed to load session at timestamp:" %)))))
+
+(declare load-session-current!)
+
+;; Track last loaded session to prevent duplicate loads
+(defonce last-loaded-session (atom nil))
+
+(defn handle-hash-change!
+  "Handle hash parameter changes for client-side state loading without page refresh"
+  []
+  (when (> (.-length js/window.location.hash) 1)
+    (let [hash-str (subs js/window.location.hash 1) ;; Remove the #
+          ;; Support both #?param=value and #param=value formats
+          clean-hash (if (cstr/starts-with? hash-str "?") 
+                       (subs hash-str 1) 
+                       hash-str)
+          hash-params (js/URLSearchParams. clean-hash)
+          session-id (.get hash-params "session_id")
+          at-timestamp (.get hash-params "at")]
+      (when session-id
+        ;; Create a unique key for this session+timestamp combo
+        (let [session-key (str session-id "-" (or at-timestamp "current"))]
+          ;; Only load if this is different from the last loaded session
+          (when (not= @last-loaded-session session-key)
+            (js/console.log "[CLIENT] Hash change - loading NEW session:" session-id 
+                           (if at-timestamp (str " at " at-timestamp) " (current)")
+                           "- Previous was:" @last-loaded-session)
+            (reset! last-loaded-session session-key)
+            (if at-timestamp
+              (load-session-at! session-id at-timestamp)
+              (load-session-current! session-id)))
+          ;; If it's the same, log that we're skipping
+          (when (= @last-loaded-session session-key)
+            (js/console.log "[CLIENT] Skipping duplicate hash change for:" session-key)))))))
+
+(defn handle-parent-message!
+  "Handle postMessage from parent window for state updates"
+  [event]
+  (let [data (.-data event)]
+    ;; Only log our messages, not React DevTools or other messages
+    (when (and data (= (.-type data) "reactor-state-update"))
+      (js/console.log "[CLIENT] Got reactor-state-update message from parent")
+      (let [hash-str (.-hash data)]
+        (js/console.log "[CLIENT] Hash from parent:" hash-str)
+        ;; Parse the hash parameters directly
+        (when (and hash-str (> (.-length hash-str) 1))
+          (let [clean-hash (if (cstr/starts-with? (subs hash-str 1) "?")
+                             (subs hash-str 2)  ;; Remove #?
+                             (subs hash-str 1)) ;; Remove #
+                hash-params (js/URLSearchParams. clean-hash)
+                session-id (.get hash-params "session_id")
+                at-timestamp (.get hash-params "at")]
+            ;; Create a unique key for this session+timestamp combo
+            (let [session-key (str session-id "-" (or at-timestamp "current"))]
+              ;; Only load if this is different from the last loaded session
+              (when (and session-id (not= @last-loaded-session session-key))
+                (js/console.log "[CLIENT] Loading NEW session from message:" session-id 
+                               (if at-timestamp (str " at " at-timestamp) " (current)")
+                               "- Previous was:" @last-loaded-session)
+                (reset! last-loaded-session session-key)
+                ;; Load the session state directly
+                (if at-timestamp
+                  (load-session-at! session-id at-timestamp)
+                  (load-session-current! session-id))
+                ;; Update the URL to reflect the change (without triggering navigation)
+                (js/window.history.replaceState nil nil hash-str))
+              ;; If it's the same session, just log
+              (when (= @last-loaded-session session-key)
+                (js/console.log "[CLIENT] Ignoring duplicate session load:" session-key)))))))))
 
 (defn load-session-current!
   "Load the current state of a specific session and replace current app-db"
@@ -428,10 +498,23 @@
    (install-snapshot-handlers!)
    
    ;; Check for URL parameters - priority: snapshot > session+at > session > normal
+   ;; Also support hash parameters for client-side state loading
    (let [params (js/URLSearchParams. js/window.location.search)
+         ;; Parse hash parameters if present
+         hash-str (when (> (.-length js/window.location.hash) 1)
+                   (subs js/window.location.hash 1))
+         clean-hash (when hash-str
+                     (if (cstr/starts-with? hash-str "?") 
+                       (subs hash-str 1) 
+                       hash-str))
+         hash-params (when clean-hash 
+                      (js/URLSearchParams. clean-hash))
+         ;; URL params take priority over hash params
          snapshot-id (.get params "snapshot")
-         session-id-param (.get params "session_id")
-         at-timestamp (.get params "at")
+         session-id-param (or (.get params "session_id")
+                            (when hash-params (.get hash-params "session_id")))
+         at-timestamp (or (.get params "at")
+                        (when hash-params (.get hash-params "at")))
          ;; Determine loading mode
          loading-mode (cond
                        snapshot-id :snapshot
@@ -440,6 +523,12 @@
                        :else :normal)
          ;; Track if we should skip the first SSE message when loading historical/different state
          skip-first-sse? (atom (not= loading-mode :normal))]
+     
+     ;; Set up hash change listener for dynamic state loading
+     (.addEventListener js/window "hashchange" handle-hash-change!)
+     
+     ;; Set up postMessage listener for iframe communication
+     (.addEventListener js/window "message" handle-parent-message!)
      
      ;; Load initial state based on mode
      (case loading-mode
@@ -594,7 +683,7 @@
                                              (when as-of {:as-of as-of}))))})  ;; Pass sub-id to server
         (.then #(.json %))
         (.then #(let [result (js->clj % :keywordize-keys true)]
-                  (js/console.log "[CLIENT] Initial query result for" sub-id "Result:" (clj->js result))
+                  ;(js/console.log "[CLIENT] Initial query result for" sub-id "Result:" (clj->js result))
                   ;; Server should respect our ID - no mapping needed
                   (when-let [server-sub-id (:subscription-id result)]
                     (when (not= server-sub-id sub-id)

@@ -2,7 +2,9 @@
   "Iframe block component for embedding external content with zoom controls and template support"
   (:require [reactor.core :as r]
             [reagent.core :as reagent]
-            [examples.rabbit-demo.template-resolver :as resolver]))
+            [reagent.ratom :as ratom]
+            [examples.rabbit-demo.template-resolver :as resolver]
+            [examples.rabbit-demo.reactive-queries :as rq]))
 
 (defn iframe-block 
   "Iframe content component - just the inner content, wrapper is handled by client.cljs"
@@ -14,44 +16,105 @@
         temp-url (reagent/atom "")
         ;; Template resolution
         has-templates? (reagent/atom false)
-        resolved-url (reagent/atom "")
-        template-errors (reagent/atom nil)]
+        template-errors (reagent/atom nil)
+        ;; Track iframe element and last sent message
+        iframe-ref (atom nil)
+        last-sent-hash (atom nil)
+        ;; Simple atom for resolved URL - we'll update it manually
+        resolved-url (reagent/atom (or url "http://localhost:8080"))
+        ;; Store blocks in an atom so we can access the latest version
+        current-blocks (atom blocks)
+        ;; Manual update function that only runs when needed
+        update-resolved-url! (fn []
+                               (let [url-str @local-url
+                                     refs (resolver/parse-template-refs url-str)]
+                                 (if (seq refs)
+                                   (let [_ (js/console.log "[IFRAME] Current blocks:" (clj->js @current-blocks))
+                                         _ (js/console.log "[IFRAME] Template refs found:" (clj->js refs))
+                                         _ (js/console.log "[IFRAME] Blocks keys:" (clj->js (keys @current-blocks)))
+                                         new-resolved (resolver/resolve-template url-str @current-blocks)]
+                                     (js/console.log "[IFRAME] Resolving template. Old:" @resolved-url "New:" new-resolved)
+                                     (when (not= @resolved-url new-resolved)
+                                       (js/console.log "[IFRAME] URL changed! Updating...")
+                                       (reset! resolved-url new-resolved)
+                                       ;; Send update via postMessage (cross-origin safe)
+                                       (when-let [iframe @iframe-ref]
+                                         (js/console.log "[IFRAME] Iframe element exists, sending update via postMessage")
+                                         (when-let [content-window (.-contentWindow iframe)]
+                                           (let [url (js/URL. new-resolved "http://localhost:8083")
+                                                 hash-part (.-hash url)]
+                                             (js/console.log "[IFRAME] Sending hash update:" hash-part)
+                                             (when (and hash-part 
+                                                       (> (.-length hash-part) 1)
+                                                       (not= hash-part @last-sent-hash))
+                                               (reset! last-sent-hash hash-part)
+                                               ;; Use postMessage for cross-origin communication
+                                               (try
+                                                 (.postMessage content-window
+                                                              #js {:type "reactor-state-update"
+                                                                   :hash hash-part}
+                                                              "*")
+                                                 (js/console.log "[IFRAME] PostMessage sent successfully!")
+                                                 (catch js/Error e
+                                                   (js/console.error "[IFRAME] Error sending postMessage:" e))))))))))
+                                   (reset! resolved-url url-str)))
+        ;; Track last known results to detect changes
+        last-results (atom nil)
+        ;; Periodic check for changes (instead of watcher to avoid feedback loops)
+        check-interval (atom nil)]
     
-    ;; Effect to resolve templates when URL or blocks change
+    ;; Create component with lifecycle methods
     (reagent/create-class
      {:component-did-mount
-      (fn []
-        (when @local-url
-          (let [refs (resolver/parse-template-refs @local-url)]
-            (reset! has-templates? (seq refs))
-            (when (seq refs)
-              (resolver/update-dependencies! id @local-url)
-              ;; Initial resolution
-              (let [blocks (or (:blocks block) {})
-                    resolved (resolver/resolve-template @local-url blocks)]
-                (reset! resolved-url resolved))))))
+      (fn [this]
+        (let [props (reagent/props this)]
+          (js/console.log "[IFRAME] Component mounted with props:" (clj->js props))
+          ;; Initialize current-blocks with the blocks from props
+          (reset! current-blocks (:blocks props))
+          (js/console.log "[IFRAME] Initial blocks set:" (clj->js @current-blocks))
+          (update-resolved-url!))
+        ;; Set up periodic check for template changes (every 2 seconds)
+        (let [url-str @local-url
+              refs (resolver/parse-template-refs url-str)]
+          (when (seq refs)
+            (reset! check-interval
+                    (js/setInterval
+                      (fn []
+                        ;; Get current results for referenced blocks
+                        (let [current-results (into {}
+                                                (for [{:keys [block-id]} refs]
+                                                  [block-id (rq/get-block-results block-id)]))]
+                          ;; Only update if results actually changed
+                          (when (not= @last-results current-results)
+                            (js/console.log "[IFRAME] Block results changed at" (.toISOString (js/Date.)))
+                            (reset! last-results current-results)
+                            ;; Update the resolved URL which will trigger postMessage
+                            (update-resolved-url!))))
+                      500)))))  ;; Reduced from 2000ms to 500ms for faster updates
       
       :component-will-unmount
       (fn []
-        (resolver/clear-dependencies! id))
+        ;; Clean up interval
+        (when @check-interval
+          (js/clearInterval @check-interval)))
       
       :component-did-update
       (fn [this [_ old-props]]
-        (let [new-props (second (reagent/argv this))
-              new-url (:url new-props)
-              new-blocks (:blocks new-props)]
-          ;; Only update if URL or blocks actually changed
-          (when (or (not= new-url (:url old-props))
-                    (not= new-blocks (:blocks old-props)))
-            (when @local-url
-              (let [refs (resolver/parse-template-refs @local-url)]
-                (when (seq refs)
-                  (resolver/update-dependencies! id @local-url)
-                  (let [resolved (resolver/resolve-template @local-url new-blocks)]
-                    (reset! resolved-url resolved))))))))
+        (let [new-props (reagent/props this)]
+          ;; Update current-blocks atom with latest blocks
+          (reset! current-blocks (:blocks new-props))
+          ;; Update if blocks changed (for manual template resolution)
+          (when (not= (:blocks old-props) (:blocks new-props))
+            (js/console.log "[IFRAME] Blocks prop changed, updating resolved URL")
+            (update-resolved-url!))))
       
       :reagent-render
       (fn [{:keys [id url zoom blocks] :as block}]
+        (let [url-str @local-url
+              refs (resolver/parse-template-refs url-str)
+              has-templates (seq refs)
+              current-resolved-url @resolved-url]
+          (reset! has-templates? has-templates)
       [:div.iframe-block-content
        {:style {:width "100%"
                 :height "100%"
@@ -131,7 +194,7 @@
                        :white-space "nowrap"
                        :overflow "hidden"
                        :text-overflow "ellipsis"}}
-              "→ " @resolved-url])])
+              "→ " current-resolved-url])])
         
         ;; Zoom controls
         [:div.zoom-controls
@@ -213,9 +276,36 @@
                  :border "1px solid rgba(138,43,226,0.1)"
                  :border-radius "4px"}}
         
-        ;; The actual iframe
+        ;; The actual iframe with postMessage communication
         [:iframe
-         {:src (if @has-templates? @resolved-url @local-url)
+         {:ref (fn [iframe-element]
+                 (when iframe-element
+                   (reset! iframe-ref iframe-element)
+                   ;; Send initial hash params once iframe loads
+                   (when has-templates
+                     (set! (.-onload iframe-element)
+                           (fn []
+                             (let [url (js/URL. current-resolved-url "http://localhost:8083")
+                                   hash-part (.-hash url)]
+                               (when (and hash-part (> (.-length hash-part) 1))
+                                 (js/console.log "[IFRAME] Iframe loaded, sending initial hash:" hash-part)
+                                 (try
+                                   (.postMessage (.-contentWindow iframe-element)
+                                                #js {:type "reactor-state-update"
+                                                     :hash hash-part}
+                                                "*")
+                                   (js/console.log "[IFRAME] Initial postMessage sent!")
+                                   (catch js/Error e
+                                     (js/console.error "[IFRAME] Error sending initial postMessage:" e)))))))))
+                 ;; React ref callbacks must return undefined
+                 nil)
+          :src (if has-templates
+                 ;; For templates, use base URL without hash to avoid reloads
+                 ;; We'll send hash params via postMessage instead
+                 (let [url (js/URL. current-resolved-url "http://localhost:8083")]
+                   (set! (.-hash url) "")
+                   (.toString url))
+                 url-str)
           :style {:width (str @local-zoom "%")
                   :height (str @local-zoom "%")
                   :border "none"
@@ -224,6 +314,13 @@
                   :position "absolute"
                   :top 0
                   :left 0}
-          ;; Security settings - adjust as needed
-          :sandbox "allow-same-origin allow-scripts allow-forms allow-popups"
-          :key (str id "-" (:refresh-at block))}]]])})))
+          ;; Security settings - allow-same-origin is crucial for postMessage
+          ;; Commenting out sandbox for now to ensure postMessage works
+          ;; :sandbox "allow-same-origin allow-scripts allow-forms allow-popups"
+          ;; Only change key if the base URL changes, not hash params
+          :key (str id "-" (if has-templates
+                             (let [url (js/URL. current-resolved-url "http://localhost:8083")]
+                               (set! (.-hash url) "")
+                               (set! (.-search url) "")
+                               (.toString url))
+                             url-str))}]]]))})))

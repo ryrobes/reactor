@@ -469,7 +469,7 @@
                           (get @local-sizes id size)
                           size)
             source-block (when source-id @(r/subscribe [:block source-id]))
-            _ (println "SOURCE BLOCK" source-block source-id (rq/get-block-results source-id) (keys @rq/block-results))
+            #_ (println "SOURCE BLOCK" source-block source-id (rq/get-block-results source-id) (keys @rq/block-results))
             ;; Get results from reactive-queries for the source block - exactly like query block does it!
             source-results (when source-id (rq/get-block-results source-id))
             ;; Extract the data - this should be the same as what the query block shows
