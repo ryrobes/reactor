@@ -12,7 +12,6 @@
     ;; Get RECENT changes by ordering DESC, then reverse for display
     (let [query (str "SELECT DISTINCT _valid_from FROM " table-name 
                     " FOR VALID_TIME ALL "
-                    ;" WHERE _valid_from IS NOT NULL"
                     " ORDER BY _valid_from DESC"  ;; Get newest first
                     " LIMIT 40" ; (* 2 limit)
                      )  ;; Get extra to ensure good coverage

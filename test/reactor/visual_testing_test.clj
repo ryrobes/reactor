@@ -100,7 +100,7 @@
           
           ;; Run test (using correct todo URL)
           result (vt/run-visual-test! "todo" "with-items" snapshot-id
-                                     :base-url "http://localhost:8083/todo.html"
+                                     :base-url "http://localhost:8083/todo-postit.html"
                                      :threshold 98.0)]
       
       (is (= "PASS" (:status result))

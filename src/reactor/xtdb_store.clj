@@ -58,26 +58,34 @@
           (throw (ex-info "Unsupported operation" {:op op})))))))
 
 (defn put-entity
-  "Store an entity - creates new temporal versions for time travel"
+  "Store an entity - XTDB automatically creates temporal versions"
   [node table entity-id data]
-  ;; XTDB 2.0 approach: DELETE then INSERT to ensure new temporal version
-  ;; This creates a new SYSTEM_TIME entry for each update
   (with-open [conn (get-connection node)]
-    (jdbc/with-transaction [tx conn]
-      ;; First delete the existing record (if any)
-      (jdbc/execute! tx [(str "DELETE FROM " table " WHERE _id = ?") entity-id])
-      ;; Then insert the new record - this always creates a new temporal version
-      ;; Include _valid_from with current timestamp to ensure new valid time version
-      (let [;; Add _valid_from with current timestamp if not present
-            data-with-valid-time (if (contains? data :_valid_from)
-                                   data
-                                   (assoc data :_valid_from (java.time.Instant/now)))
-            columns (cons "_id" (map name (keys data-with-valid-time)))
-            placeholders (str/join ", " (repeat (count columns) "?"))
-            values (cons entity-id (vals data-with-valid-time))
-            insert-sql (str "INSERT INTO " table " (" (str/join ", " columns) ") "
-                           "VALUES (" placeholders ")")]
-        (jdbc/execute! tx (into [insert-sql] values))))))
+    ;; Try UPDATE first, if no rows affected then INSERT
+    (let [columns (keys data)
+          set-clause (str/join ", " (map #(str (name %) " = ?") columns))
+          update-values (concat (vals data) [entity-id])
+          update-sql (str "UPDATE " table " SET " set-clause " WHERE _id = ?")
+          result (jdbc/execute! conn (into [update-sql] update-values))
+          ;; Handle both possible return types from jdbc/execute!
+          rows-affected (cond
+                         (number? result) result
+                         (map? result) (:next.jdbc/update-count result 0)
+                         (sequential? result) 
+                           (let [first-item (first result)]
+                             (cond
+                               (number? first-item) first-item
+                               (map? first-item) (:next.jdbc/update-count first-item 0)
+                               :else 0))
+                         :else 0)]
+      ;; If no rows were updated, insert new record
+      (when (zero? rows-affected)
+        (let [all-columns (cons "_id" (map name columns))
+              placeholders (str/join ", " (repeat (count all-columns) "?"))
+              all-values (cons entity-id (vals data))
+              insert-sql (str "INSERT INTO " table " (" (str/join ", " all-columns) ") "
+                             "VALUES (" placeholders ")")]
+          (jdbc/execute! conn (into [insert-sql] all-values)))))))
 
 (defn get-entity
   "Retrieve an entity by ID"
@@ -95,32 +103,15 @@
     (jdbc/execute! conn [(str "DELETE FROM " table " WHERE _id = ?") entity-id])))
 
 (defn update-entity
-  "Update specific fields of an entity - creates new temporal versions for time travel"
+  "Update specific fields of an entity - XTDB automatically creates temporal versions"
   [node table entity-id updates]
   (when (seq updates)
-    (with-open [conn (get-connection node)]
-      (jdbc/with-transaction [tx conn]
-        ;; First get the existing entity
-        (let [existing (first (jdbc/execute! tx 
-                                            [(str "SELECT * FROM " table " WHERE _id = ?") entity-id]
-                                            {:builder-fn rs/as-unqualified-lower-maps}))
-              ;; Filter out system columns and merge updates
-              clean-existing (dissoc existing :_id :_system_from :_system_to 
-                                   :system_time_start :system_time_end
-                                   :_valid_from :_valid_to)
-              ;; Merge updates with existing data and add new _valid_from
-              merged-data (-> clean-existing
-                            (merge updates)
-                            (assoc :_valid_from (java.time.Instant/now)))]
-          ;; Delete the existing record
-          (jdbc/execute! tx [(str "DELETE FROM " table " WHERE _id = ?") entity-id])
-          ;; Insert the updated record - this creates a new temporal version
-          (let [columns (cons "_id" (map name (keys merged-data)))
-                placeholders (str/join ", " (repeat (count columns) "?"))
-                values (cons entity-id (vals merged-data))
-                insert-sql (str "INSERT INTO " table " (" (str/join ", " columns) ") "
-                               "VALUES (" placeholders ")")]
-            (jdbc/execute! tx (into [insert-sql] values))))))))
+    (let [set-clause (str/join ", "
+                       (map #(str (name %) " = ?") (keys updates)))
+          values (concat (vals updates) [entity-id])
+          sql (str "UPDATE " table " SET " set-clause " WHERE _id = ?")]
+      (with-open [conn (get-connection node)]
+        (jdbc/execute! conn (into [sql] values))))))
 
 ;; ============================================================================
 ;; Query Operations

@@ -8,7 +8,7 @@
 
 (defonce block-history (reagent/atom {}))  ;; block-id -> {:timestamps [...] :current-index N :hover-index N}
 (defonce debounce-timers (atom {}))  ;; block-id -> timer-id for debouncing
-(defonce cumulative-mode (reagent/atom {}))  ;; block-id -> boolean for cumulative vs differential mode
+(defonce chart-mode (reagent/atom {}))  ;; block-id -> :differential | :cumulative | :data-size
 
 (defn normalize-block-id
   "Normalize block ID to string for consistent storage"
@@ -194,7 +194,9 @@
          (let [display-index (or hover-index current-index)
                is-now? (= display-index (dec (count timestamps)))
                timestamp (when-not is-now? (nth timestamps display-index nil))
-               cumulative? (get @cumulative-mode block-id-str false)
+               mode (get @chart-mode block-id-str :differential)
+               cumulative? (= mode :cumulative)
+               data-size-mode? (= mode :data-size)
                ;; Get row counts for diff calculation
                row-count (when (and sql timestamp) 
                           (rcv/get-cached-count sql timestamp))
@@ -230,8 +232,9 @@
                "NO HISTORY")))]
         ;; Toggle for cumulative mode
         [:button {:style {:padding "2px 6px"
-                          :background (if (get @cumulative-mode block-id-str false)
-                                       "rgba(0,255,159,0.3)"
+                          :background (case (get @chart-mode block-id-str :differential)
+                                       :cumulative "rgba(255,165,0,0.3)"
+                                       :data-size "rgba(138,43,226,0.3)"
                                        "rgba(0,255,159,0.1)")
                           :border "1px solid rgba(0,255,159,0.5)"
                           :border-radius "3px"
@@ -239,8 +242,18 @@
                           :font-size "9px"
                           :font-family "'JetBrains Mono', monospace"
                           :cursor "pointer"}
-                  :on-click #(swap! cumulative-mode update block-id-str not)}
-         (if (get @cumulative-mode block-id-str false) "CUMULATIVE" "DIFFERENTIAL")]]
+                  :on-click (fn []
+                             (swap! chart-mode update block-id-str
+                                   (fn [mode]
+                                     (case mode
+                                       :cumulative :data-size
+                                       :data-size :differential
+                                       :differential :cumulative
+                                       :cumulative))))}
+         (case (get @chart-mode block-id-str :differential)
+           :cumulative "CUMULATIVE"
+           :data-size "DATA-SIZE"
+           :differential "DIFFERENTIAL")]]
        
        ;; Compact timeline visualization
        [:div {:style {:position "relative"
@@ -328,7 +341,8 @@
                   :timestamps (filter some? timestamps)  ; Filter out nil (NOW) markers
                   :width @container-width  ; Use measured container width
                   :height 40
-                  :cumulative? (get @cumulative-mode block-id-str false)}]])
+                  :mode (get @chart-mode block-id-str :differential)
+                   :cumulative? (= (get @chart-mode block-id-str :differential) :cumulative)}]])
         
         ;; Data points visualization
         [:div {:style {:position "absolute"

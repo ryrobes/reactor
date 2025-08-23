@@ -193,6 +193,51 @@
     (meta/track-subscription-removed! sub-id "manual-unregister")
     (log/info "Unregistered query subscription" sub-id)))
 
+(defn calculate-result-metrics
+  "Calculate size metrics for query results - cheap character count approximation"
+  [results]
+  (try
+    ;; Use pr-str on just a sample if results are large
+    (if (> (count results) 100)
+      ;; For large result sets, sample first 10 and last 10 rows and extrapolate
+      (let [sample (concat (take 10 results) (take-last 10 results))
+            sample-size (reduce + (map #(count (pr-str %)) sample))
+            avg-row-size (/ sample-size (count sample))]
+        (long (* avg-row-size (count results))))
+      ;; For small result sets, calculate exact size
+      (reduce + (map #(count (pr-str %)) results)))
+    (catch Exception e
+      (log/warn "Failed to calculate result size metrics" e)
+      0)))
+
+;; Cache for result metrics keyed by [query params timestamp]
+(defonce metrics-cache (atom {}))
+(defonce cache-cleanup-executor (atom nil))
+
+(defn cleanup-metrics-cache!
+  "Remove old entries from metrics cache (older than 1 hour)"
+  []
+  (let [cutoff (- (System/currentTimeMillis) (* 60 60 1000))]
+    (swap! metrics-cache
+           (fn [cache]
+             (into {}
+                   (filter (fn [[[_ _ timestamp] _]]
+                            (or (nil? timestamp)
+                                (> timestamp cutoff)))
+                          cache))))))
+
+(defn start-cache-cleanup!
+  "Start periodic cleanup of metrics cache"
+  []
+  (when-not @cache-cleanup-executor
+    (reset! cache-cleanup-executor
+            (java.util.concurrent.Executors/newScheduledThreadPool 1))
+    (.scheduleAtFixedRate @cache-cleanup-executor
+                         cleanup-metrics-cache!
+                         1 ;; initial delay
+                         5 ;; period in minutes
+                         java.util.concurrent.TimeUnit/MINUTES)))
+
 (defn re-execute-subscription
   "Re-execute a subscription's query and invoke its callback with results."
   [sub-id]
@@ -206,10 +251,25 @@
                       (xts/execute-sql node query params)
                       (xts/execute-sql node query))
               execution-time (- (System/currentTimeMillis) start-time)
-              result-count (count (:results result []))
+              results (:results result [])
+              result-count (count results)
+              ;; Calculate data size metrics (cached for temporal queries)
+              cache-key [query params (:timestamp result)]
+              data-size (if-let [cached-size (and cache-key (get @metrics-cache cache-key))]
+                         cached-size
+                         (let [size (calculate-result-metrics results)]
+                           (when cache-key
+                             (swap! metrics-cache assoc cache-key size))
+                           size))
+              ;; Add metrics to result
+              result-with-metrics (assoc result 
+                                        :metrics {:row-count result-count
+                                                 :data-size data-size
+                                                 :execution-time execution-time})
               ;; Use client-id if available, otherwise fall back to sub-id
               subscription-id (or client-id sub-id)]
-          (log/info "[KAFKA-REACTIVE] Query executed for" sub-id "sending as" subscription-id "got" result-count "results")
+          (log/info "[KAFKA-REACTIVE] Query executed for" sub-id "sending as" subscription-id 
+                   "got" result-count "results, size:" data-size "chars")
           ;; Track subscription update
           (meta/track-subscription-updated! sub-id execution-time result-count)
           ;; Track query performance
@@ -217,7 +277,7 @@
           (callback {:subscription-id subscription-id
                     :session-id session-id
                     :query query
-                    :result result}))
+                    :result result-with-metrics}))
         (log/warn "[KAFKA-REACTIVE] No XTDB node available for re-execution"))
       (catch Exception e
         (log/error e "[KAFKA-REACTIVE] Error re-executing subscription" sub-id)))
@@ -300,6 +360,8 @@
   (reset! running? true)
   ;; Start the debounce executor
   (start-debounce-executor!)
+  ;; Start cache cleanup for metrics
+  (start-cache-cleanup!)
   (let [consumer-instance (jc/consumer @kafka-config)]
     (reset! consumer consumer-instance)
     

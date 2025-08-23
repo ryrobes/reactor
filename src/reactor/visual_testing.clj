@@ -37,10 +37,11 @@
     (try
       (xts/execute-sql node
         "INSERT INTO reactor_visual_results
-         (_id, app_name, test_name, step_index, baseline_id, 
+         (_id, app_name, test_name, step_index, baseline_id,
+          baseline_screenshot_path, current_screenshot_path, diff_image_path,
           image_similarity, dom_differences, status, artifacts_path, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        "dummy-result" "dummy" "dummy" 0 nil 0.0 nil "DUMMY" nil (java.time.Instant/now))
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "dummy-result" "dummy" "dummy" 0 nil nil nil nil 0.0 nil "DUMMY" nil (java.time.Instant/now))
       (xts/execute-sql node
         "DELETE FROM reactor_visual_results WHERE _id = ?"
         "dummy-result")
@@ -48,6 +49,166 @@
         (println "Results table initialization:" (.getMessage e))))
     
     (println "Visual test tables initialized")))
+
+;; ============================================================================
+;; Terminal Image Display
+;; ============================================================================
+
+(defn terminal-supports-images?
+  "Check if terminal supports image display"
+  []
+  (let [term (System/getenv "TERM")
+        term-program (System/getenv "TERM_PROGRAM")]
+    (or (= "iTerm.app" term-program)
+        (str/includes? (or term "") "kitty")
+        (str/includes? (or term "") "wezterm")
+        (str/includes? (or term "") "sixel"))))
+
+(defn display-image-in-terminal
+  "Display image in terminal using imgcat or other protocols"
+  [image-path & {:keys [width height label]
+                 :or {width 120 height 40}}]
+  (try
+    ;; Try imgcat first - it's widely compatible
+    (let [result (shell/sh "imgcat" 
+                          "-w" (str width)
+                          image-path)]
+      (when (zero? (:exit result))
+        (when label
+          (println (format "  %-40s" label)))
+        (print (:out result))
+        (flush)
+        true))
+    (catch Exception e
+      nil))) ; Silently fail if image display not available
+
+(defn generate-comparison-html
+  "Generate an HTML file with side-by-side image comparison"
+  [baseline-path current-path diff-path similarity & {:keys [output-dir] 
+                                                       :or {output-dir "/tmp"}}]
+  (let [html-path (str output-dir "/visual-test-comparison-" (System/currentTimeMillis) ".html")
+        html-content (str 
+                      "<!DOCTYPE html>
+<html>
+<head>
+    <title>Visual Test Comparison</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #1e1e1e; color: #fff; }
+        h1 { text-align: center; }
+        .container { display: flex; justify-content: space-around; margin: 20px 0; }
+        .image-box { text-align: center; }
+        .image-box img { max-width: 500px; border: 2px solid #444; }
+        .label { font-weight: bold; margin: 10px 0; font-size: 18px; }
+        .similarity { text-align: center; font-size: 24px; margin: 20px; 
+                     color: " (if (>= similarity 95.0) "#4CAF50" "#f44336") "; }
+        .baseline { border-color: #2196F3 !important; }
+        .current { border-color: #FF9800 !important; }
+        .diff { border-color: #f44336 !important; }
+    </style>
+</head>
+<body>
+    <h1>Visual Test Comparison</h1>
+    <div class='similarity'>Similarity: " (format "%.2f%%" similarity) "</div>
+    <div class='container'>
+        <div class='image-box'>
+            <div class='label'>BASELINE</div>
+            <img src='file://" (if (.isAbsolute (io/file baseline-path))
+                                 baseline-path
+                                 (.getAbsolutePath (io/file baseline-path))) "' class='baseline'/>
+        </div>
+        <div class='image-box'>
+            <div class='label'>CURRENT</div>
+            <img src='file://" (if (.isAbsolute (io/file current-path))
+                                current-path
+                                (.getAbsolutePath (io/file current-path))) "' class='current'/>
+        </div>"
+        (when diff-path
+          (str "
+        <div class='image-box'>
+            <div class='label'>DIFFERENCE</div>
+            <img src='file://" (if (.isAbsolute (io/file diff-path))
+                                 diff-path
+                                 (.getAbsolutePath (io/file diff-path))) "' class='diff'/>
+        </div>"))
+        "
+    </div>
+</body>
+</html>")]
+    (spit html-path html-content)
+    html-path))
+
+(defn display-images-side-by-side
+  "Display two images side by side - generates HTML report and shows inline if possible"
+  [baseline-path current-path & {:keys [similarity diff-path] :or {similarity 0.0}}]
+  (println "\n📸 Visual Comparison:")
+  (println (str (apply str (repeat 80 "─"))))
+  
+  ;; Try to display images inline with imgcat
+  (let [imgcat-path (or (first (filter #(.exists (io/file %))
+                                       ["/snap/bin/imgcat"
+                                        "/usr/local/bin/imgcat"
+                                        "/usr/bin/imgcat"]))
+                        "imgcat")
+        baseline-abs-path (if (.isAbsolute (io/file baseline-path))
+                           baseline-path
+                           (.getAbsolutePath (io/file baseline-path)))
+        current-abs-path (if (.isAbsolute (io/file current-path))
+                          current-path
+                          (.getAbsolutePath (io/file current-path)))]
+    
+    (println "\n🖼️  VISUAL COMPARISON (inline preview):")
+    (println (str (apply str (repeat 80 "─"))))
+    
+    ;; Display baseline
+    (println "BASELINE:")
+    (try
+      (let [result (shell/sh "imgcat" baseline-abs-path)]
+        (if (zero? (:exit result))
+          (do 
+            (print (:out result))
+            (flush))
+          (println "  (imgcat failed for baseline:" (:err result) ")")))
+      (catch Exception e
+        (println "  (Could not display baseline image:" (.getMessage e) ")")))
+    
+    ;; Display current  
+    (println "\nCURRENT:")
+    (try
+      (let [result (shell/sh imgcat-path current-abs-path)]
+        (if (zero? (:exit result))
+          (do
+            (print (:out result))
+            (flush))
+          (println "  (imgcat failed for current:" (:err result) ")")))
+      (catch Exception e
+        (println "  (Could not display current image:" (.getMessage e) ")")))
+    
+    (println)
+    (println (str (apply str (repeat 80 "─"))))
+    
+    ;; Generate HTML comparison
+    (let [html-path (generate-comparison-html baseline-path current-path diff-path similarity)]
+    (println "\n🌐 Visual comparison report (full resolution):")
+    (println (str "   file://" html-path))
+    (println "\n📂 Image paths:")
+    (println (str "   Baseline: " baseline-path))
+    (println (str "   Current:  " current-path))
+    (when diff-path
+      (println (str "   Diff:     " diff-path)))
+    
+    ;; Try to open in browser automatically
+    ;; (try
+    ;;   (let [os-name (str/lower-case (System/getProperty "os.name"))]
+    ;;     (cond
+    ;;       (str/includes? os-name "linux") (shell/sh "xdg-open" html-path)
+    ;;       (str/includes? os-name "mac") (shell/sh "open" html-path)
+    ;;       (str/includes? os-name "windows") (shell/sh "cmd" "/c" "start" html-path)))
+    ;;   (catch Exception e
+    ;;     ; Silently fail if can't open browser
+    ;;     ))
+      ))
+  
+  (println (str (apply str (repeat 80 "─")))))
 
 ;; ============================================================================
 ;; Image Handling
@@ -161,11 +322,15 @@
       :type :value-difference}]))
 
 (defn compare-dom
-  "Compare two DOM JSON structures and return differences"
-  [baseline-json test-json]
-  (let [baseline (json/read-str baseline-json :key-fn keyword)
-        test (json/read-str test-json :key-fn keyword)]
-    (find-differences baseline test [])))
+  "Compare two DOM structures (either JSON or markdown) and return differences"
+  [baseline-content test-content]
+  ;; For now, just do string comparison for markdown DOM
+  ;; Could enhance this later to parse markdown tables
+  (if (= baseline-content test-content)
+    []  ;; No differences
+    [{:type :content-mismatch
+      :baseline-length (count baseline-content)
+      :test-length (count test-content)}]))
 
 ;; ============================================================================
 ;; Capture & Store Baseline
@@ -189,17 +354,21 @@
         artifacts-path (:artifacts-path capture-result)]
     
     (when (= :success (:status capture-result))
-      ;; Find the session folder (there should be only one)
-      (let [session-dir (first (.listFiles (io/file artifacts-path)))
-            screenshots-dir (io/file session-dir "screenshots")
-            dom-dir (io/file session-dir "dom_snapshots")]
+      ;; Find the session folder - use the most recent one
+      (let [session-dirs (when (.exists (io/file artifacts-path))
+                          (.listFiles (io/file artifacts-path)))
+            session-dir (when session-dirs
+                         (last (sort-by #(.getName %) 
+                                       (filter #(.isDirectory %) session-dirs))))
+            screenshots-dir (when session-dir (io/file session-dir "screenshots"))
+            dom-dir (when session-dir (io/file session-dir "dom_snapshots"))]
         
         ;; Store each step as a baseline
         (doseq [step (range steps)]
           (let [baseline-id (str "baseline-" app-name "-" test-name "-" step "-" 
                                 (System/currentTimeMillis))
                 screenshot-path (str screenshots-dir "/" step ".jpg")
-                dom-path (str dom-dir "/dom_" step ".json")]
+                dom-path (str dom-dir "/dom_" step ".md")]
             
             ;; Insert baseline record with image path
             (xts/execute-sql node
@@ -216,6 +385,170 @@
             (println "Stored baseline for" app-name "/" test-name "step" step)))))
     
     capture-result))
+
+;; ============================================================================
+;; Helper functions for visual testing
+;; ============================================================================
+
+(defn- create-baseline-from-capture
+  "Create a baseline from the current capture"
+  [node app-name test-name screenshots-dir dom-dir artifacts-path]
+  (when (and screenshots-dir (.exists screenshots-dir))
+    ;; Find the post-wait screenshot (the actual captured state)
+    (let [post-wait-file (io/file screenshots-dir "0-post-wait.jpg")
+          ;; Also check for plain "0.jpg" if post-wait doesn't exist
+          screenshot-file (if (.exists post-wait-file)
+                           post-wait-file
+                           (io/file screenshots-dir "0.jpg"))]
+      (when (.exists screenshot-file)
+        (let [step 0  ;; For now, just handle single step
+              baseline-id (str "baseline-" app-name "-" test-name "-" step "-" 
+                              (System/currentTimeMillis))
+              ;; Look for .md file not .json
+              dom-filename "dom_0.md"
+              dom-path (when dom-dir (io/file dom-dir dom-filename))]
+          
+          ;; Insert single baseline record
+          (xts/execute-sql node
+            "INSERT INTO reactor_visual_baselines 
+             (_id, app_name, test_name, step_index, screenshot_path, dom_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)"
+            baseline-id app-name test-name step
+            (.getPath screenshot-file)
+            (if (and dom-path (.exists dom-path))
+              (slurp dom-path)
+              "")
+            (java.time.Instant/now))))))
+  
+  {:status "BASELINE_CREATED"
+   :message "First run - baseline created for future comparisons"
+   :artifacts-path artifacts-path})
+
+(defn- compare-against-baseline
+  "Compare current capture against existing baseline"
+  [node app-name test-name baselines screenshots-dir dom-dir artifacts-path threshold]
+  (let [baseline (first (:results baselines))
+        test-results (atom [])]
+    
+    ;; Get all baselines for this test
+    (let [all-baselines (xts/execute-sql node
+                        "SELECT * FROM reactor_visual_baselines 
+                         WHERE app_name = ? AND test_name = ?
+                         LIMIT 10"
+                        app-name test-name)]
+      
+      ;; Compare each step
+      (doseq [baseline (:results all-baselines)]
+        (let [step (:step_index baseline)
+              ;; Try post-wait first, fall back to 0.jpg
+              post-wait-path (str screenshots-dir "/0-post-wait.jpg")
+              plain-path (str screenshots-dir "/0.jpg")
+              screenshot-path (if (.exists (io/file post-wait-path))
+                               post-wait-path
+                               plain-path)
+              ;; Look for .md file not .json
+              dom-path (str dom-dir "/dom_0.md")
+              
+              ;; Compare image if available
+              image-result (when (and (:screenshot_path baseline)
+                                     (.exists (io/file screenshot-path))
+                                     (.exists (io/file (:screenshot_path baseline))))
+                            (compare-images (:screenshot_path baseline) screenshot-path))
+              
+              ;; Compare DOM if available
+              dom-differences (when (and (:dom_json baseline)
+                                        (.exists (io/file dom-path)))
+                              (try
+                                (compare-dom (:dom_json baseline) (slurp dom-path))
+                                (catch Exception e
+                                  (println "Error comparing DOM:" (.getMessage e))
+                                  [{:type :error :message (.getMessage e)}])))
+              
+              ;; Determine pass/fail
+              similarity (or (:similarity image-result) 100.0)
+              status (if (and (>= similarity threshold)
+                             (empty? dom-differences))
+                      "PASS"
+                      "FAIL")
+              
+              ;; ALWAYS show images for visual feedback
+              _ (when (and (:screenshot_path baseline)
+                          (.exists (io/file (:screenshot_path baseline)))
+                          (.exists (io/file screenshot-path)))
+                  ;; Always display the images
+                  (display-images-side-by-side (:screenshot_path baseline) screenshot-path 
+                                              :similarity similarity
+                                              :diff-path (:diff-image image-result))
+                  
+                  ;; Show appropriate status message
+                  (if (= status "PASS")
+                    (println (format "\n✅ Visual test PASSED! Similarity: %.2f%% (threshold: %.2f%%)" 
+                                    similarity threshold))
+                    (do
+                      (println (format "\n❌ Visual test FAILED! Similarity: %.2f%% (threshold: %.2f%%)" 
+                                      similarity threshold))
+                      (when (not (empty? dom-differences))
+                        (println "📝 DOM differences found:" (count dom-differences) "changes")))))
+              
+              ;; Store result
+              result-id (str "result-" app-name "-" test-name "-" step "-"
+                            (System/currentTimeMillis))]
+          
+          (let [values [result-id app-name test-name step (:_id baseline)
+                        (:screenshot_path baseline) screenshot-path (or (:diff-image image-result) "")
+                        similarity (str dom-differences) status artifacts-path
+                        (str (java.time.Instant/now))]]
+            (apply xts/execute-sql 
+                   node
+                   "INSERT INTO reactor_visual_results
+                    (_id, app_name, test_name, step_index, baseline_id,
+                     baseline_screenshot_path, current_screenshot_path, diff_image_path,
+                     image_similarity, dom_differences, status, artifacts_path, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                   values))
+          
+          (swap! test-results conj
+                 {:step step
+                  :status status
+                  :similarity similarity
+                  :dom-differences dom-differences
+                  :diff-image (:diff-image image-result)})))
+      
+      ;; Update baseline if all tests pass
+      (when (every? #(= "PASS" (:status %)) @test-results)
+        ;; Delete old baselines
+        (xts/execute-sql node
+          "DELETE FROM reactor_visual_baselines 
+           WHERE app_name = ? AND test_name = ?"
+          app-name test-name)
+        
+        ;; Store current run as new baseline
+        (let [step 0
+              post-wait-path (str screenshots-dir "/0-post-wait.jpg")
+              plain-path (str screenshots-dir "/0.jpg")
+              screenshot-path (if (.exists (io/file post-wait-path))
+                               post-wait-path
+                               plain-path)
+              dom-path (str dom-dir "/dom_0.md")
+              baseline-id (str "baseline-" app-name "-" test-name "-" step "-"
+                              (System/currentTimeMillis))]
+          
+          (xts/execute-sql node
+            "INSERT INTO reactor_visual_baselines 
+             (_id, app_name, test_name, step_index, screenshot_path, dom_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)"
+            baseline-id app-name test-name step
+            (when (.exists (io/file screenshot-path))
+              screenshot-path)
+            (when (.exists (io/file dom-path))
+              (slurp dom-path))
+            (java.time.Instant/now))))
+      
+      ;; Return overall results
+      (let [all-pass? (every? #(= "PASS" (:status %)) @test-results)]
+        {:status (if all-pass? "PASS" "FAIL")
+         :results @test-results
+         :artifacts-path artifacts-path}))))
 
 ;; ============================================================================
 ;; Run Visual Test
@@ -257,7 +590,6 @@
         baselines (xts/execute-sql node
                     "SELECT * FROM reactor_visual_baselines 
                      WHERE app_name = ? AND test_name = ?
-                     ORDER BY created_at DESC
                      LIMIT 1"
                     app-name test-name)
         has-baseline? (not (empty? (:results baselines)))
@@ -271,147 +603,28 @@
         
         artifacts-path (:artifacts-path capture-result)]
     
-    (if (= :success (:status capture-result))
-      (let [;; Find the session folder
-            session-dirs (.listFiles (io/file artifacts-path))
-            session-dir (first (filter #(.isDirectory %) session-dirs))
+    (if-not (= :success (:status capture-result))
+      ;; Capture failed
+      (do
+        {:status "ERROR"
+         :message (str "Failed to capture: " (:message capture-result))
+         :capture-result capture-result})
+      ;; Capture succeeded
+      (let [;; Find the session folder - use the most recent one
+            session-dirs (when (.exists (io/file artifacts-path))
+                          (.listFiles (io/file artifacts-path)))
+            ;; Sort directories by name (they're timestamps) and take the last/newest one
+            session-dir (when session-dirs
+                         (last (sort-by #(.getName %) 
+                                       (filter #(.isDirectory %) session-dirs))))
             screenshots-dir (when session-dir (io/file session-dir "screenshots"))
             dom-dir (when session-dir (io/file session-dir "dom_snapshots"))]
         
         (if (not has-baseline?)
           ;; No baseline exists - create it from this run
-          (do
-            ;; Store this run as the baseline
-            (when (and screenshots-dir (.exists screenshots-dir))
-              ;; Find the post-wait screenshot (the actual captured state)
-              (let [post-wait-file (io/file screenshots-dir "0-post-wait.jpg")]
-                (when (.exists post-wait-file)
-                  (let [step 0  ;; For now, just handle single step
-                        baseline-id (str "baseline-" app-name "-" test-name "-" step "-" 
-                                        (System/currentTimeMillis))
-                        dom-filename "dom_0.json"
-                        dom-path (when dom-dir (io/file dom-dir dom-filename))]
-                    
-                    ;; Insert single baseline record
-                    (let [insert-result (xts/execute-sql node
-                                          "INSERT INTO reactor_visual_baselines 
-                                           (_id, app_name, test_name, step_index, screenshot_path, dom_json, created_at)
-                                           VALUES (?, ?, ?, ?, ?, ?, ?)"
-                                          baseline-id app-name test-name step
-                                          (.getPath post-wait-file)
-                                          (if (and dom-path (.exists dom-path))
-                                            (slurp dom-path)
-                                            "")
-                                          (str (java.time.Instant/now)))]
-))))))
-            
-            {:status "BASELINE_CREATED"
-             :message "First run - baseline created for future comparisons"
-             :artifacts-path artifacts-path})
-          
+          (create-baseline-from-capture node app-name test-name screenshots-dir dom-dir artifacts-path)
           ;; Baseline exists - compare against it
-          (let [baseline (first (:results baselines))
-                test-results (atom [])
-                screenshot-files (when screenshots-dir 
-                                  (sort-by #(.getName %)
-                                          (filter #(and (.isFile %)
-                                                       (str/ends-with? (.getName %) ".jpg")
-                                                       (not (str/includes? (.getName %) "thumb"))
-                                                       (not (str/includes? (.getName %) "zoom"))
-                                                       (not (str/includes? (.getName %) "diff")))
-                                                 (.listFiles screenshots-dir))))]
-            
-            ;; Get all baselines for this test
-            (let [all-baselines (xts/execute-sql node
-                                "SELECT * FROM reactor_visual_baselines 
-                                 WHERE app_name = ? AND test_name = ?
-                                 AND created_at = (SELECT MAX(created_at) 
-                                                  FROM reactor_visual_baselines 
-                                                  WHERE app_name = ? AND test_name = ?)
-                                 ORDER BY step_index"
-                                app-name test-name app-name test-name)]
-              
-              ;; Compare each step
-              (doseq [baseline (:results all-baselines)]
-                (let [step (:step_index baseline)
-                      ;; Use the actual post-wait screenshot
-                      screenshot-path (str screenshots-dir "/0-post-wait.jpg")
-                      dom-path (str dom-dir "/dom_0.json")
-                      
-                      ;; Compare image if available
-                      image-result (when (and (:screenshot_path baseline)
-                                             (.exists (io/file screenshot-path))
-                                             (.exists (io/file (:screenshot_path baseline))))
-                                    (compare-images (:screenshot_path baseline) screenshot-path))
-                      
-                      ;; Compare DOM if available
-                      dom-differences (when (and (:dom_json baseline)
-                                                (.exists (io/file dom-path)))
-                                      (compare-dom (:dom_json baseline) (slurp dom-path)))
-                      
-                      ;; Determine pass/fail
-                      similarity (or (:similarity image-result) 100.0)
-                      status (if (and (>= similarity threshold)
-                                     (empty? dom-differences))
-                              "PASS"
-                              "FAIL")
-                      
-                      ;; Store result
-                      result-id (str "result-" app-name "-" test-name "-" step "-"
-                                    (System/currentTimeMillis))]
-                  
-                  (xts/execute-sql node
-                    "INSERT INTO reactor_visual_results
-                     (_id, app_name, test_name, step_index, baseline_id,
-                      image_similarity, dom_differences, status, artifacts_path, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                    result-id app-name test-name step (:_id baseline)
-                    similarity (pr-str dom-differences) status artifacts-path
-                    (java.time.Instant/now))
-                  
-                  (swap! test-results conj
-                         {:step step
-                          :status status
-                          :similarity similarity
-                          :dom-differences dom-differences
-                          :diff-image (:diff-image image-result)})))
-              
-              ;; Update baseline to this run for next comparison
-              (when (every? #(= "PASS" (:status %)) @test-results)
-                ;; Delete old baselines
-                (xts/execute-sql node
-                  "DELETE FROM reactor_visual_baselines 
-                   WHERE app_name = ? AND test_name = ?"
-                  app-name test-name)
-                
-                ;; Store current run as new baseline (single record)
-                (let [step 0
-                      screenshot-path (str screenshots-dir "/0-post-wait.jpg")
-                      dom-path (str dom-dir "/dom_0.json")
-                      baseline-id (str "baseline-" app-name "-" test-name "-" step "-"
-                                      (System/currentTimeMillis))]
-                  
-                  (xts/execute-sql node
-                    "INSERT INTO reactor_visual_baselines 
-                     (_id, app_name, test_name, step_index, screenshot_path, dom_json, created_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?)"
-                    baseline-id app-name test-name step
-                    (when (.exists (io/file screenshot-path))
-                      screenshot-path)
-                    (when (.exists (io/file dom-path))
-                      (slurp dom-path))
-                    (java.time.Instant/now))))
-              
-              ;; Return overall results
-              (let [all-pass? (every? #(= "PASS" (:status %)) @test-results)]
-                {:status (if all-pass? "PASS" "FAIL")
-                 :results @test-results
-                 :artifacts-path artifacts-path})))))
-      
-      ;; Capture failed
-      {:status "ERROR"
-       :message (str "Failed to capture: " (:message capture-result))
-       :capture-result capture-result}))
+          (compare-against-baseline node app-name test-name baselines screenshots-dir dom-dir artifacts-path threshold))))))
 
 ;; ============================================================================
 ;; Lein Test Integration

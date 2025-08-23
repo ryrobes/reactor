@@ -14,6 +14,10 @@
   ;; Track which calculations are in flight to avoid duplicates
   (atom #{}))
 
+(defonce data-size-cache
+  ;; {query-hash -> {timestamp -> size}}
+  (reagent/atom {}))
+
 (defn query-hash
   "Create a stable hash for a query to use as cache key"
   [sql]
@@ -28,6 +32,16 @@
   "Cache a row count for a query at a specific timestamp"
   [sql timestamp count]
   (swap! row-count-cache assoc-in [(query-hash sql) timestamp] count))
+
+(defn get-cached-size
+  "Get cached data size for a query at a specific timestamp"
+  [sql timestamp]
+  (get-in @data-size-cache [(query-hash sql) timestamp]))
+
+(defn cache-size!
+  "Cache a data size for a query at a specific timestamp"
+  [sql timestamp size]
+  (swap! data-size-cache assoc-in [(query-hash sql) timestamp] size))
 
 (defn calculate-row-count!
   "Calculate and cache row count for a query at a specific time"
@@ -65,6 +79,43 @@
                         (swap! pending-calculations disj cache-key)
                         (callback 0)))))))))
 
+(defn calculate-data-size!
+  "Calculate and cache data size for a query at a specific time (from metrics)"
+  [sql timestamp callback]
+  (let [cache-key [(query-hash sql) timestamp]]
+    ;; Check if already cached
+    (if-let [cached (get-cached-size sql timestamp)]
+      (callback cached)
+      ;; Check if calculation already in flight
+      (when-not (contains? @pending-calculations cache-key)
+        (swap! pending-calculations conj cache-key)
+        ;; Execute the full query to get metrics
+        (let [as-of-val (when timestamp 
+                         (.toISOString (js/Date. timestamp)))]
+          ;; Execute the query
+          (-> (r/sql-query! sql nil as-of-val)
+              (.then (fn [response]
+                       (let [;; Get data-size from metrics
+                             size (or (get-in response [:metrics :data-size])
+                                     ;; Fallback: estimate from result count * average row size
+                                     (let [results (:results response [])]
+                                       (if (empty? results)
+                                         0
+                                         ;; Simple estimation: count * 100 chars per row average
+                                         (* (count results) 100))))]
+                         ;; Cache the result
+                         (cache-size! sql timestamp size)
+                         ;; Clear pending flag
+                         (swap! pending-calculations disj cache-key)
+                         ;; Invoke callback
+                         (callback size))))
+              (.catch (fn [error]
+                        (js/console.warn "Error calculating data size for timestamp" timestamp ":" error)
+                        ;; Cache 0 for failed queries so we don't retry
+                        (cache-size! sql timestamp 0)
+                        (swap! pending-calculations disj cache-key)
+                        (callback 0)))))))))
+
 (defn calculate-missing-counts!
   "Calculate row counts only for timestamps not already cached"
   [sql timestamps on-complete]
@@ -85,6 +136,30 @@
         (calculate-row-count! sql ts
           (fn [count]
             (swap! results assoc ts count)
+            (swap! completed inc)
+            (when (= @completed total)
+              (on-complete @results))))))))
+
+(defn calculate-missing-sizes!
+  "Calculate data sizes only for timestamps not already cached"
+  [sql timestamps on-complete]
+  (let [;; Check which timestamps are already cached
+        query-key (query-hash sql)
+        cached-sizes (get @data-size-cache query-key {})
+        missing-timestamps (filter #(not (contains? cached-sizes %)) timestamps)
+        ;; If all are cached, return immediately
+        _ (when (empty? missing-timestamps)
+            (on-complete cached-sizes))
+        ;; Calculate only missing ones
+        total (count missing-timestamps)
+        results (atom cached-sizes)  ; Start with cached values
+        completed (atom 0)]
+    (when (seq missing-timestamps)
+      (js/console.log "Calculating data sizes for" (count missing-timestamps) "new timestamps out of" (count timestamps))
+      (doseq [ts missing-timestamps]
+        (calculate-data-size! sql ts
+          (fn [size]
+            (swap! results assoc ts size)
             (swap! completed inc)
             (when (= @completed total)
               (on-complete @results))))))))
@@ -120,7 +195,7 @@
 
 (defn render-area-chart
   "Render the area chart as SVG"
-  [values width height]
+  [values width height & [mode]]
   (when (seq values)
     (let [normalized (normalize-values values)
           points-count (count normalized)
@@ -151,51 +226,71 @@
                      :pointer-events "none"}}
        ;; Area fill
        [:path {:d path-data
-               :fill "rgba(0,255,159,0.15)"
+               :fill (case mode
+                      :data-size "rgba(138,43,226,0.15)"  ; Purple for data-size
+                      "rgba(0,255,159,0.15)")              ; Green for row counts
                :stroke "none"}]
        ;; Top line
        [:polyline {:points (str/join " " (map #(str (:x %) "," (:y %)) points))
                    :fill "none"
-                   :stroke "rgba(0,255,159,0.4)"
+                   :stroke (case mode
+                           :data-size "rgba(138,43,226,0.4)"  ; Purple for data-size
+                           "rgba(0,255,159,0.4)")              ; Green for row counts
                    :stroke-width "1"}]])))
 
 (defn row-count-overlay
   "Main component for row count visualization overlay"
-  [{:keys [sql timestamps width height cumulative?]}]
+  [{:keys [sql timestamps width height mode cumulative?]}]
   (let [counts (reagent/atom {})
+        data-sizes (reagent/atom {})
         loading? (reagent/atom true)]
     (reagent/create-class
      {:component-did-mount
       (fn []
         (when (and sql (seq timestamps))
           (reset! loading? true)
-          ;; Calculate counts only for missing timestamps
-          (calculate-missing-counts! sql timestamps
-            (fn [results]
-              (reset! counts results)
-              (reset! loading? false)))))
-      
-      :component-did-update
-      (fn [this [_ old-props]]
-        (let [new-props (reagent/props this)]
-          ;; Recalculate if SQL or timestamps changed
-          (when (or (not= (:sql old-props) (:sql new-props))
-                   (not= (:timestamps old-props) (:timestamps new-props)))
-            (reset! loading? true)
-            ;; Only calculate missing timestamps - cached ones are reused
-            (calculate-missing-counts! (:sql new-props) (:timestamps new-props)
+          (if (= mode :data-size)
+            ;; Fetch data sizes
+            (calculate-missing-sizes! sql timestamps
+              (fn [results]
+                (reset! data-sizes results)
+                (reset! loading? false)))
+            ;; Fetch row counts
+            (calculate-missing-counts! sql timestamps
               (fn [results]
                 (reset! counts results)
                 (reset! loading? false))))))
       
+      :component-did-update
+      (fn [this [_ old-props]]
+        (let [new-props (reagent/props this)]
+          ;; Recalculate if SQL, timestamps, or mode changed
+          (when (or (not= (:sql old-props) (:sql new-props))
+                   (not= (:timestamps old-props) (:timestamps new-props))
+                   (not= (:mode old-props) (:mode new-props)))
+            (reset! loading? true)
+            (if (= (:mode new-props) :data-size)
+              ;; Fetch data sizes
+              (calculate-missing-sizes! (:sql new-props) (:timestamps new-props)
+                (fn [results]
+                  (reset! data-sizes results)
+                  (reset! loading? false)))
+              ;; Fetch row counts
+              (calculate-missing-counts! (:sql new-props) (:timestamps new-props)
+                (fn [results]
+                  (reset! counts results)
+                  (reset! loading? false)))))))
+      
       :reagent-render
-      (fn [{:keys [sql timestamps width height cumulative?]}]
+      (fn [{:keys [sql timestamps width height mode cumulative?]}]
         (when-not @loading?
-          (let [;; If we have timestamps but no counts yet, use zeros
-                filled-counts (if (empty? @counts)
-                                (zipmap timestamps (repeat 0))
-                                @counts)
-                chart-data (calculate-chart-data filled-counts timestamps cumulative?)]
+          (let [;; Choose data source based on mode
+                data-source (if (= mode :data-size) @data-sizes @counts)
+                ;; If we have timestamps but no data yet, use zeros
+                filled-data (if (empty? data-source)
+                              (zipmap timestamps (repeat 0))
+                              data-source)
+                chart-data (calculate-chart-data filled-data timestamps cumulative?)]
             ;; Always render if we have timestamps
             (when (seq timestamps)
-              [render-area-chart (or chart-data (repeat (count timestamps) 0)) width height]))))})))
+              [render-area-chart (or chart-data (repeat (count timestamps) 0)) width height mode]))))})))
