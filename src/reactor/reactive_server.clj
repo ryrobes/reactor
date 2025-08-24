@@ -330,18 +330,33 @@
                 as-of (:as-of body)
                 ;; Check if this query is for a session table
                 is-session-query? (or (re-find #"(?i)FROM\s+\w*_?sessions" sql)
-                                    (re-find #"(?i)INTO\s+\w*_?sessions" sql))]
+                                    (re-find #"(?i)INTO\s+\w*_?sessions" sql))
+                ;; Determine if this is truly temporal (historical) or a "NOW" query
+                ;; If the as-of timestamp is within 30 seconds of now, treat it as a "NOW" query
+                is-truly-temporal? (when (and as-of (not (empty? as-of)))
+                                     (try
+                                       (let [as-of-time (.getTime (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+                                                                 (.parse (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'") as-of))
+                                             now-time (System/currentTimeMillis)
+                                             diff-seconds (/ (Math/abs (- now-time as-of-time)) 1000)]
+                                         ;; If more than 30 seconds old, it's truly temporal
+                                         (> diff-seconds 30))
+                                       (catch Exception e
+                                         ;; If we can't parse, assume it's temporal
+                                         true)))]
             (log/debug "[REACTIVE-SERVER] /api/sql called with SQL:" sql)
             (log/debug "[REACTIVE-SERVER] Session ID:" session-id "Has SSE channels:" (seq (get @kafka/sse-channels session-id)))
-            (log/info "[REACTIVE-SERVER] as-of value:" (pr-str as-of) "is-temporal?" (and as-of (not (empty? as-of))))
+            (log/info "[REACTIVE-SERVER] as-of value:" (pr-str as-of) 
+                     "is-temporal?" (boolean is-truly-temporal?)
+                     "(>30s old)")
             ;; Track the SQL query event
             (meta/track-event! "sql-query" "query" 
                               {:sql sql :params params :as-of as-of} 
                               session-id)
-            ;; Only create subscription for non-session queries AND non-temporal queries
-            ;; Note: Check for actual temporal value, not just truthy (empty string is truthy!)
-            (if (or is-session-query? (and as-of (not (empty? as-of))))
-              ;; Just execute without subscription for session tables OR temporal queries
+            ;; Create subscriptions for ALL queries (including temporal) to enable diffing
+            ;; Session queries still bypass subscriptions for now
+            (if is-session-query?
+              ;; Just execute without subscription for session tables
               (let [node @session/default-node
                     result (if node
                             (if as-of
@@ -408,7 +423,9 @@
                 (kafka/register-query-subscription! 
                  sub-id sql params 
                  (kafka/create-subscription-callback session-id) 
-                 session-id)
+                 session-id
+                 nil  ;; client-id
+                 is-truly-temporal?)  ;; Pass temporal flag - only true for >30s old timestamps
                 
                 ;; Execute immediately to get initial results
                 (kafka/re-execute-subscription sub-id)

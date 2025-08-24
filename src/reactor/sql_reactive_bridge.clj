@@ -48,10 +48,28 @@
 
 ;; Override the execute-sql function to add reactive notifications
 (defn execute-sql-reactive
-  "Execute SQL mutation with reactive notifications - but DON'T trigger on the mutation itself"
+  "Execute SQL mutation with reactive notifications"
   [node sql params]
-  ;; Just execute the mutation - Kafka will pick up the change and trigger updates
-  (session/execute-sql-mutation node sql params))
+  ;; Execute the mutation
+  (let [result (session/execute-sql-mutation node sql params)]
+    ;; Since XTDB 2.0 doesn't send SQL mutations to Kafka, manually trigger updates
+    (when-not (:error result)
+      ;; Extract table names from the SQL
+      (let [sql-lower (.toLowerCase sql)
+            insert-table (when (str/starts-with? sql-lower "insert")
+                          (second (re-find #"(?i)INSERT\s+INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)" sql)))
+            update-table (when (str/starts-with? sql-lower "update")
+                          (second (re-find #"(?i)UPDATE\s+([a-zA-Z_][a-zA-Z0-9_]*)" sql)))
+            delete-table (when (str/starts-with? sql-lower "delete")
+                          (second (re-find #"(?i)DELETE\s+FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)" sql)))
+            table-name (or insert-table update-table delete-table)]
+        (when table-name
+          (log/info "[SQL-REACTIVE] Triggering updates for table:" table-name "after SQL:" (subs sql 0 (min 50 (count sql))))
+          ;; Trigger reactive updates asynchronously with a small delay
+          (future
+            (Thread/sleep 100) ;; Small delay to ensure transaction commits
+            (notify-table-change! table-name)))))
+    result))
 
 ;; Enhanced server endpoints that trigger reactive updates
 (defn handle-sql-exec-reactive

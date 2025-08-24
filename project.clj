@@ -16,6 +16,7 @@
                  [com.github.seancorfield/next.jdbc "1.3.939"] ; Required by XTDB 2.0
                  ;; SQL query support
                  [honeysql "1.0.461"]
+                 [io.aviso/pretty "1.4.4"]
                  ;; Logging
                  [org.clojure/tools.logging "1.2.4"]
                  [ch.qos.logback/logback-classic "1.4.11"]

@@ -4,6 +4,7 @@
   (:require [jackdaw.client :as jc]
             [jackdaw.client.log :as jcl]
             [taoensso.nippy :as nippy]
+            [io.aviso.ansi :as ansi]
             [cheshire.core]
             [reactor.xtdb-store :as xts]
             [reactor.meta-tracking :as meta]
@@ -116,13 +117,16 @@
   "Request a debounced re-execution of a subscription.
    Multiple requests within the debounce window will be coalesced."
   [sub-id]
-  ;; Only update if not already pending or if the existing request is old
-  (let [now (System/currentTimeMillis)
-        existing (get @pending-re-executions sub-id)]
-    (when (or (nil? existing)
-              (> (- now existing) (* 2 @debounce-delay-ms))) ; Re-request if very old
-      (swap! pending-re-executions assoc sub-id now)
-      (log/debug "Debounced re-execution requested for" sub-id))))
+  ;; ALL subscriptions now participate in re-execution (no more inert check)
+  (when-let [sub-info (get @active-subscriptions sub-id)]
+    ;; Only update if not already pending or if the existing request is old
+    (let [now (System/currentTimeMillis)
+          existing (get @pending-re-executions sub-id)]
+      (when (or (nil? existing)
+                (> (- now existing) (* 2 @debounce-delay-ms))) ; Re-request if very old
+        (swap! pending-re-executions assoc sub-id now)
+        (log/debug "Debounced re-execution requested for" sub-id
+                  (when (:temporal? sub-info) "(temporal)"))))))
 
 (defn set-debounce-delay!
   "Set the debounce delay in milliseconds.
@@ -164,19 +168,28 @@
 
 (defn register-query-subscription!
   "Register a SQL query subscription that will be re-executed on relevant changes."
-  [sub-id sql params callback session-id & [client-id]]
+  [sub-id sql params callback session-id & [client-id is-temporal-param?]]
   (let [tables (extract-tables-from-sql sql)
+        ;; Check if this is a temporal query - either has AS OF TIMESTAMP clause OR passed as parameter
+        is-temporal? (or is-temporal-param?  ;; Explicitly passed from caller (for as-of queries)
+                        (and (string? sql)
+                             (re-find #"(?i)FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP" sql)))
         sub-info {:query sql
                   :params params
                   :tables tables
                   :callback callback
                   :session-id session-id
-                  :client-id client-id}]
+                  :client-id client-id
+                  :temporal? is-temporal?  ;; Mark temporal queries (for logging/debugging)
+                  :inert? false}]          ;; NO LONGER INERT - all queries participate in reactive cycle
     (swap! active-subscriptions assoc sub-id sub-info)
-    ;; Update table index
+    ;; Update table index for ALL queries (including temporal)
+    ;; This allows temporal queries to also react to changes (and benefit from diffing)
     (doseq [table tables]
       (swap! table-to-subs update (str/lower-case table) (fnil conj #{}) sub-id))
-    (log/info "Registered subscription" sub-id "for tables:" tables)
+    (log/info "Registered" (if is-temporal? "TEMPORAL (reactive)" "REACTIVE") 
+             "subscription" sub-id "for tables:" tables
+             "- will react to changes")
     ;; Track subscription creation
     (meta/track-subscription-created! sub-id session-id sql tables)
     sub-id))
@@ -377,7 +390,7 @@
 (defn compute-row-diff
   "Compute diff between old and new SQL results
    Returns nil if diff is not efficient"
-  [old-results new-results & {:keys [field-based?] :or {field-based? true}}]
+  [old-results new-results & {:keys [field-based? query] :or {field-based? true}}]
   (try
     (let [;; Find the ID column - prefer _id, id, or first column
           id-key (or (some #{:_id :id "_id" "id"} (keys (first new-results)))
@@ -453,7 +466,7 @@
                              1.0  ; Empty result set - use full update
                              (/ diff-size total-size))]
       
-      (log/info "[DIFF-ANALYSIS]" 
+      (log/info (ansi/bold-blue "[DIFF-ANALYSIS] ") (str/replace query #"[\r\n]+" "") "\n" 
                "\n  Mode:" (if field-based? "FIELD-BASED" "ROW-BASED")
                "\n  Added rows:" (count added-ids) 
                "\n  Removed rows:" (count removed-ids)
@@ -520,14 +533,32 @@
   (when (:debug-logging @diff-config)
     (log/debug "[RE-EXECUTE] Starting re-execution for subscription" sub-id))
   (log/info "[KAFKA-REACTIVE] Re-executing subscription" sub-id)
-  (if-let [{:keys [query params callback session-id client-id]} (get @active-subscriptions sub-id)]
+  (if-let [{:keys [query params callback session-id client-id temporal? inert?]} (get @active-subscriptions sub-id)]
     (try
-      (log/info "[KAFKA-REACTIVE] Found subscription" sub-id "for session" session-id "SQL:" query)
+      (log/info "[KAFKA-REACTIVE] Found" (if temporal? "TEMPORAL" "REACTIVE") 
+               "subscription" sub-id "for session" session-id 
+               (when (> (count query) 100) 
+                 (str "\n  SQL: " (subs query 0 100) "...")))
       (if-let [node @session/default-node]
         (let [start-time (System/currentTimeMillis)
-              result (if params
-                      (xts/execute-sql node query params)
-                      (xts/execute-sql node query))
+              ;; For temporal queries, need to use time-travel execution
+              result (if temporal?
+                      (let [;; Extract timestamp from the query
+                            timestamp-match (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'([^']+)'" query)
+                            timestamp (when timestamp-match (second timestamp-match))]
+                        (if timestamp
+                          (do
+                            (log/debug "[KAFKA-REACTIVE] Executing temporal query with timestamp:" timestamp)
+                            ;; Use time-travel execution
+                            (let [time-travel-ns (require 'reactor.time-travel-sql)
+                                  exec-fn (ns-resolve 'reactor.time-travel-sql 'execute-sql-with-time-travel)]
+                              (exec-fn node query params timestamp)))
+                          ;; Fallback to regular execution if can't extract timestamp
+                          (xts/execute-sql node query params)))
+                      ;; Regular non-temporal execution
+                      (if params
+                        (xts/execute-sql node query params)
+                        (xts/execute-sql node query)))
               execution-time (- (System/currentTimeMillis) start-time)
               results (:results result [])
               result-count (count results)
@@ -562,9 +593,13 @@
               ;; Diff mode logic - use normalized base query for temporal queries
               ;; This ensures temporal queries at different times can diff against each other
               effective-params (or params temporal-param)
+              ;; Use query+params as cache key for consistency, not subscription-id
+              ;; This allows diffing across multiple executions of the same query
+              ;; Normalize params to handle nil vs empty collection
+              normalized-params (or params [])
               client-cache-key (if is-temporal
                                 [session-id base-query effective-params]  ; Use base query for temporal
-                                [session-id subscription-id query params]) ; Use full query for regular
+                                [session-id query normalized-params]) ; Use query+params for regular (not subscription-id!)
               cached-data (get @client-result-cache client-cache-key)
               
               ;; Log cache key details for debugging
@@ -596,6 +631,19 @@
                                (< result-count max-size-limit)
                                (same-structure? (:structure cached-data) new-structure))
               
+              ;; Debug why diff might not happen
+              _ (when (and (:debug-logging @diff-config) (not should-diff?))
+                  (log/info "[DIFF-SKIP] Not diffing" subscription-id "because:"
+                           (cond
+                             (not (:enabled @diff-config)) "Diff disabled"
+                             (not cached-data) "No cached data (first execution)"
+                             (not (:results cached-data)) "Cache entry has no results"
+                             (>= result-count max-size-limit) (str "Too many rows: " result-count " >= " max-size-limit)
+                             (not (same-structure? (:structure cached-data) new-structure)) 
+                             (str "Structure changed. Old fields: " (:fields (:structure cached-data))
+                                  " New fields: " (:fields new-structure))
+                             :else "Unknown reason")))
+              
               ;; Special handling for temporal queries - they're prime diff candidates
               _ (when (and is-temporal cached-data (not should-diff?) (:debug-logging @diff-config))
                   (log/info "[TEMPORAL-SKIP] Temporal query not diffed. Reason:"
@@ -617,8 +665,19 @@
                            (when is-temporal (str "\n  Timestamp: " temporal-param))))
               
               diff-result (when should-diff?
-                           (compute-row-diff (:results cached-data) results 
-                                           :field-based? (:field-based? @diff-config true)))
+                           (try
+                             (let [diff (compute-row-diff (:results cached-data) results 
+                                                         :field-based? (:field-based? @diff-config true) :query query)]
+                               (when (:debug-logging @diff-config)
+                                 (log/info "[DIFF-COMPUTED] Result type:" (:type diff)
+                                          "\n  Added:" (count (:added diff))
+                                          "| Removed:" (count (:removed diff))  
+                                          "| Updated:" (count (:updated diff))
+                                          "\n  Compression ratio:" (:compression-ratio diff)))
+                               diff)
+                             (catch Exception e
+                               (log/error e "[DIFF-ERROR] Failed to compute diff")
+                               nil)))
               
               ;; Decide what to send
               message (if diff-result
@@ -679,7 +738,9 @@
                       "\n  Structure fields:" (count (:fields new-structure))
                       (when is-temporal (str "\n  Timestamp: " temporal-param))
                       "\n  Cache size before:" (count @client-result-cache)
-                      "\n  Cache keys:" (take 3 (keys @client-result-cache))))
+                      "\n  Existing cache entries:" (map (fn [[k v]] 
+                                                          (str "\n    " k " -> " (count (:results v)) " results"))
+                                                        (take 5 @client-result-cache))))
           (swap! client-result-cache assoc client-cache-key
                 {:results results
                  :structure new-structure
@@ -795,16 +856,18 @@
     ;; Start consumer thread
     (reset! consumer-thread
            (future
-             (log/info "Starting Kafka consumer thread")
+             (log/info "[KAFKA-CONSUMER] Starting Kafka consumer thread")
              (while @running?
                (try
                  (let [records (jc/poll consumer-instance 100)]
+                   (when (seq records)
+                     (log/info "[KAFKA-CONSUMER] Received" (count records) "records from Kafka"))
                    (doseq [record records]
                      (try
                        ;; Minimal processing - just check if it's a mutation and extract table names
                        (let [tx-value (:value record)
                              tx-key (:key record)]
-                         (when (and tx-value (> (count tx-value) 100)) ;; Skip tiny messages
+                         (when tx-value ;; Process ALL messages for debugging
                            ;; Convert just enough to check for table names (first 5KB should be enough)
                            (let [sample-size (min 5000 (count tx-value))
                                  raw-sample (String. (byte-array (take sample-size tx-value)) "ISO-8859-1")
@@ -845,20 +908,36 @@
                                                      (->> (remove #(str/ends-with? % "_reactions")))
                                                      set)]
                                
-                               ;; Log if mutation detected (without the actual SQL)
-                               (when has-mutation?
-                                 (log/debug "Mutation pattern detected in Kafka message"))
+                               ;; Debug logging to see what's happening
+                               (when (or has-mutation? (seq all-tables))
+                                 (log/info "[KAFKA-DEBUG] Message analysis:"
+                                          "\n  Has mutation:" has-mutation?
+                                          "\n  Is SELECT:" is-select?
+                                          "\n  All tables:" all-tables
+                                          "\n  Filtered tables:" filtered-tables
+                                          "\n  Message size:" (count tx-value)))
                                
                                (when is-select?
                                  ;; Don't log SELECT skips - too verbose
                                  nil)
                                
                                (when (seq filtered-tables)
-                                 (log/info "Tables affected by mutation:" filtered-tables)
-                                 ;; Only log subscription details if there are active subscriptions
+                                 (log/info "[KAFKA-MUTATION] Tables affected by mutation:" filtered-tables)
+                                 ;; Log detailed subscription info
+                                 (log/info "[KAFKA-MUTATION] Active subscriptions count:" (count @active-subscriptions))
+                                 (log/info "[KAFKA-MUTATION] Table-to-subs for affected tables:")
+                                 (doseq [table filtered-tables]
+                                   (let [subs-for-table (get @table-to-subs (str/lower-case table))]
+                                     (log/info "  Table" table "has" (count subs-for-table) "subscriptions:" subs-for-table)))
+                                 
+                                 ;; Log subscription details
                                  (when (pos? (count @active-subscriptions))
-                                   (log/debug "Active subscriptions:" (keys @active-subscriptions))
-                                   (log/debug "Table-to-subs mapping:" @table-to-subs))
+                                   (log/info "[KAFKA-MUTATION] Subscription details:")
+                                   (doseq [[sub-id sub-info] @active-subscriptions]
+                                     (when (some #(contains? (set (:tables sub-info)) %) filtered-tables)
+                                       (log/info "  " sub-id "- temporal:" (:temporal? sub-info) 
+                                                "inert:" (:inert? sub-info)
+                                                "tables:" (:tables sub-info)))))
                                  
                                  ;; Process rules for affected tables
                                  (try
@@ -870,8 +949,9 @@
                                  
                                  ;; Handle SQL subscriptions
                                  (let [affected-subs (find-affected-subscriptions filtered-tables)]
+                                   (log/info "[KAFKA-MUTATION] Found" (count affected-subs) "affected subscriptions:" affected-subs)
                                    (when (seq affected-subs)
-                                     (log/info "Triggering" (count affected-subs) "subscriptions for tables:" filtered-tables)
+                                     (log/info "[KAFKA-MUTATION] Triggering" (count affected-subs) "subscriptions for tables:" filtered-tables)
                                      ;; Track the reaction
                                      (doseq [table filtered-tables]
                                        (meta/track-reaction! table "mutation" affected-subs))
@@ -886,10 +966,10 @@
                          (log/error e "Error processing Kafka record")))))
                   (catch Exception e
                     (log/error e "Error polling Kafka")))
-               (Thread/sleep 100))))
-             (log/info "Kafka consumer thread stopped"))
+               (Thread/sleep 100))
+             (log/info "[KAFKA-CONSUMER] Thread exiting")))
     
-    (log/info "Kafka consumer started"))
+    (log/info "Kafka consumer started")))
 
 (defn stop-consumer!
   "Stop the Kafka consumer."
