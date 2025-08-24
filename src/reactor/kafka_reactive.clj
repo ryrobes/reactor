@@ -224,14 +224,62 @@
 ;; Configuration for diff mode
 (defonce diff-config 
   (atom {:enabled true
-         :field-based-diff true  ; Enable field-level diffing
-         :structural-diff true   ; Enable deep structural diffing for EDN fields
+         :field-based? true  ; Enable field-level diffing (renamed for consistency)
+         :structural-diff? true   ; Enable deep structural diffing for EDN fields
+         :edn-fields #{:state :app_state}  ; Fields known to contain EDN strings
          :max-result-size 1000  ; Don't diff if more than N rows
          :min-compression-ratio 0.7  ; Send full if diff > 70% of original
          :structure-check true  ; Verify structure before diffing
          :debug-logging true    ; Enable detailed debug logging
          :temporal-always-diff true  ; Always try to diff temporal queries (they're great candidates!)
          :temporal-max-size 5000}))  ; Higher limit for temporal queries
+
+;; ============================================================================
+;; Diff Configuration Management
+;; ============================================================================
+
+(defn set-diff-mode!
+  "Configure diff mode - :none, :row, :field, or :structural"
+  [mode]
+  (case mode
+    :none (swap! diff-config assoc 
+                :enabled false
+                :field-based? false
+                :structural-diff? false)
+    :row (swap! diff-config assoc
+               :enabled true
+               :field-based? false
+               :structural-diff? false)
+    :field (swap! diff-config assoc
+                 :enabled true
+                 :field-based? true
+                 :structural-diff? false)
+    :structural (swap! diff-config assoc
+                      :enabled true
+                      :field-based? true
+                      :structural-diff? true)
+    (log/warn "[DIFF-CONFIG] Unknown diff mode:" mode))
+  (log/info "[DIFF-CONFIG] Diff mode set to:" mode 
+           "\n  Current config:" @diff-config)
+  mode)
+
+(defn get-diff-stats
+  "Get statistics about diff performance"
+  []
+  (let [cache-entries @client-result-cache
+        total-entries (count cache-entries)
+        with-diffs (filter #(contains? (val %) :last-diff-type) cache-entries)
+        field-diffs (filter #(= :field-diff (:last-diff-type (val %))) cache-entries)
+        row-diffs (filter #(= :row-diff (:last-diff-type (val %))) cache-entries)]
+    {:total-cached total-entries
+     :with-diffs (count with-diffs)
+     :field-diffs (count field-diffs)
+     :row-diffs (count row-diffs)
+     :current-mode (cond
+                    (not (:enabled @diff-config)) :none
+                    (:structural-diff? @diff-config) :structural
+                    (:field-based? @diff-config) :field
+                    :else :row)}))
 
 (defn normalize-temporal-query
   "Extract base query and timestamp from temporal queries for better caching"
@@ -303,17 +351,27 @@
                    (when (seq changed-fields)
                      changed-fields)))]
     ;; Debug logging for field diffing
-    (when result
+    (when (and result (:debug-logging @diff-config))
       (let [field-breakdown (reduce (fn [acc [k v]]
                                       (update acc (:op v) (fnil inc 0)))
                                     {}
                                     result)
             structural-fields (filter #(= :structural-update (:op (get result %))) 
-                                     (keys result))]
-        (log/debug "[FIELD-DIFF] Changed fields:" (keys result)
-                  "| Breakdown:" field-breakdown
+                                     (keys result))
+            edn-detected (filter #(and (contains? edn-fields %)
+                                       (contains? result %))
+                                 (keys result))]
+        (log/info "[FIELD-DIFF] Row changes detected:"
+                  "\n  Changed fields:" (keys result)
+                  "\n  Breakdown:" field-breakdown
                   (when (seq structural-fields)
-                    (str "| Structural diffs on: " structural-fields)))))
+                    (str "\n  Structural diffs on: " structural-fields))
+                  (when (seq edn-detected)
+                    (str "\n  EDN fields detected: " edn-detected))
+                  (when structural-diff?
+                    "\n  Structural diffing: ENABLED")
+                  (when (seq edn-fields)
+                    (str "\n  Configured EDN fields: " edn-fields)))))
     result))
 
 (defn compute-row-diff
@@ -347,7 +405,8 @@
                                               :let [old-row (old-by-id id)
                                                     new-row (new-by-id id)
                                                     field-changes (compute-field-diff old-row new-row 
-                                                                                     :structural-diff? (:structural-diff @diff-config true))]
+                                                                                     :structural-diff? (:structural-diff? @diff-config true)
+                                                                                     :edn-fields (:edn-fields @diff-config #{}))]
                                               :when field-changes]
                                           {:id id 
                                            :field-changes field-changes})]
@@ -553,13 +612,13 @@
                            (when is-temporal " (TEMPORAL)")
                            "\n  Previous result count:" (count (:results cached-data))
                            "\n  Current result count:" result-count
-                           "\n  Field-based enabled:" (:field-based-diff @diff-config true)
+                           "\n  Field-based enabled:" (:field-based? @diff-config true)
                            "\n  Structure same:" (same-structure? (:structure cached-data) new-structure)
                            (when is-temporal (str "\n  Timestamp: " temporal-param))))
               
               diff-result (when should-diff?
                            (compute-row-diff (:results cached-data) results 
-                                           :field-based? (:field-based-diff @diff-config true)))
+                                           :field-based? (:field-based? @diff-config true)))
               
               ;; Decide what to send
               message (if diff-result
@@ -627,7 +686,11 @@
                  :checksum (hash results)
                  :timestamp (System/currentTimeMillis)
                  :params effective-params  ;; Store params for debugging
-                 :query (if is-temporal base-query query)})
+                 :query (if is-temporal base-query query)
+                 :last-diff-type (cond
+                                  (= (:type message) :field-diff-update) :field-diff
+                                  (= (:type message) :diff-update) :row-diff
+                                  :else :full)})
           (when (:debug-logging @diff-config)
             (log/info "[CACHE-UPDATE] Cache size after:" (count @client-result-cache)))
           
