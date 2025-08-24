@@ -229,7 +229,28 @@
          :max-result-size 1000  ; Don't diff if more than N rows
          :min-compression-ratio 0.7  ; Send full if diff > 70% of original
          :structure-check true  ; Verify structure before diffing
-         :debug-logging true}))  ; Enable detailed debug logging
+         :debug-logging true    ; Enable detailed debug logging
+         :temporal-always-diff true  ; Always try to diff temporal queries (they're great candidates!)
+         :temporal-max-size 5000}))  ; Higher limit for temporal queries
+
+(defn normalize-temporal-query
+  "Extract base query and timestamp from temporal queries for better caching"
+  [query]
+  ;; Handle both single-line and multi-line queries with flexible whitespace
+  (if-let [match (re-find #"(?is)^(.*?)\s*\n?FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'([^']+)'\s*\n?(.*)$" query)]
+    (let [[_ base-query timestamp remainder] match
+          ;; Clean up the base query and remainder
+          clean-base (str/trim base-query)
+          clean-remainder (str/trim remainder)
+          full-base (if (empty? clean-remainder)
+                     clean-base
+                     (str clean-base " " clean-remainder))]
+      {:base-query full-base
+       :temporal-param timestamp
+       :is-temporal true})
+    {:base-query query
+     :temporal-param nil
+     :is-temporal false}))
 
 (defn extract-row-structure
   "Extract the structure (field names and types) from results"
@@ -467,25 +488,74 @@
               ;; Use client-id if available, otherwise fall back to sub-id
               subscription-id (or client-id sub-id)
               
-              ;; Diff mode logic - include query in cache key to avoid collisions
-              client-cache-key [session-id subscription-id query]
+              ;; Normalize temporal queries to enable proper diffing across time
+              {:keys [base-query temporal-param is-temporal]} (normalize-temporal-query query)
+              
+              ;; Debug: Log what type of query we're processing
+              _ (when (:debug-logging @diff-config)
+                  (when (str/includes? query "todo_sessions")
+                    (log/info "[TODO-SESSIONS-DEBUG] Processing query"
+                             "\n  Full query:" query
+                             "\n  Is temporal?" is-temporal
+                             "\n  Subscription ID:" subscription-id
+                             "\n  Client ID:" client-id)))
+              
+              ;; Diff mode logic - use normalized base query for temporal queries
+              ;; This ensures temporal queries at different times can diff against each other
+              effective-params (or params temporal-param)
+              client-cache-key (if is-temporal
+                                [session-id base-query effective-params]  ; Use base query for temporal
+                                [session-id subscription-id query params]) ; Use full query for regular
               cached-data (get @client-result-cache client-cache-key)
+              
+              ;; Log cache key details for debugging
+              _ (when (:debug-logging @diff-config)
+                  (if is-temporal
+                    (log/info "[TEMPORAL-CACHE] Temporal query detected"
+                             "\n  Original query:" (if (> (count query) 100) 
+                                                    (str (subs query 0 100) "...") 
+                                                    query)
+                             "\n  Base query:" (if (> (count base-query) 60)
+                                                 (str (subs base-query 0 60) "...")
+                                                 base-query)
+                             "\n  Timestamp:" temporal-param
+                             "\n  Cache key:" client-cache-key
+                             "\n  Cached data exists?" (boolean cached-data))
+                    (when cached-data
+                      (log/debug "[CACHE-HIT] Found cached data for" subscription-id
+                                "| Key:" client-cache-key))))
               new-structure (extract-row-structure results)
               
               ;; Determine if we should send diff or full
+              ;; Temporal queries are EXCELLENT candidates for diffing!
+              max-size-limit (if (and is-temporal (:temporal-always-diff @diff-config))
+                               (:temporal-max-size @diff-config)
+                               (:max-result-size @diff-config))
               should-diff? (and (:enabled @diff-config)
                                cached-data
                                (:results cached-data)  ;; Must have previous results
-                               (< result-count (:max-result-size @diff-config))
+                               (< result-count max-size-limit)
                                (same-structure? (:structure cached-data) new-structure))
+              
+              ;; Special handling for temporal queries - they're prime diff candidates
+              _ (when (and is-temporal cached-data (not should-diff?) (:debug-logging @diff-config))
+                  (log/info "[TEMPORAL-SKIP] Temporal query not diffed. Reason:"
+                           (cond
+                             (not (:enabled @diff-config)) "Diff disabled"
+                             (not (:results cached-data)) "No cached results"
+                             (>= result-count max-size-limit) (str "Too many rows (" result-count " > " max-size-limit ")")
+                             (not (same-structure? (:structure cached-data) new-structure)) "Structure changed"
+                             :else "Unknown")))
               
               ;; Compute diff if applicable - use field-based diffing by default
               _ (when should-diff?
                   (log/info "[DIFF-DECISION] Attempting diff for" subscription-id
+                           (when is-temporal " (TEMPORAL)")
                            "\n  Previous result count:" (count (:results cached-data))
                            "\n  Current result count:" result-count
                            "\n  Field-based enabled:" (:field-based-diff @diff-config true)
-                           "\n  Structure same:" (same-structure? (:structure cached-data) new-structure)))
+                           "\n  Structure same:" (same-structure? (:structure cached-data) new-structure)
+                           (when is-temporal (str "\n  Timestamp: " temporal-param))))
               
               diff-result (when should-diff?
                            (compute-row-diff (:results cached-data) results 
@@ -495,7 +565,8 @@
               message (if diff-result
                        ;; Send diff
                        (do
-                         (log/info "[DIFF-SEND]" (:type diff-result) "for" subscription-id 
+                         (log/info "[DIFF-SEND]" (:type diff-result) "for" subscription-id
+                                  (when is-temporal " (TEMPORAL)")
                                   "\n  Compression achieved:" (format "%.0f%%" (* (double (:compression-ratio diff-result)) 100))
                                   "\n  Rows - Added:" (count (:added diff-result))
                                   "| Removed:" (count (:removed diff-result))
@@ -529,9 +600,11 @@
                                                        " > " (:min-compression-ratio @diff-config) ")")
                                        :else "DIFF_NOT_BENEFICIAL")]
                            (log/info "[FULL-SEND] Sending FULL update for" subscription-id
+                                    (when is-temporal " (TEMPORAL)")
                                     "\n  Reason:" reason
                                     "\n  Rows:" result-count
-                                    "\n  Data size:" data-size "bytes"))
+                                    "\n  Data size:" data-size "bytes"
+                                    (when is-temporal (str "\n  Timestamp: " temporal-param))))
                          {:subscription-id subscription-id
                           :session-id session-id
                           :query query
@@ -541,13 +614,22 @@
           
           ;; Update cache for next diff
           (when (:debug-logging @diff-config)
-            (log/debug "[CACHE-UPDATE] Storing" (count results) "results for" client-cache-key
-                      "| Structure fields:" (count (:fields new-structure))))
+            (log/info "[CACHE-UPDATE] Storing" (count results) "results"
+                      "\n  Type:" (if is-temporal "TEMPORAL" "REGULAR")
+                      "\n  Cache key:" client-cache-key
+                      "\n  Structure fields:" (count (:fields new-structure))
+                      (when is-temporal (str "\n  Timestamp: " temporal-param))
+                      "\n  Cache size before:" (count @client-result-cache)
+                      "\n  Cache keys:" (take 3 (keys @client-result-cache))))
           (swap! client-result-cache assoc client-cache-key
                 {:results results
                  :structure new-structure
                  :checksum (hash results)
-                 :timestamp (System/currentTimeMillis)})
+                 :timestamp (System/currentTimeMillis)
+                 :params effective-params  ;; Store params for debugging
+                 :query (if is-temporal base-query query)})
+          (when (:debug-logging @diff-config)
+            (log/info "[CACHE-UPDATE] Cache size after:" (count @client-result-cache)))
           
           ;; Track subscription update
           (meta/track-subscription-updated! sub-id execution-time result-count)

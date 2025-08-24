@@ -360,20 +360,51 @@
                           (assoc result :subscription-id (:subscription-id body))
                           result))})
               ;; Create subscription for business tables (only when NOT time traveling)
-              (let [;; Always use client-provided ID when available
-                    client-id (:subscription-id body)
+              (let [;; For temporal queries, generate consistent ID based on base query
+                    ;; This ensures temporal queries at different times can share cache
+                    is-temporal-query? (and (string? sql) 
+                                           (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF" sql))
+                    base-query-for-id (if is-temporal-query?
+                                        ;; Extract base query without temporal clause for consistent ID
+                                        (if-let [match (re-find #"^(.*?)\s+FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'[^']+'(.*)$" sql)]
+                                          (str (second match) (nth match 2))
+                                          sql)
+                                        sql)
+                    ;; Generate consistent client-id for temporal queries
+                    generated-client-id (if is-temporal-query?
+                                         (str "temporal-" (hash base-query-for-id))
+                                         nil)
+                    ;; Always use client-provided ID when available
+                    client-id (or (:subscription-id body) generated-client-id)
                     sub-id (or client-id (str "sub-" (java.util.UUID/randomUUID)))
                     
                     ;; Check if this subscription already exists
                     existing-sub (get @kafka/active-subscriptions sub-id)]
                 
                 ;; Unregister old subscription if it exists (allows SQL updates)
+                ;; BUT for temporal queries with same base query, this might clear cache!
                 (when existing-sub
-                  (log/info "[REACTIVE-SERVER] Updating existing subscription:" sub-id)
-                  (kafka/unregister-query-subscription! sub-id))
+                  (log/info "[REACTIVE-SERVER] Updating existing subscription:" sub-id
+                           (when is-temporal-query? " (TEMPORAL)")
+                           "\n  Old SQL:" (:query existing-sub)
+                           "\n  New SQL:" sql)
+                  ;; Only unregister if SQL actually changed (not just timestamp)
+                  (when (not= base-query-for-id 
+                             (if-let [match (re-find #"^(.*?)\s+FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'[^']+'(.*)$" 
+                                                     (:query existing-sub))]
+                               (str (second match) (nth match 2))
+                               (:query existing-sub)))
+                    (kafka/unregister-query-subscription! sub-id)))
                 
                 ;; Register new/updated subscription
-                (log/info "[REACTIVE-SERVER] Registering subscription:" sub-id "for SQL:" sql)
+                (log/info "[REACTIVE-SERVER] Registering subscription:" sub-id 
+                         (when is-temporal-query? 
+                           (str " (TEMPORAL with consistent ID: " generated-client-id ")"))
+                         "\n  SQL:" (if (> (count sql) 150)
+                                     (str (subs sql 0 150) "...")
+                                     sql)
+                         (when is-temporal-query?
+                           (str "\n  Base query for cache: " base-query-for-id)))
                 (kafka/register-query-subscription! 
                  sub-id sql params 
                  (kafka/create-subscription-callback session-id) 
