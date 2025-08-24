@@ -8,6 +8,7 @@
             [reactor.xtdb-store :as xts]
             [reactor.meta-tracking :as meta]
             [reactor.session_simple :as session]
+            [reactor.structural-diff :as sdiff]
             [org.httpkit.server :as http-server]
             [clojure.tools.logging :as log]
             [clojure.string :as str]
@@ -223,9 +224,12 @@
 ;; Configuration for diff mode
 (defonce diff-config 
   (atom {:enabled true
+         :field-based-diff true  ; Enable field-level diffing
+         :structural-diff true   ; Enable deep structural diffing for EDN fields
          :max-result-size 1000  ; Don't diff if more than N rows
          :min-compression-ratio 0.7  ; Send full if diff > 70% of original
-         :structure-check true}))  ; Verify structure before diffing
+         :structure-check true  ; Verify structure before diffing
+         :debug-logging true}))  ; Enable detailed debug logging
 
 (defn extract-row-structure
   "Extract the structure (field names and types) from results"
@@ -243,10 +247,58 @@
        (= (:fields old-structure) (:fields new-structure))
        (= (:field-count old-structure) (:field-count new-structure))))
 
+(defn compute-field-diff
+  "Compute field-level differences between two rows"
+  [old-row new-row & {:keys [structural-diff? edn-fields]
+                      :or {structural-diff? true
+                           edn-fields #{}}}]
+  (let [result (if structural-diff?
+                 ;; Use enhanced structural diffing
+                 (sdiff/compute-enhanced-field-diff old-row new-row 
+                                                    :deep-diff? true
+                                                    :edn-fields edn-fields)
+                 ;; Use basic field diffing
+                 (let [all-keys (set/union (set (keys old-row)) (set (keys new-row)))
+                       changed-fields (reduce (fn [acc k]
+                                               (let [old-val (get old-row k ::not-found)
+                                                     new-val (get new-row k ::not-found)]
+                                                 (cond
+                                                   ;; Field added
+                                                   (= old-val ::not-found)
+                                                   (assoc acc k {:op :add :value new-val})
+                                                   
+                                                   ;; Field removed
+                                                   (= new-val ::not-found)
+                                                   (assoc acc k {:op :remove})
+                                                   
+                                                   ;; Field changed
+                                                   (not= old-val new-val)
+                                                   (assoc acc k {:op :update :value new-val})
+                                                   
+                                                   ;; Field unchanged - don't include
+                                                   :else acc)))
+                                             {}
+                                             all-keys)]
+                   (when (seq changed-fields)
+                     changed-fields)))]
+    ;; Debug logging for field diffing
+    (when result
+      (let [field-breakdown (reduce (fn [acc [k v]]
+                                      (update acc (:op v) (fnil inc 0)))
+                                    {}
+                                    result)
+            structural-fields (filter #(= :structural-update (:op (get result %))) 
+                                     (keys result))]
+        (log/debug "[FIELD-DIFF] Changed fields:" (keys result)
+                  "| Breakdown:" field-breakdown
+                  (when (seq structural-fields)
+                    (str "| Structural diffs on: " structural-fields)))))
+    result))
+
 (defn compute-row-diff
   "Compute diff between old and new SQL results
    Returns nil if diff is not efficient"
-  [old-results new-results]
+  [old-results new-results & {:keys [field-based?] :or {field-based? true}}]
   (try
     (let [;; Find the ID column - prefer _id, id, or first column
           id-key (or (some #{:_id :id "_id" "id"} (keys (first new-results)))
@@ -268,35 +320,79 @@
                                  new-row (new-by-id id)]
                            :when (not= old-row new-row)]
                        id)
-          ;; Build diff
-          diff {:type :row-diff
+          ;; Build diff - use field-based diffing for updates if enabled
+          updated-entries (if field-based?
+                           (let [entries (for [id updated-ids
+                                              :let [old-row (old-by-id id)
+                                                    new-row (new-by-id id)
+                                                    field-changes (compute-field-diff old-row new-row 
+                                                                                     :structural-diff? (:structural-diff @diff-config true))]
+                                              :when field-changes]
+                                          {:id id 
+                                           :field-changes field-changes})]
+                             ;; Log field-based metrics
+                             (when (and (:debug-logging @diff-config) (seq entries))
+                               (let [total-fields-changed (reduce + 0 (map #(count (:field-changes %)) entries))
+                                     avg-fields (if (pos? (count entries))
+                                                 (/ total-fields-changed (count entries))
+                                                 0)]
+                                 (log/debug "[FIELD-METRICS] Updated" (count entries) "rows"
+                                           "| Total fields changed:" total-fields-changed
+                                           "| Avg fields/row:" (format "%.1f" (double avg-fields)))))
+                             entries)
+                           ;; Fall back to full row updates
+                           (for [id updated-ids]
+                             {:id id 
+                              :new-values (new-by-id id)}))
+          diff {:type (if field-based? :field-diff :row-diff)
                 :id-key id-key
                 :added (map new-by-id added-ids)
                 :removed removed-ids
-                :updated (for [id updated-ids]
-                          {:id id 
-                           :new-values (new-by-id id)})
+                :updated updated-entries
                 ;; Include order only if it changed
                 :order (let [old-order (mapv id-key old-results)
                             new-order (mapv id-key new-results)]
                         (when (not= old-order new-order)
                           new-order))}
-          ;; Calculate efficiency
+          ;; Calculate efficiency for field-based diff
+          field-change-count (if field-based?
+                               (reduce + 0 (map #(count (:field-changes %)) updated-entries))
+                               (count updated-ids))
+          total-field-count (if field-based?
+                             (* (count new-results) 
+                                (if (seq new-results)
+                                  (count (keys (first new-results)))
+                                  0))
+                             (count new-results))
           diff-size (+ (count added-ids)
                       (count removed-ids)
-                      (count updated-ids))
-          total-size (count new-results)
+                      field-change-count)
+          total-size total-field-count
           has-changes? (pos? diff-size)
           compression-ratio (if (zero? total-size)
                              1.0  ; Empty result set - use full update
                              (/ diff-size total-size))]
       
-      (log/info "[DIFF] Computed diff - added:" (count added-ids) 
-               "removed:" (count removed-ids)
-               "updated:" (count updated-ids)
-               "total:" total-size
-               "compression:" compression-ratio
-               "has-changes:" has-changes?)
+      (log/info "[DIFF-ANALYSIS]" 
+               "\n  Mode:" (if field-based? "FIELD-BASED" "ROW-BASED")
+               "\n  Added rows:" (count added-ids) 
+               "\n  Removed rows:" (count removed-ids)
+               "\n  Updated rows:" (count updated-ids)
+               (when field-based? 
+                 (str "\n  Total field changes: " field-change-count
+                      " across " (count updated-ids) " rows"
+                      " (avg " (if (pos? (count updated-ids))
+                                 (format "%.1f" (/ (double field-change-count) (double (count updated-ids))))
+                                 "0")
+                      " fields/row)"))
+               "\n  Original size:" total-size (if field-based? "fields" "rows")
+               "\n  Diff size:" diff-size
+               "\n  Compression ratio:" (format "%.2f" (double compression-ratio))
+               " (" (format "%.0f%%" (* (double compression-ratio) 100)) " of original)"
+               "\n  Will send:" (if (and has-changes?
+                                       (< compression-ratio (:min-compression-ratio @diff-config)))
+                                 "DIFF" 
+                                 "FULL UPDATE"))
       
       ;; Return diff only if it's efficient AND there are actual changes
       ;; Don't send empty diffs (compression 0)
@@ -341,6 +437,8 @@
 (defn re-execute-subscription
   "Re-execute a subscription's query and invoke its callback with results."
   [sub-id]
+  (when (:debug-logging @diff-config)
+    (log/debug "[RE-EXECUTE] Starting re-execution for subscription" sub-id))
   (log/info "[KAFKA-REACTIVE] Re-executing subscription" sub-id)
   (if-let [{:keys [query params callback session-id client-id]} (get @active-subscriptions sub-id)]
     (try
@@ -381,35 +479,59 @@
                                (< result-count (:max-result-size @diff-config))
                                (same-structure? (:structure cached-data) new-structure))
               
-              ;; Compute diff if applicable
+              ;; Compute diff if applicable - use field-based diffing by default
+              _ (when should-diff?
+                  (log/info "[DIFF-DECISION] Attempting diff for" subscription-id
+                           "\n  Previous result count:" (count (:results cached-data))
+                           "\n  Current result count:" result-count
+                           "\n  Field-based enabled:" (:field-based-diff @diff-config true)
+                           "\n  Structure same:" (same-structure? (:structure cached-data) new-structure)))
+              
               diff-result (when should-diff?
-                           (compute-row-diff (:results cached-data) results))
+                           (compute-row-diff (:results cached-data) results 
+                                           :field-based? (:field-based-diff @diff-config true)))
               
               ;; Decide what to send
               message (if diff-result
                        ;; Send diff
                        (do
-                         (log/info "[KAFKA-REACTIVE] Sending DIFF update for" subscription-id 
-                                  "compression:" (:compression-ratio diff-result)
-                                  "added:" (count (:added diff-result))
-                                  "removed:" (count (:removed diff-result))
-                                  "updated:" (count (:updated diff-result)))
+                         (log/info "[DIFF-SEND]" (:type diff-result) "for" subscription-id 
+                                  "\n  Compression achieved:" (format "%.0f%%" (* (double (:compression-ratio diff-result)) 100))
+                                  "\n  Rows - Added:" (count (:added diff-result))
+                                  "| Removed:" (count (:removed diff-result))
+                                  "| Updated:" (count (:updated diff-result))
+                                  (when (= (:type diff-result) :field-diff)
+                                    (let [total-fields (reduce + 0 (map #(count (:field-changes %)) (:updated diff-result)))]
+                                      (str "\n  Field changes: " total-fields " total"
+                                           " (avg " (if (pos? (count (:updated diff-result)))
+                                                     (format "%.1f" (/ (double total-fields) (double (count (:updated diff-result)))))
+                                                     "0")
+                                           " per row)"))))
                          {:subscription-id subscription-id
                           :session-id session-id
                           :query query
-                          :type :diff-update
+                          :type (if (= (:type diff-result) :field-diff) 
+                                   :field-diff-update 
+                                   :diff-update)
                           :diff diff-result
                           :checksum (hash results)
                           :metrics (:metrics result-with-metrics)})
                        ;; Send full results
                        (do
-                         (log/info "[KAFKA-REACTIVE] Sending FULL update for" subscription-id
-                                  "reason:" (cond
-                                            (not (:enabled @diff-config)) "diff-disabled"
-                                            (not cached-data) "initial"
-                                            (>= result-count (:max-result-size @diff-config)) "too-many-rows"
-                                            (not (same-structure? (:structure cached-data) new-structure)) "structure-changed"
-                                            :else "diff-inefficient"))
+                         (let [reason (cond
+                                       (not (:enabled @diff-config)) "DIFF_DISABLED"
+                                       (not cached-data) "INITIAL_LOAD"
+                                       (>= result-count (:max-result-size @diff-config)) 
+                                       (str "TOO_MANY_ROWS (" result-count " > " (:max-result-size @diff-config) ")")
+                                       (not (same-structure? (:structure cached-data) new-structure)) "STRUCTURE_CHANGED"
+                                       diff-result (str "DIFF_INEFFICIENT (ratio " 
+                                                       (format "%.2f" (double (:compression-ratio diff-result)))
+                                                       " > " (:min-compression-ratio @diff-config) ")")
+                                       :else "DIFF_NOT_BENEFICIAL")]
+                           (log/info "[FULL-SEND] Sending FULL update for" subscription-id
+                                    "\n  Reason:" reason
+                                    "\n  Rows:" result-count
+                                    "\n  Data size:" data-size "bytes"))
                          {:subscription-id subscription-id
                           :session-id session-id
                           :query query
@@ -418,6 +540,9 @@
                           :checksum (hash results)}))]
           
           ;; Update cache for next diff
+          (when (:debug-logging @diff-config)
+            (log/debug "[CACHE-UPDATE] Storing" (count results) "results for" client-cache-key
+                      "| Structure fields:" (count (:fields new-structure))))
           (swap! client-result-cache assoc client-cache-key
                 {:results results
                  :structure new-structure

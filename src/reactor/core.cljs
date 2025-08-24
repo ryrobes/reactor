@@ -2,6 +2,7 @@
   "Clean re-frame-like API for Reactor - just subscribe and dispatch!"
   (:require 
    [clojure.string :as cstr]
+   [reactor.structural-diff :as sdiff]
    [reagent.core :as r]))
 
 ;; Configuration
@@ -648,16 +649,31 @@
                                         acc))
                                     after-remove
                                     (:added diff))
-                   ;; Apply updates
-                   after-update (reduce (fn [acc {:keys [id new-values]}]
-                                         (assoc acc id new-values))
+                   ;; Apply updates - handle both field-based and row-based updates
+                   after-update (reduce (fn [acc update-entry]
+                                         (let [id (:id update-entry)
+                                               existing-row (get acc id)]
+                                           (cond
+                                             ;; Field-based update with structural support
+                                             (:field-changes update-entry)
+                                             (if existing-row
+                                               (assoc acc id (sdiff/apply-enhanced-field-changes 
+                                                            existing-row 
+                                                            (:field-changes update-entry)))
+                                               acc)
+                                             
+                                             ;; Row-based update (legacy)
+                                             (:new-values update-entry)
+                                             (assoc acc id (:new-values update-entry))
+                                             
+                                             :else acc)))
                                        after-add
                                        (:updated diff))
                    ;; Apply order if provided, otherwise use values
                    final-data (if-let [order (:order diff)]
                                (mapv after-update order)
                                (vals after-update))]
-               (js/console.log "[CLIENT] Diff applied - added:" (count (:added diff))
+               (js/console.log "[CLIENT]" (:type diff) "applied - added:" (count (:added diff))
                               "removed:" (count (:removed diff)) 
                               "updated:" (count (:updated diff))
                               "final count:" (count final-data))
@@ -724,15 +740,17 @@
                         (js/console.log "[CLIENT] Full update applied -" (count (:results (:result data))) "results"))
                       (js/console.warn "[CLIENT] No subscription found for ID:" sub-id)))
                   
-                  ;; Diff update
+                  ;; Diff update (both row-based and field-based)
                   (or (= (:type data) :diff-update)
-                      (= (:type data) "diff-update"))
+                      (= (:type data) "diff-update")
+                      (= (:type data) :field-diff-update)
+                      (= (:type data) "field-diff-update"))
                   (when-let [sub-id (:subscription-id data)]
                     (if-let [sub (get @sql-subscriptions sub-id)]
                       (do
-                        (js/console.log "[CLIENT] Received diff update for" sub-id 
+                        (js/console.log "[CLIENT] Received" (:type data) "for" sub-id 
                                        "compression:" (get-in data [:diff :compression-ratio]))
-                        ;; Apply diff to current data
+                        ;; Apply diff to current data (handles both field and row diffs)
                         (apply-row-diff! (:result-atom sub) (:diff data) (:checksum data) (:metrics data)))
                       (js/console.warn "[CLIENT] No subscription found for diff ID:" sub-id)))
                   
