@@ -333,17 +333,18 @@
                                     (re-find #"(?i)INTO\s+\w*_?sessions" sql))
                 ;; Determine if this is truly temporal (historical) or a "NOW" query
                 ;; If the as-of timestamp is within 30 seconds of now, treat it as a "NOW" query
-                is-truly-temporal? (when (and as-of (not (empty? as-of)))
-                                     (try
-                                       (let [as-of-time (.getTime (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
-                                                                 (.parse (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'") as-of))
-                                             now-time (System/currentTimeMillis)
-                                             diff-seconds (/ (Math/abs (- now-time as-of-time)) 1000)]
-                                         ;; If more than 30 seconds old, it's truly temporal
-                                         (> diff-seconds 30))
-                                       (catch Exception e
-                                         ;; If we can't parse, assume it's temporal
-                                         true)))]
+                ;; is-truly-temporal? (when (and as-of (not (empty? as-of)))
+                ;;                      (try
+                ;;                        (let [as-of-time (.getTime (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
+                ;;                                                  (.parse (java.text.SimpleDateFormat. "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'") as-of))
+                ;;                              now-time (System/currentTimeMillis)
+                ;;                              diff-seconds (/ (Math/abs (- now-time as-of-time)) 1000)]
+                ;;                          ;; If more than 30 seconds old, it's truly temporal
+                ;;                          (> diff-seconds 30))
+                ;;                        (catch Exception e
+                ;;                          ;; If we can't parse, assume it's temporal
+                ;;                          true)))
+                is-truly-temporal? false]
             (log/debug "[REACTIVE-SERVER] /api/sql called with SQL:" sql)
             (log/debug "[REACTIVE-SERVER] Session ID:" session-id "Has SSE channels:" (seq (get @kafka/sse-channels session-id)))
             (log/info "[REACTIVE-SERVER] as-of value:" (pr-str as-of) 
@@ -354,18 +355,13 @@
                               {:sql sql :params params :as-of as-of} 
                               session-id)
             ;; Create subscriptions for ALL queries (including temporal) to enable diffing
-            ;; Session queries still bypass subscriptions for now
-            (if is-session-query?
-              ;; Just execute without subscription for session tables
+            ;; Session queries bypass subscriptions UNLESS they're temporal (which benefit from diffing)
+            (if (and is-session-query? (not as-of))
+              ;; Non-temporal session queries: just execute without subscription
               (let [node @session/default-node
                     result (if node
-                            (if as-of
-                              ;; Use time-travel execution
-                              (let [time-travel-ns (require 'reactor.time-travel-sql)
-                                    exec-fn (ns-resolve 'reactor.time-travel-sql 'execute-sql-with-time-travel)]
-                                (exec-fn node sql params as-of))
-                              (xts/execute-sql node sql params))
-                            {:error "No XTDB node available"})]
+                              (xts/execute-sql node sql params)
+                              {:error "No XTDB node available"})]
                 {:status 200
                  :headers {"Content-Type" "application/json"
                           "Access-Control-Allow-Origin" "*"}
@@ -375,16 +371,22 @@
                           (assoc result :subscription-id (:subscription-id body))
                           result))})
               ;; Create subscription for business tables (only when NOT time traveling)
-              (let [;; For temporal queries, generate consistent ID based on base query
+              (let [;; If as-of is provided, add the temporal clause to the SQL BEFORE processing
+                    ;; This ensures the subscription system sees it as a temporal query
+                    sql-with-temporal (if (and as-of (not (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF" sql)))
+                                        (let [parser-ns (require 'reactor.sql-parser)
+                                              add-clause-fn (ns-resolve 'reactor.sql-parser 'add-as-of-clause)]
+                                          (add-clause-fn sql as-of))
+                                        sql)
+                    ;; For temporal queries, generate consistent ID based on base query
                     ;; This ensures temporal queries at different times can share cache
-                    is-temporal-query? (and (string? sql) 
-                                           (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF" sql))
+                    is-temporal-query? (and (string? sql-with-temporal) 
+                                           (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF" sql-with-temporal))
                     base-query-for-id (if is-temporal-query?
                                         ;; Extract base query without temporal clause for consistent ID
-                                        (if-let [match (re-find #"^(.*?)\s+FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'[^']+'(.*)$" sql)]
-                                          (str (second match) (nth match 2))
-                                          sql)
-                                        sql)
+                                        ;; Use the ORIGINAL sql for base query (before adding temporal clause)
+                                        sql
+                                        sql-with-temporal)
                     ;; Generate consistent client-id for temporal queries
                     generated-client-id (if is-temporal-query?
                                          (str "temporal-" (hash base-query-for-id))
@@ -415,13 +417,13 @@
                 (log/info "[REACTIVE-SERVER] Registering subscription:" sub-id 
                          (when is-temporal-query? 
                            (str " (TEMPORAL with consistent ID: " generated-client-id ")"))
-                         "\n  SQL:" (if (> (count sql) 150)
-                                     (str (subs sql 0 150) "...")
-                                     sql)
+                         "\n  SQL:" (if (> (count sql-with-temporal) 150)
+                                     (str (subs sql-with-temporal 0 150) "...")
+                                     sql-with-temporal)
                          (when is-temporal-query?
                            (str "\n  Base query for cache: " base-query-for-id)))
                 (kafka/register-query-subscription! 
-                 sub-id sql params 
+                 sub-id sql-with-temporal params 
                  (kafka/create-subscription-callback session-id) 
                  session-id
                  nil  ;; client-id
@@ -433,13 +435,17 @@
                 (log/info "[REACTIVE-SERVER] Active SSE channels for session:" (count (get @kafka/sse-channels session-id [])))
                 ;; Return initial results WITH the subscription ID
                 (let [node @session/default-node
-                      time-travel-ns (when as-of (require 'reactor.time-travel-sql))
-                      exec-fn (when as-of (ns-resolve 'reactor.time-travel-sql 'execute-sql-with-time-travel))
+                      ;; For temporal queries, we've already added the clause and executed via subscription
+                      ;; Just get the result from the subscription execution
                       result (if node
                               (if as-of
-                                (do (log/info "[REACTIVE-SERVER] Executing time-travel query with as-of:" as-of)
-                                    (exec-fn node sql params as-of))
-                                (xts/execute-sql node sql params))
+                                ;; The subscription has already been executed, but we need to return the result
+                                ;; Execute again with original SQL (without temporal clause) for the response
+                                (let [time-travel-ns (require 'reactor.time-travel-sql)
+                                      exec-fn (ns-resolve 'reactor.time-travel-sql 'execute-sql-with-time-travel)]
+                                  (log/info "[REACTIVE-SERVER] Executing time-travel query with as-of:" as-of)
+                                  (exec-fn node sql params as-of))
+                                (xts/execute-sql node sql-with-temporal params))
                               {:error "No XTDB node available"})
                       ;; Include subscription ID in response
                       result-with-sub (assoc result :subscription-id sub-id)]

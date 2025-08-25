@@ -182,9 +182,10 @@
   [sub-id sql params callback session-id & [client-id is-temporal-param?]]
   (let [tables (extract-tables-from-sql sql)
         ;; Check if this is a temporal query - either has AS OF TIMESTAMP clause OR passed as parameter
-        is-temporal? (or is-temporal-param?  ;; Explicitly passed from caller (for as-of queries)
-                        (and (string? sql)
-                             (re-find #"(?i)FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP" sql)))
+        ;; is-temporal? (or is-temporal-param?  ;; Explicitly passed from caller (for as-of queries)
+        ;;                 (and (string? sql)
+        ;;                      (re-find #"(?i)FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP" sql)))
+        is-temporal? false 
         sub-info {:query sql
                   :params params
                   :tables tables
@@ -343,10 +344,12 @@
 (defn same-structure?
   "Check if two result sets have the same structure"
   [old-structure new-structure]
-  (and old-structure
-       new-structure
-       (= (:fields old-structure) (:fields new-structure))
-       (= (:field-count old-structure) (:field-count new-structure))))
+  ;; Special case: if both are nil (empty result sets), they have the same structure
+  (or (and (nil? old-structure) (nil? new-structure))
+      (and old-structure
+           new-structure
+           (= (:fields old-structure) (:fields new-structure))
+           (= (:field-count old-structure) (:field-count new-structure)))))
 
 (defn compute-field-diff
   "Compute field-level differences between two rows"
@@ -568,10 +571,9 @@
                          (if timestamp
                            (do
                              (log/debug "[KAFKA-REACTIVE] Executing temporal query with timestamp:" timestamp)
-                             ;; Use time-travel execution
-                             (let [time-travel-ns (require 'reactor.time-travel-sql)
-                                   exec-fn (ns-resolve 'reactor.time-travel-sql 'execute-sql-with-time-travel)]
-                               (exec-fn node query params timestamp)))
+                             ;; The query ALREADY contains the temporal clause, so execute directly
+                             ;; Don't use execute-sql-with-time-travel as it would add another clause
+                             (xts/execute-sql node query params))
                            ;; Fallback to regular execution if can't extract timestamp
                            (xts/execute-sql node query params)))
                        ;; Regular non-temporal execution
@@ -601,13 +603,15 @@
               {:keys [base-query temporal-param is-temporal]} (normalize-temporal-query query)
 
               ;; Debug: Log what type of query we're processing
-              _ (when (:debug-logging @diff-config)
-                  (when (str/includes? query "todo_sessions")
-                    (log/info "[TODO-SESSIONS-DEBUG] Processing query"
-                              "\n  Full query:" query
-                              "\n  Is temporal?" is-temporal
-                              "\n  Subscription ID:" subscription-id
-                              "\n  Client ID:" client-id)))
+              _ (when (and (:debug-logging @diff-config) 
+                          (str/includes? query "FOR SYSTEM_TIME"))
+                  (log/info "[TEMPORAL-NORMALIZE-DEBUG] Processing temporal query"
+                            "\n  Full query:" query
+                            "\n  Normalized - Is temporal?" is-temporal
+                            "\n  Base query:" base-query
+                            "\n  Temporal param:" temporal-param
+                            "\n  Subscription ID:" subscription-id
+                            "\n  Client ID:" client-id))
 
               ;; Diff mode logic - use normalized base query for temporal queries
               ;; This ensures temporal queries at different times can diff against each other
@@ -690,7 +694,7 @@
                               :else "Unknown reason")))
 
               ;; Special handling for temporal queries - they're prime diff candidates
-              _ (when (and is-temporal (:debug-logging @diff-config))
+              _ (when is-temporal  ;; Always log temporal queries for debugging
                   (if should-diff?
                     (log/info "[TEMPORAL-DIFF] 🎯 Temporal query WILL be diffed!"
                               "\n  Previous timestamp:" (:temporal-timestamp cached-data)
@@ -700,6 +704,7 @@
                     (log/info "[TEMPORAL-SKIP] Temporal query NOT diffed. Reason:"
                               (cond
                                 (not (:enabled @diff-config)) "Diff disabled"
+                                (not client-has-data?) "Client hasn't received initial data yet"
                                 (not cached-data) "No cached data (first temporal query)"
                                 (not (:results cached-data)) "No cached results"
                                 (>= result-count max-size-limit) (str "Too many rows (" result-count " > " max-size-limit ")")
@@ -922,8 +927,8 @@
              (while @running?
                (try
                  (let [records (jc/poll consumer-instance 100)]
-                   (when (seq records)
-                     (log/info "[KAFKA-CONSUMER] Received" (count records) "records from Kafka"))
+                  ;;  (when (seq records)
+                  ;;    (log/info "[KAFKA-CONSUMER] Received" (count records) "records from Kafka"))
                    (doseq [record records]
                      (try
                        ;; Minimal processing - just check if it's a mutation and extract table names
