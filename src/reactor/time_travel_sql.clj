@@ -2,6 +2,7 @@
   "Time travel functionality for SQL queries"
   (:require [reactor.xtdb-store :as xts]
             [reactor.sql-parser :as parser]
+            [clojure.string :as cstr]
             [clojure.tools.logging :as log]))
 
 (defn get-table-history-timestamps
@@ -18,7 +19,7 @@
           results (xts/execute-sql node query)
           timestamps (map :_valid_from (:results results []))]
       ;; Log for debugging
-      (log/info "[TIME-TRAVEL] Found" (count timestamps) "timestamps for" table-name)
+      ;(log/info "[TIME-TRAVEL] Found" (count timestamps) "timestamps for" table-name)
       ;; Return in reverse order (oldest to newest) for consistent timeline display
       (reverse timestamps))
     (catch Exception e
@@ -38,7 +39,8 @@
                        (parser/add-as-of-clause sql as-of-timestamp)
                        sql)
         result (xts/execute-sql node modified-sql params)]
-    (log/info "[TIME-TRAVEL] Executing SQL:" modified-sql "with timestamp:" as-of-timestamp)
+    (when (not (cstr/starts-with? sql "SELECT COUNT(*) as cnt FROM (")) ;; dont log simple counts
+      (log/info "[TIME-TRAVEL] Executing SQL:" modified-sql "with timestamp:" as-of-timestamp))
     ;; Only include executed-sql if it's different from the original (i.e., time travel is active)
     (if (and as-of-timestamp (not= sql modified-sql))
       (assoc result :executed-sql modified-sql)

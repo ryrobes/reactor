@@ -53,6 +53,10 @@
   ;; #{[session-id subscription-id client-id]}
   (atom #{}))
 
+(defonce sse-channels
+  ;; Map of session-id -> #{channel}
+  (atom {}))
+
 ;; ============================================================================
 ;; Debouncing for Subscription Re-execution
 ;; ============================================================================
@@ -94,8 +98,9 @@
                   
                   ;; Process ready subscriptions
                   (when (seq ready-subs)
-                    (log/debug "Processing" (count ready-subs) "debounced re-executions")
+                    (log/info "[DEBUG-DEBOUNCE] Processing" (count ready-subs) "debounced re-executions:" ready-subs)
                     (doseq [sub-id ready-subs]
+                      (log/info "[DEBUG-DEBOUNCE] Executing subscription" sub-id)
                       ;; Remove from pending
                       (swap! pending-re-executions dissoc sub-id)
                       ;; Execute the subscription
@@ -557,92 +562,92 @@
         (let [start-time (System/currentTimeMillis)
               ;; For temporal queries, need to use time-travel execution
               result (if temporal?
-                      (let [;; Extract timestamp from the query
-                            timestamp-match (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'([^']+)'" query)
-                            timestamp (when timestamp-match (second timestamp-match))]
-                        (if timestamp
-                          (do
-                            (log/debug "[KAFKA-REACTIVE] Executing temporal query with timestamp:" timestamp)
-                            ;; Use time-travel execution
-                            (let [time-travel-ns (require 'reactor.time-travel-sql)
-                                  exec-fn (ns-resolve 'reactor.time-travel-sql 'execute-sql-with-time-travel)]
-                              (exec-fn node query params timestamp)))
-                          ;; Fallback to regular execution if can't extract timestamp
-                          (xts/execute-sql node query params)))
-                      ;; Regular non-temporal execution
-                      (if params
-                        (xts/execute-sql node query params)
-                        (xts/execute-sql node query)))
+                       (let [;; Extract timestamp from the query
+                             timestamp-match (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'([^']+)'" query)
+                             timestamp (when timestamp-match (second timestamp-match))]
+                         (if timestamp
+                           (do
+                             (log/debug "[KAFKA-REACTIVE] Executing temporal query with timestamp:" timestamp)
+                             ;; Use time-travel execution
+                             (let [time-travel-ns (require 'reactor.time-travel-sql)
+                                   exec-fn (ns-resolve 'reactor.time-travel-sql 'execute-sql-with-time-travel)]
+                               (exec-fn node query params timestamp)))
+                           ;; Fallback to regular execution if can't extract timestamp
+                           (xts/execute-sql node query params)))
+                       ;; Regular non-temporal execution
+                       (if params
+                         (xts/execute-sql node query params)
+                         (xts/execute-sql node query)))
               execution-time (- (System/currentTimeMillis) start-time)
               results (:results result [])
               result-count (count results)
               ;; Calculate data size metrics (cached for temporal queries)
               cache-key [query params (:timestamp result)]
               data-size (if-let [cached-size (and cache-key (get @metrics-cache cache-key))]
-                         cached-size
-                         (let [size (calculate-result-metrics results)]
-                           (when cache-key
-                             (swap! metrics-cache assoc cache-key size))
-                           size))
+                          cached-size
+                          (let [size (calculate-result-metrics results)]
+                            (when cache-key
+                              (swap! metrics-cache assoc cache-key size))
+                            size))
               ;; Add metrics to result
-              result-with-metrics (assoc result 
-                                        :metrics {:row-count result-count
-                                                 :data-size data-size
-                                                 :execution-time execution-time})
+              result-with-metrics (assoc result
+                                         :metrics {:row-count result-count
+                                                   :data-size data-size
+                                                   :execution-time execution-time})
               ;; Use client-id if available, otherwise fall back to sub-id
               subscription-id (or client-id sub-id)
-              
+
               ;; Normalize temporal queries to enable proper diffing across time
               {:keys [base-query temporal-param is-temporal]} (normalize-temporal-query query)
-              
+
               ;; Debug: Log what type of query we're processing
               _ (when (:debug-logging @diff-config)
                   (when (str/includes? query "todo_sessions")
                     (log/info "[TODO-SESSIONS-DEBUG] Processing query"
-                             "\n  Full query:" query
-                             "\n  Is temporal?" is-temporal
-                             "\n  Subscription ID:" subscription-id
-                             "\n  Client ID:" client-id)))
-              
+                              "\n  Full query:" query
+                              "\n  Is temporal?" is-temporal
+                              "\n  Subscription ID:" subscription-id
+                              "\n  Client ID:" client-id)))
+
               ;; Diff mode logic - use normalized base query for temporal queries
               ;; This ensures temporal queries at different times can diff against each other
               ;; For temporal queries, DON'T include timestamp in cache key - we want to diff across time!
               normalized-params (or params [])
               client-cache-key (if is-temporal
-                                ;; For temporal: use base query WITHOUT timestamp to enable cross-time diffing
-                                [session-id base-query normalized-params]
-                                ;; For regular: use full query with params
-                                [session-id query normalized-params])
+                                 ;; For temporal: use base query WITHOUT timestamp to enable cross-time diffing
+                                 [session-id base-query normalized-params]
+                                 ;; For regular: use full query with params
+                                 [session-id query normalized-params])
               cached-data (get @client-result-cache client-cache-key)
-              
+
               ;; Log cache lookup for temporal queries
               _ (when (and is-temporal (:debug-logging @diff-config))
                   (log/info "[TEMPORAL-CACHE] Looking up cache"
-                           "\n  Cache key:" client-cache-key
-                           "\n  Current timestamp:" temporal-param
-                           "\n  Cached data exists?" (boolean cached-data)
-                           (when cached-data
-                             (str "\n  Cached timestamp: " (:params cached-data)
-                                  "\n  Cached result count: " (count (:results cached-data))))))
-              
+                            "\n  Cache key:" client-cache-key
+                            "\n  Current timestamp:" temporal-param
+                            "\n  Cached data exists?" (boolean cached-data)
+                            (when cached-data
+                              (str "\n  Cached timestamp: " (:params cached-data)
+                                   "\n  Cached result count: " (count (:results cached-data))))))
+
               ;; Log cache key details for debugging
               _ (when (:debug-logging @diff-config)
                   (if is-temporal
                     (log/info "[TEMPORAL-CACHE] Temporal query detected"
-                             "\n  Original query:" (if (> (count query) 100) 
-                                                    (str (subs query 0 100) "...") 
-                                                    query)
-                             "\n  Base query:" (if (> (count base-query) 60)
-                                                 (str (subs base-query 0 60) "...")
-                                                 base-query)
-                             "\n  Timestamp:" temporal-param
-                             "\n  Cache key:" client-cache-key
-                             "\n  Cached data exists?" (boolean cached-data))
+                              "\n  Original query:" (if (> (count query) 100)
+                                                      (str (subs query 0 100) "...")
+                                                      query)
+                              "\n  Base query:" (if (> (count base-query) 60)
+                                                  (str (subs base-query 0 60) "...")
+                                                  base-query)
+                              "\n  Timestamp:" temporal-param
+                              "\n  Cache key:" client-cache-key
+                              "\n  Cached data exists?" (boolean cached-data))
                     (when cached-data
                       (log/debug "[CACHE-HIT] Found cached data for" subscription-id
-                                "| Key:" client-cache-key))))
+                                 "| Key:" client-cache-key))))
               new-structure (extract-row-structure results)
-              
+
               ;; Check if client has received base data for this subscription
               ;; For temporal queries, we need to track per-session since subscription IDs are reused
               ;; Use the cache key itself as the tracking key since it's unique per session+query
@@ -652,134 +657,135 @@
               client-has-data? (contains? @client-has-base-data client-tracking-key)
               _ (when (:debug-logging @diff-config)
                   (log/info "[CLIENT-TRACKING] Checking client data status"
-                           "\n  Tracking key:" client-tracking-key
-                           "\n  Has base data?" client-has-data?
-                           "\n  Is temporal?" is-temporal
-                           "\n  Tracked clients count:" (count @client-has-base-data)))
-              
+                            "\n  Tracking key:" client-tracking-key
+                            "\n  Has base data?" client-has-data?
+                            "\n  Is temporal?" is-temporal
+                            "\n  Tracked clients count:" (count @client-has-base-data)))
+
               ;; Determine if we should send diff or full
               ;; Temporal queries are EXCELLENT candidates for diffing!
               max-size-limit (if (and is-temporal (:temporal-always-diff @diff-config))
                                (:temporal-max-size @diff-config)
                                (:max-result-size @diff-config))
               should-diff? (and (:enabled @diff-config)
-                               client-has-data?  ;; Client must have received initial data
-                               cached-data
-                               (:results cached-data)  ;; Must have previous results
-                               (< result-count max-size-limit)
-                               (same-structure? (:structure cached-data) new-structure))
-              
+                                client-has-data?  ;; Client must have received initial data
+                                cached-data
+                                (not (str/starts-with? query "SELECT COUNT(*) as cnt FROM ("))
+                                (:results cached-data)  ;; Must have previous results
+                                (< result-count max-size-limit)
+                                (same-structure? (:structure cached-data) new-structure))
+
               ;; Debug why diff might not happen
               _ (when (and (:debug-logging @diff-config) (not should-diff?))
                   (log/info "[DIFF-SKIP] Not diffing" subscription-id "because:"
-                           (cond
-                             (not (:enabled @diff-config)) "Diff disabled"
-                             (not client-has-data?) "Client hasn't received initial data yet"
-                             (not cached-data) "No cached data (first execution)"
-                             (not (:results cached-data)) "Cache entry has no results"
-                             (>= result-count max-size-limit) (str "Too many rows: " result-count " >= " max-size-limit)
-                             (not (same-structure? (:structure cached-data) new-structure)) 
-                             (str "Structure changed. Old fields: " (:fields (:structure cached-data))
-                                  " New fields: " (:fields new-structure))
-                             :else "Unknown reason")))
-              
+                            (cond
+                              (not (:enabled @diff-config)) "Diff disabled"
+                              (not client-has-data?) "Client hasn't received initial data yet"
+                              (not cached-data) "No cached data (first execution)"
+                              (not (:results cached-data)) "Cache entry has no results"
+                              (>= result-count max-size-limit) (str "Too many rows: " result-count " >= " max-size-limit)
+                              (not (same-structure? (:structure cached-data) new-structure))
+                              (str "Structure changed. Old fields: " (:fields (:structure cached-data))
+                                   " New fields: " (:fields new-structure))
+                              :else "Unknown reason")))
+
               ;; Special handling for temporal queries - they're prime diff candidates
               _ (when (and is-temporal (:debug-logging @diff-config))
                   (if should-diff?
                     (log/info "[TEMPORAL-DIFF] 🎯 Temporal query WILL be diffed!"
-                             "\n  Previous timestamp:" (:temporal-timestamp cached-data)
-                             "\n  Current timestamp:" temporal-param
-                             "\n  Previous results:" (count (:results cached-data))
-                             "\n  Current results:" result-count)
+                              "\n  Previous timestamp:" (:temporal-timestamp cached-data)
+                              "\n  Current timestamp:" temporal-param
+                              "\n  Previous results:" (count (:results cached-data))
+                              "\n  Current results:" result-count)
                     (log/info "[TEMPORAL-SKIP] Temporal query NOT diffed. Reason:"
-                             (cond
-                               (not (:enabled @diff-config)) "Diff disabled"
-                               (not cached-data) "No cached data (first temporal query)"
-                               (not (:results cached-data)) "No cached results"
-                               (>= result-count max-size-limit) (str "Too many rows (" result-count " > " max-size-limit ")")
-                               (not (same-structure? (:structure cached-data) new-structure)) "Structure changed"
-                               :else "Unknown"))))
-              
+                              (cond
+                                (not (:enabled @diff-config)) "Diff disabled"
+                                (not cached-data) "No cached data (first temporal query)"
+                                (not (:results cached-data)) "No cached results"
+                                (>= result-count max-size-limit) (str "Too many rows (" result-count " > " max-size-limit ")")
+                                (not (same-structure? (:structure cached-data) new-structure)) "Structure changed"
+                                :else "Unknown"))))
+
               ;; Compute diff if applicable - use field-based diffing by default
               _ (when should-diff?
                   (log/info "[DIFF-DECISION] Attempting diff for" subscription-id
-                           (when is-temporal " (TEMPORAL)")
-                           "\n  Previous result count:" (count (:results cached-data))
-                           "\n  Current result count:" result-count
-                           "\n  Field-based enabled:" (:field-based? @diff-config true)
-                           "\n  Structure same:" (same-structure? (:structure cached-data) new-structure)
-                           (when is-temporal (str "\n  Timestamp: " temporal-param))))
-              
+                            (when is-temporal " (TEMPORAL)")
+                            "\n  Previous result count:" (count (:results cached-data))
+                            "\n  Current result count:" result-count
+                            "\n  Field-based enabled:" (:field-based? @diff-config true)
+                            "\n  Structure same:" (same-structure? (:structure cached-data) new-structure)
+                            (when is-temporal (str "\n  Timestamp: " temporal-param))))
+
               diff-result (when should-diff?
-                           (try
-                             (let [diff (compute-row-diff (:results cached-data) results 
-                                                         :field-based? (:field-based? @diff-config true) :query query)]
-                               (when (:debug-logging @diff-config)
-                                 (log/info "[DIFF-COMPUTED] Result type:" (:type diff)
-                                          "\n  Added:" (count (:added diff))
-                                          "| Removed:" (count (:removed diff))  
-                                          "| Updated:" (count (:updated diff))
-                                          "\n  Compression ratio:" (:compression-ratio diff)))
-                               diff)
-                             (catch Exception e
-                               (log/error e "[DIFF-ERROR] Failed to compute diff")
-                               nil)))
-              
+                            (try
+                              (let [diff (compute-row-diff (:results cached-data) results
+                                                           :field-based? (:field-based? @diff-config true) :query query)]
+                                (when (:debug-logging @diff-config)
+                                  (log/info "[DIFF-COMPUTED] Result type:" (:type diff)
+                                            "\n  Added:" (count (:added diff))
+                                            "| Removed:" (count (:removed diff))
+                                            "| Updated:" (count (:updated diff))
+                                            "\n  Compression ratio:" (:compression-ratio diff)))
+                                diff)
+                              (catch Exception e
+                                (log/error e "[DIFF-ERROR] Failed to compute diff")
+                                nil)))
+
               ;; Decide what to send
               message (if diff-result
-                       ;; Send diff
-                       (do
-                         (log/info "[DIFF-SEND]" (:type diff-result) "for" subscription-id
-                                  (when is-temporal " (TEMPORAL)")
-                                  "\n  Compression achieved:" (format "%.0f%%" (* (double (:compression-ratio diff-result)) 100))
-                                  "\n  Rows - Added:" (count (:added diff-result))
-                                  "| Removed:" (count (:removed diff-result))
-                                  "| Updated:" (count (:updated diff-result))
-                                  (when (= (:type diff-result) :field-diff)
-                                    (let [total-fields (reduce + 0 (map #(count (:field-changes %)) (:updated diff-result)))]
-                                      (str "\n  Field changes: " total-fields " total"
-                                           " (avg " (if (pos? (count (:updated diff-result)))
-                                                     (format "%.1f" (/ (double total-fields) (double (count (:updated diff-result)))))
-                                                     "0")
-                                           " per row)"))))
-                         {:subscription-id subscription-id
-                          :session-id session-id
-                          :query query
-                          :type (if (= (:type diff-result) :field-diff) 
-                                   :field-diff-update 
-                                   :diff-update)
-                          :diff diff-result
-                          :checksum (hash results)
-                          :metrics (:metrics result-with-metrics)})
-                       ;; Send full results
-                       (do
-                         (let [reason (cond
-                                       (not (:enabled @diff-config)) "DIFF_DISABLED"
-                                       (not cached-data) "INITIAL_LOAD"
-                                       (>= result-count (:max-result-size @diff-config)) 
-                                       (str "TOO_MANY_ROWS (" result-count " > " (:max-result-size @diff-config) ")")
-                                       (not (same-structure? (:structure cached-data) new-structure)) "STRUCTURE_CHANGED"
-                                       diff-result (str "DIFF_INEFFICIENT (ratio " 
-                                                       (format "%.2f" (double (:compression-ratio diff-result)))
-                                                       " > " (:min-compression-ratio @diff-config) ")")
-                                       :else "DIFF_NOT_BENEFICIAL")]
-                           (log/info "[FULL-SEND] Sending FULL update for" subscription-id
+                        ;; Send diff
+                        (do
+                          (log/info "[DIFF-SEND]" (:type diff-result) "for" subscription-id
                                     (when is-temporal " (TEMPORAL)")
-                                    "\n  Reason:" reason
-                                    "\n  Rows:" result-count
-                                    "\n  Data size:" data-size "bytes"
-                                    (when is-temporal (str "\n  Timestamp: " temporal-param))))
-                         ;; Mark client as having received base data
-                         (swap! client-has-base-data conj client-tracking-key)
-                         (when (:debug-logging @diff-config)
-                           (log/info "[CLIENT-TRACKING] Marked client as having base data"
-                                    "\n  Tracking key:" client-tracking-key))
-                         {:subscription-id subscription-id
-                          :session-id session-id
-                          :query query
-                          :type :full-update
-                          :result result-with-metrics
-                          :checksum (hash results)}))]
+                                    "\n  Compression achieved:" (format "%.0f%%" (* (double (:compression-ratio diff-result)) 100))
+                                    "\n  Rows - Added:" (count (:added diff-result))
+                                    "| Removed:" (count (:removed diff-result))
+                                    "| Updated:" (count (:updated diff-result))
+                                    (when (= (:type diff-result) :field-diff)
+                                      (let [total-fields (reduce + 0 (map #(count (:field-changes %)) (:updated diff-result)))]
+                                        (str "\n  Field changes: " total-fields " total"
+                                             " (avg " (if (pos? (count (:updated diff-result)))
+                                                        (format "%.1f" (/ (double total-fields) (double (count (:updated diff-result)))))
+                                                        "0")
+                                             " per row)"))))
+                          {:subscription-id subscription-id
+                           :session-id session-id
+                           :query query
+                           :type (if (= (:type diff-result) :field-diff)
+                                   :field-diff-update
+                                   :diff-update)
+                           :diff diff-result
+                           :checksum (hash results)
+                           :metrics (:metrics result-with-metrics)})
+                        ;; Send full results
+                        (do
+                          (let [reason (cond
+                                         (not (:enabled @diff-config)) "DIFF_DISABLED"
+                                         (not cached-data) "INITIAL_LOAD"
+                                         (>= result-count (:max-result-size @diff-config))
+                                         (str "TOO_MANY_ROWS (" result-count " > " (:max-result-size @diff-config) ")")
+                                         (not (same-structure? (:structure cached-data) new-structure)) "STRUCTURE_CHANGED"
+                                         diff-result (str "DIFF_INEFFICIENT (ratio "
+                                                          (format "%.2f" (double (:compression-ratio diff-result)))
+                                                          " > " (:min-compression-ratio @diff-config) ")")
+                                         :else "DIFF_NOT_BENEFICIAL")]
+                            (log/info "[FULL-SEND] Sending FULL update for" subscription-id
+                                      (when is-temporal " (TEMPORAL)")
+                                      "\n  Reason:" reason
+                                      "\n  Rows:" result-count
+                                      "\n  Data size:" data-size "bytes"
+                                      (when is-temporal (str "\n  Timestamp: " temporal-param))))
+                          ;; Mark client as having received base data
+                          (swap! client-has-base-data conj client-tracking-key)
+                          (when (:debug-logging @diff-config)
+                            (log/info "[CLIENT-TRACKING] Marked client as having base data"
+                                      "\n  Tracking key:" client-tracking-key))
+                          {:subscription-id subscription-id
+                           :session-id session-id
+                           :query query
+                           :type :full-update
+                           :result result-with-metrics
+                           :checksum (hash results)}))]
           
           ;; Update cache for next diff
           (when (:debug-logging @diff-config)
@@ -965,7 +971,8 @@
                                                      set)]
                                
                                ;; Debug logging to see what's happening
-                               (when (or has-mutation? (seq all-tables))
+                               (when (and (or has-mutation? (seq all-tables)) 
+                                          (not= all-tables  #{"reactor_subscriptions"})) ;; no noisy single sub logs
                                  (log/info "[KAFKA-DEBUG] Message analysis:"
                                           "\n  Has mutation:" has-mutation?
                                           "\n  Is SELECT:" is-select?
@@ -1008,6 +1015,16 @@
                                    (log/info "[KAFKA-MUTATION] Found" (count affected-subs) "affected subscriptions:" affected-subs)
                                    (when (seq affected-subs)
                                      (log/info "[KAFKA-MUTATION] Triggering" (count affected-subs) "subscriptions for tables:" filtered-tables)
+                                     ;; Log each subscription being triggered
+                                     (doseq [sub-id affected-subs]
+                                       (let [sub-info (get @active-subscriptions sub-id)
+                                             session-id (:session-id sub-info)
+                                             channels (get @sse-channels session-id [])]
+                                         (log/info "[DEBUG-TRIGGER] Requesting re-execution for" sub-id
+                                                  "\n  Session:" session-id
+                                                  "\n  Has channels:" (boolean (seq channels))
+                                                  "\n  Channel count:" (count channels)
+                                                  "\n  Tables:" (:tables sub-info))))
                                      ;; Track the reaction
                                      (doseq [table filtered-tables]
                                        (meta/track-reaction! table "mutation" affected-subs))
@@ -1059,11 +1076,6 @@
 ;; ============================================================================
 ;; SSE Integration
 ;; ============================================================================
-
-(defonce sse-channels
-  ;; Map of session-id -> #{channel}
-  (atom {}))
-
 
 
 (defn register-sse-channel!

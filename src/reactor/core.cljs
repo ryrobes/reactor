@@ -864,10 +864,19 @@
                   (when-let [server-sub-id (:subscription-id result)]
                     (when (not= server-sub-id sub-id)
                       (js/console.warn "[CLIENT] Server returned different ID:" server-sub-id "expected:" sub-id)))
-                  (reset! result-atom 
-                          (if (:error result)
-                            {:error (:error result) :loading false :executed-sql (:executed-sql result)}
-                            {:data (:results result) :loading false :executed-sql (:executed-sql result)}))))
+                  ;; Check if results are coming via SSE
+                  (if (:via-sse result)
+                    ;; Results will come via SSE - keep loading state for now
+                    (do
+                      (js/console.log "[CLIENT] Results for" sub-id "will be delivered via SSE")
+                      ;; The SSE handler will update the result-atom when data arrives
+                      ;; Keep loading state to indicate we're waiting for SSE data
+                      (reset! result-atom {:loading true :via-sse true}))
+                    ;; Results included in response (for non-SSE clients)
+                    (reset! result-atom 
+                            (if (:error result)
+                              {:error (:error result) :loading false :executed-sql (:executed-sql result)}
+                              {:data (:results result) :loading false :executed-sql (:executed-sql result)})))))
         (.catch #(do
                   (js/console.error "[CLIENT] Query failed for" sub-id %)
                   (reset! result-atom {:error (str %) :loading false}))))
