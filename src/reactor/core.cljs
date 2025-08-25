@@ -632,11 +632,22 @@
                              ;; Fallback
                              :else (get row id-key)))
                    ;; Index current data by ID
+                   _ (js/console.log "[CLIENT-DIFF] Starting diff application"
+                                    "\n  id-key:" (clj->js id-key)
+                                    "\n  current data:" (if data (str "count=" (count data)) "NIL/EMPTY")
+                                    "\n  diff type:" (:type diff)
+                                    "\n  diff added:" (count (:added diff))
+                                    "\n  diff removed:" (count (:removed diff))
+                                    "\n  diff updated:" (count (:updated diff)))
+                   _ (when (and (seq (:updated diff)) (empty? data))
+                       (js/console.error "[CLIENT-DIFF] ERROR: Have updates but no base data!"
+                                        "\n  Updates:" (clj->js (take 1 (:updated diff)))))
                    indexed (if (and id-key data)
                             (reduce (fn [acc row]
                                      (if-let [id (get-id row)]
                                        (assoc acc id row)
-                                       acc))
+                                       (do (js/console.warn "[CLIENT-DIFF] Row missing ID:" (clj->js row))
+                                           acc)))
                                    {}
                                    data)
                             {})
@@ -650,17 +661,27 @@
                                     after-remove
                                     (:added diff))
                    ;; Apply updates - handle both field-based and row-based updates
+                   _ (js/console.log "[CLIENT-DIFF] Processing updates:"
+                                    "\n  Update count:" (count (:updated diff))
+                                    "\n  After-add size:" (count after-add))
                    after-update (reduce (fn [acc update-entry]
                                          (let [id (:id update-entry)
                                                existing-row (get acc id)]
+                                           (js/console.log "[CLIENT-DIFF] Updating row ID:" (clj->js id)
+                                                          "\n  Existing row found?" (boolean existing-row)
+                                                          "\n  Has field-changes?" (boolean (:field-changes update-entry)))
                                            (cond
                                              ;; Field-based update with structural support
                                              (:field-changes update-entry)
                                              (if existing-row
-                                               (assoc acc id (sdiff/apply-enhanced-field-changes 
-                                                            existing-row 
-                                                            (:field-changes update-entry)))
-                                               acc)
+                                               (let [updated-row (sdiff/apply-enhanced-field-changes 
+                                                                 existing-row 
+                                                                 (:field-changes update-entry))]
+                                                 (js/console.log "[CLIENT-DIFF] Applied field changes, result:" 
+                                                                (take 3 (keys updated-row)))
+                                                 (assoc acc id updated-row))
+                                               (do (js/console.warn "[CLIENT-DIFF] No existing row for ID:" (clj->js id))
+                                                   acc))
                                              
                                              ;; Row-based update (legacy)
                                              (:new-values update-entry)
@@ -670,9 +691,20 @@
                                        after-add
                                        (:updated diff))
                    ;; Apply order if provided, otherwise use values
+                   _ (js/console.log "[CLIENT-DIFF] Building final data:"
+                                    "\n  after-update size:" (count after-update)
+                                    "\n  Has order?" (boolean (:order diff)))
                    final-data (if-let [order (:order diff)]
-                               (mapv after-update order)
-                               (vals after-update))]
+                               (do (js/console.log "[CLIENT-DIFF] Applying order, length:" (count order))
+                                   (mapv #(get after-update %) order))
+                               (vals after-update))
+                   ;; If diff has no changes, preserve existing data
+                   final-data (if (and (empty? (:added diff))
+                                      (empty? (:removed diff))
+                                      (empty? (:updated diff)))
+                               (do (js/console.log "[CLIENT-DIFF] No changes, keeping existing data")
+                                   data)  ;; Keep existing data unchanged
+                               final-data)]
                (js/console.log "[CLIENT]" (:type diff) "applied - added:" (count (:added diff))
                               "removed:" (count (:removed diff)) 
                               "updated:" (count (:updated diff))
@@ -747,11 +779,30 @@
                       (= (:type data) "field-diff-update"))
                   (when-let [sub-id (:subscription-id data)]
                     (if-let [sub (get @sql-subscriptions sub-id)]
-                      (do
-                        (js/console.log "[CLIENT] Received" (:type data) "for" sub-id 
-                                       "compression:" (get-in data [:diff :compression-ratio]))
-                        ;; Apply diff to current data (handles both field and row diffs)
-                        (apply-row-diff! (:result-atom sub) (:diff data) (:checksum data) (:metrics data)))
+                      (let [current-data @(:result-atom sub)]
+                        ;; Check if we have base data to apply diff to
+                        (if (or (nil? (:data current-data))
+                                (and (sequential? (:data current-data))
+                                     (empty? (:data current-data))))
+                          ;; No base data - we need full update instead
+                          (do
+                            (js/console.warn "[CLIENT] Received diff but have no base data for" sub-id 
+                                           "\n  Current data:" (clj->js current-data)
+                                           "\n  Diff:" (clj->js (select-keys (:diff data) [:type :added :removed :updated])))
+                            ;; For now, create empty base data so diff can be applied
+                            ;; This handles the case where the diff contains all the data we need
+                            (when (seq (get-in data [:diff :added]))
+                              (js/console.log "[CLIENT] Diff contains additions, initializing with empty data")
+                              (reset! (:result-atom sub) {:data [] :loading false})
+                              (apply-row-diff! (:result-atom sub) (:diff data) (:checksum data) (:metrics data))))
+                          ;; Have base data - apply diff normally
+                          (do
+                            (js/console.log "[CLIENT] Received" (:type data) "for" sub-id 
+                                           "\n  Current data count:" (count (:data current-data))
+                                           "\n  Diff type:" (get-in data [:diff :type])
+                                           "\n  Compression:" (get-in data [:diff :compression-ratio]))
+                            ;; Apply diff to current data (handles both field and row diffs)
+                            (apply-row-diff! (:result-atom sub) (:diff data) (:checksum data) (:metrics data)))))
                       (js/console.warn "[CLIENT] No subscription found for diff ID:" sub-id)))
                   
                   ;; Legacy query-update (backward compatibility)

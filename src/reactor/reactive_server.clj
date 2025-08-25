@@ -213,7 +213,7 @@
                 :body (json/generate-string {:error "No XTDB node available"})}))
            
            :else
-           (case path
+           (do (case path
            ;; Reactive SQL subscription endpoint
            "/api/subscribe-sql"
           (case method
@@ -661,7 +661,7 @@
                            (http/send! channel (str "data: " (json/generate-string new-state) "\n\n") false)))))
           
           ;; Fall back to base handler
-          (base-handler req))))))))
+          (base-handler req)))))))))
 
 (defn start-reactive!
   "Start a reactive Reactor server with Kafka integration."

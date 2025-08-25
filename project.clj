@@ -17,6 +17,7 @@
                  ;; SQL query support
                  [honeysql "1.0.461"]
                  [io.aviso/pretty "1.4.4"]
+                 [org.clj-commons/pretty "3.6.3"]
                  ;; Logging
                  [org.clojure/tools.logging "1.2.4"]
                  [ch.qos.logback/logback-classic "1.4.11"]
@@ -37,6 +38,9 @@
                  [cljsjs/react "18.2.0-1"]
                  [cljsjs/react-dom "18.2.0-1"]]
 
+  :injections [(require '[clj-commons.pretty.repl :as repl])
+               (repl/install-pretty-exceptions)]
+
   :jvm-opts ["--add-opens=java.base/java.nio=ALL-UNNAMED"
              "-Dio.netty.tryReflectionSetAccessible=true"]
   :plugins [[lein-cloverage "1.0.13"]
@@ -45,7 +49,7 @@
             [lein-ancient "0.6.15"]
             [lein-changelog "0.3.2"]
             [lein-cljsbuild "1.1.8"]]
-  
+
   ;; :cljsbuild {:repl-listen-port 9000
   ;;             :repl-launch-commands
   ;;             {"phantom" ["phantomjs" :stdout ".repl-phantom-out" :stderr ".repl-phantom-err"]}
@@ -66,7 +70,7 @@
   ;;                                  :output-to "resources/public/js/todo.min.js"
   ;;                                  :optimizations :advanced
   ;;                                  :pretty-print false}}]}
-  
+
   :profiles {:dev {:dependencies [[nrepl "1.0.0"]]}}
   :deploy-repositories [["releases" :clojars]]
   :aliases {"update-readme-version" ["shell" "sed" "-i" "s/\\\\[reactor \"[0-9.]*\"\\\\]/[reactor \"${:version}\"]/" "README.md"]}

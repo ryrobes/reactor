@@ -35,7 +35,7 @@ echo -e "${BLUE}Waiting for server to initialize...${NC}"
 
 # Poll for server to be ready (up to 30 seconds)
 COUNTER=0
-while [ $COUNTER -lt 30 ]; do
+while [ $COUNTER -lt 300 ]; do
     if lsof -i:5000 > /dev/null 2>&1; then
         break
     fi
