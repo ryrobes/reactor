@@ -259,7 +259,7 @@
   (atom {:enabled true
          :field-based? true  ; Enable field-level diffing (renamed for consistency)
          :structural-diff? true   ; Enable deep structural diffing for EDN fields
-         :edn-fields #{:state :app_state}  ; Fields known to contain EDN strings
+         :edn-fields #{:state :app_state :app-state "app_state"}  ; Fields known to contain EDN strings (multiple formats)
          :max-result-size 1000  ; Don't diff if more than N rows
          :min-compression-ratio 0.7  ; Send full if diff > 70% of original
          :structure-check true  ; Verify structure before diffing

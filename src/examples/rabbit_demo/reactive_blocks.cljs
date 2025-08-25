@@ -1,6 +1,7 @@
 (ns examples.rabbit-demo.reactive-blocks
   "Reactive SQL blocks that auto-update via Kafka"
   (:require [reactor.core :as r]
+            [reactor.sql-client :as sql]
             [reagent.core :as reagent]
             [clojure.string :as str]
             [examples.rabbit-demo.template-resolver :as resolver]))
@@ -10,92 +11,82 @@
 
 (defn subscribe-block-query!
   "Subscribe a block to a SQL query for automatic updates"
-  [block-id sql]
+  [block-id sql-query]
   ;; Unsubscribe from previous query if exists
-  (when-let [old-source (get @block-subscriptions block-id)]
-    (.close old-source)
+  (when-let [old-sub-id (get @block-subscriptions block-id)]
+    (sql/unsubscribe! old-sub-id)
     (swap! block-subscriptions dissoc block-id))
   
-  ;; Create new subscription
-  (let [server-url (:server-url @r/config)
-        session-id (:session-id @r/config)
-        event-source (js/EventSource. 
-                      (str server-url "/api/subscribe-sql?session=" session-id))]
+  ;; Configure SQL client to use our server settings
+  (sql/set-config! {:server-url (:server-url @r/config)
+                    :session-id (:session-id @r/config)
+                    :debug? false})
+  
+  ;; Create new subscription using the transparent SQL client
+  ;; The client handles ALL diff reconstruction automatically!
+  (let [sub-id (sql/subscribe-sql! 
+                sql-query
+                {:subscription-id (str "block-" block-id)
+                 :callback (fn [data]
+                            ;; We just get the full results - diffs are handled transparently!
+                            (let [results (:results data)]
+                              (js/console.log "Block" block-id "received update with" (count results) "rows")
+                              ;; Update block results
+                              (swap! block-results assoc block-id {:results results})
+                              ;; Update the block in app state
+                              (r/dispatch! [:update-block block-id 
+                                          {:results results
+                                           :error nil}])
+                              ;; Trigger dependent block updates
+                              (js/setTimeout 
+                                #(resolver/trigger-dependent-updates! block-id @(r/subscribe [:blocks]))
+                                100)))
+                 :error-callback (fn [error]
+                                  (js/console.error "Block" block-id "error:" error)
+                                  (r/dispatch! [:update-block block-id 
+                                              {:error (:error error)}]))})]
     
-    ;; Set up event handlers
-    (set! (.-onopen event-source)
-          (fn [e]
-            (js/console.log "Block" block-id "subscription connected")))
+    ;; Store subscription ID
+    (swap! block-subscriptions assoc block-id sub-id)
     
-    (set! (.-onmessage event-source)
-          (fn [e]
-            (let [data (js/JSON.parse (.-data e))
-                  data-clj (js->clj data :keywordize-keys true)]
-              (case (:type data-clj)
-                :subscription-created
-                (js/console.log "Block" block-id "subscription created:" (:subscription-id data-clj))
-                
-                :query-update
-                (do
-                  (js/console.log "Block" block-id "received update")
-                  ;; Update block results
-                  (swap! block-results assoc block-id (:result data-clj))
-                  ;; Also update the block in app state
-                  (r/dispatch! [:update-block block-id 
-                               {:results (:results (:result data-clj))
-                                :error (:error (:result data-clj))}])
-                  ;; Trigger dependent block updates
-                  (js/setTimeout 
-                    #(resolver/trigger-dependent-updates! block-id @(r/subscribe [:blocks]))
-                    100))
-                
-                (js/console.warn "Unknown message type:" (:type data-clj))))))
-    
-    (set! (.-onerror event-source)
-          (fn [e]
-            (js/console.error "Block" block-id "subscription error:" e)
-            (r/dispatch! [:update-block block-id {:error "Connection error"}])))
-    
-    ;; Store event source
-    (swap! block-subscriptions assoc block-id event-source)
-    
-    ;; Send subscription request with SQL
-    (-> (js/fetch (str server-url "/api/subscribe-sql?session=" session-id)
-                 #js {:method "POST"
-                      :headers #js {"Content-Type" "application/json"}
-                      :body (js/JSON.stringify 
-                             (clj->js {:sql sql}))})
-        (.then (fn [response]
-                 (js/console.log "Block" block-id "subscription request sent")))
-        (.catch (fn [error]
-                  (js/console.error "Block" block-id "subscription request failed:" error))))))
+    (js/console.log "Block" block-id "subscribed with ID" sub-id)))
 
 (defn unsubscribe-block!
   "Unsubscribe a block from its query"
   [block-id]
-  (when-let [event-source (get @block-subscriptions block-id)]
-    (.close event-source)
+  (when-let [sub-id (get @block-subscriptions block-id)]
+    (sql/unsubscribe! sub-id)
     (swap! block-subscriptions dissoc block-id)
-    (swap! block-results dissoc block-id)))
+    (swap! block-results dissoc block-id)
+    (js/console.log "Block" block-id "unsubscribed")))
 
 (defn execute-block-query!
   "Execute a SQL query for a block (one-time, not subscription)"
-  [block-id sql & [as-of]]
+  [block-id sql-query & [as-of]]
+  ;; Configure SQL client
+  (sql/set-config! {:server-url (:server-url @r/config)
+                    :session-id (:session-id @r/config)})
+  
   (r/dispatch! [:update-block block-id {:loading true}])
-  (-> (r/sql-query! sql nil as-of)
-      (.then (fn [result]
-               (r/dispatch! [:update-block block-id 
-                           {:results (:results result)
-                            :error (:error result)
-                            :loading false}])
-               ;; Trigger dependent block updates
-               (js/setTimeout 
-                 #(resolver/trigger-dependent-updates! block-id @(r/subscribe [:blocks]))
-                 100)))
-      (.catch (fn [error]
-                (r/dispatch! [:update-block block-id 
-                           {:error (str error)
-                            :loading false}])))))
+  
+  ;; Use the SQL client for one-time execution
+  (let [query (if as-of
+                (str sql-query " FOR SYSTEM_TIME AS OF TIMESTAMP '" as-of "'")
+                sql-query)]
+    (sql/execute-sql! query
+                     {:callback (fn [result]
+                                 (r/dispatch! [:update-block block-id 
+                                             {:results (:results result)
+                                              :error (:error result)
+                                              :loading false}])
+                                 ;; Trigger dependent block updates
+                                 (js/setTimeout 
+                                   #(resolver/trigger-dependent-updates! block-id @(r/subscribe [:blocks]))
+                                   100))
+                      :error-callback (fn [error]
+                                       (r/dispatch! [:update-block block-id 
+                                                   {:error (str error)
+                                                    :loading false}]))}))))
 
 (defn reactive-query-block
   "Enhanced query block with reactive subscriptions"
@@ -106,7 +97,7 @@
         initial-sql (reagent/atom sql)
         subscription-active (reagent/atom false)
         ;; Get reactive results from the separate atom
-        block-result (rq/get-block-results id)
+        block-result (get @block-results id {})
         {:keys [results error loading executed-sql]} block-result]
     
     ;; Set up subscription when SQL changes
