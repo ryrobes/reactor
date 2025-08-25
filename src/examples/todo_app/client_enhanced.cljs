@@ -30,11 +30,19 @@
 (defn setup-subscription!
   "Set up SQL subscription to todo_sessions table"
   []
+  (js/console.log "setup-subscription! called for session:" @session-id)
+  
   ;; Unsubscribe from previous subscription if exists
   (when @subscription-id
-    (sql/unsubscribe! @subscription-id))
+    (js/console.log "Unsubscribing from previous subscription:" @subscription-id)
+    (sql/unsubscribe! @subscription-id)
+    (reset! subscription-id nil))
+  
+  ;; Clear current state when switching sessions
+  (reset! app-state {:todos {} :filter :all})
   
   ;; Update SQL client config with new session ID
+  (js/console.log "Updating SQL config with session:" @session-id)
   (sql/set-config! {:server-url "http://localhost:4000"
                     :session-id @session-id
                     :debug? true})
@@ -60,9 +68,10 @@
                   (js/console.warn "No rows returned for session:" @session-id)))})
   
   ;; Subscribe to our session's state
+  ;; Use a unique subscription ID for each session
   (let [sub-id (sql/subscribe-sql!
                 (str "SELECT * FROM todo_sessions WHERE session_id = '" @session-id "'")
-                {:subscription-id "todo-state-sub"
+                {:subscription-id (str "todo-state-sub-" @session-id)
                  :callback (fn [data]
                             (js/console.log "Subscription callback received:" (clj->js data))
                             (if-let [row (first (:results data))]
