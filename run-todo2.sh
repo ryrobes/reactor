@@ -26,7 +26,7 @@ sleep 1
 
 # Start the server
 echo -e "${GREEN}Starting TODO Server on port 4000...${NC}"
-lein run -m examples.todo-app.server 2>&1 | sed "s/^/[SERVER] /" &
+lein run -m examples.todo-app.server-reactive 2>&1 | sed "s/^/[SERVER] /" &
 SERVER_PID=$!
 echo "Server PID: $SERVER_PID"
 
@@ -62,7 +62,7 @@ echo -e "${GREEN}Starting ClojureScript client...${NC}"
 echo -e "${BLUE}Building and watching with shadow-cljs...${NC}"
 
 # Start shadow-cljs
-npx shadow-cljs watch todo &
+npx shadow-cljs watch todo-enhanced &
 SHADOW_PID=$!
 echo "Shadow-cljs PID: $SHADOW_PID"
 
@@ -100,7 +100,7 @@ trap cleanup INT
 
 # Wait for shadow-cljs to be ready (check for the JS file)
 echo -e "${BLUE}Waiting for compilation...${NC}"
-while [ ! -f "resources/public/js/todo.js" ]; do
+while [ ! -f "resources/public/js/todo-enhanced.js" ]; do
     sleep 2
     echo -n "."
 done

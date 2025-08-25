@@ -64,7 +64,10 @@
                           (second (re-find #"(?i)DELETE\s+FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)" sql)))
             table-name (or insert-table update-table delete-table)]
         (when table-name
-          (log/info "[SQL-REACTIVE] Triggering updates for table:" table-name "after SQL:" (subs sql 0 (min 50 (count sql))))
+          (log/info "[SQL-REACTIVE] Triggering updates for table:" table-name "after SQL:" 
+                    ;(subs sql 0 (min 50 (count sql)))
+                    sql
+                    )
           ;; Trigger reactive updates asynchronously with a small delay
           (future
             (Thread/sleep 100) ;; Small delay to ensure transaction commits

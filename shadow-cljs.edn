@@ -30,4 +30,4 @@
                   :asset-path "/js"
                   :modules {:todo-enhanced {:init-fn examples.todo-app.client-enhanced/init}}
                   :devtools {:http-root "resources/public"
-                            :http-port 8084}}}}
+                            :http-port 8083}}}}
