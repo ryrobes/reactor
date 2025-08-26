@@ -6,25 +6,30 @@
             [clojure.tools.logging :as log]))
 
 (defn get-table-history-timestamps
-  "Get recent history timestamps for a table"
-  [node table-name limit]
-  (try
-    ;; Simple, reliable query for timestamps
-    ;; Get RECENT changes by ordering DESC, then reverse for display
-    (let [query (str "SELECT DISTINCT _valid_from FROM " table-name 
-                    " FOR VALID_TIME ALL "
-                    " ORDER BY _valid_from DESC"  ;; Get newest first
-                    " LIMIT 40" ; (* 2 limit)
-                     )  ;; Get extra to ensure good coverage
-          results (xts/execute-sql node query)
-          timestamps (map :_valid_from (:results results []))]
-      ;; Log for debugging
-      ;(log/info "[TIME-TRAVEL] Found" (count timestamps) "timestamps for" table-name)
-      ;; Return in reverse order (oldest to newest) for consistent timeline display
-      (reverse timestamps))
-    (catch Exception e
-      (log/error e "Failed to get history for table" table-name)
-      [])))
+  "Get recent history timestamps for a table, optionally filtered by WHERE clause"
+  ([node table-name limit]
+   (get-table-history-timestamps node table-name limit nil))
+  ([node table-name limit where-clause]
+   (try
+     ;; Build query with optional WHERE clause for row-specific timestamps
+     (let [query (str "SELECT DISTINCT _valid_from FROM " table-name 
+                     " FOR VALID_TIME ALL "
+                     (when where-clause 
+                       (str " " where-clause " "))  ;; Add WHERE clause if provided
+                     " ORDER BY _valid_from DESC"  ;; Get newest first
+                     " LIMIT " limit)  ;; Use provided limit
+           _ (log/debug "[TIME-TRAVEL] Query for timestamps:" query)
+           results (xts/execute-sql node query)
+           timestamps (map :_valid_from (:results results []))]
+       ;; Log for debugging
+       (when (seq timestamps)
+         (log/info "[TIME-TRAVEL] Found" (count timestamps) "timestamps for" table-name 
+                  (when where-clause (str " with filter: " where-clause))))
+       ;; Return in reverse order (oldest to newest) for consistent timeline display
+       (reverse timestamps))
+     (catch Exception e
+       (log/error e "Failed to get history for table" table-name "with WHERE:" where-clause)
+       []))))
 
 (defn get-tables-from-sql
   "Extract table names from SQL query"
@@ -47,13 +52,20 @@
       result)))
 
 (defn get-query-history-range
-  "Get the available time range for a SQL query based on its tables"
+  "Get the available time range for a SQL query based on its tables and WHERE clause"
   [node sql limit]
   (let [tables (get-tables-from-sql sql)
+        ;; Extract WHERE clause from the original SQL to filter timestamps
+        where-clause (parser/extract-where-clause sql)
+        _ (when where-clause
+            (log/info "[TIME-TRAVEL] Using WHERE clause for timestamp filtering:" where-clause))
         ;; Get more timestamps from each table to ensure we capture recent changes
         ;; Request 2x the limit from each table to handle multiple tables
         per-table-limit (* 2 limit)
-        all-timestamps (mapcat #(get-table-history-timestamps node % per-table-limit) tables)
+        ;; Pass WHERE clause to get row-specific timestamps
+        all-timestamps (if where-clause
+                         (mapcat #(get-table-history-timestamps node % per-table-limit where-clause) tables)
+                         (mapcat #(get-table-history-timestamps node % per-table-limit) tables))
         ;; Clean timestamps - remove [UTC] suffix but keep the Z
         clean-timestamps (->> all-timestamps
                               (map (fn [ts] 

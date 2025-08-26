@@ -31,6 +31,73 @@
 
 (declare fetch-history!)
 
+(defn subscribe-sql-with-temporal!
+  "Subscribe to SQL with optional as-of parameter for time travel"
+  [sql as-of subscription-id callback]
+  (let [{:keys [server-url session-id]} @sql/config
+        connection-id (str (random-uuid))
+        sse-url (str server-url "/api/subscribe-sql?session=" session-id "&connection=" connection-id)
+        event-source (js/EventSource. sse-url)]
+    
+    ;; Set up SSE handlers
+    (set! (.-onopen event-source)
+          (fn [_]
+            (js/console.log "[TODO-TEMPORAL]" subscription-id "SSE connected")))
+    
+    (set! (.-onmessage event-source)
+          (fn [e]
+            ;; Process the message directly here since handle-sse-message is private
+            (try
+              (let [data (js/JSON.parse (.-data e))
+                    data-clj (js->clj data :keywordize-keys true)]
+                (when (#{:query-update :full-update :diff-update :field-diff-update} (:type data-clj))
+                  (swap! sql/subscription-results assoc subscription-id (:results data-clj))
+                  (when callback
+                    (callback {:results (:results data-clj)
+                              :subscription-id subscription-id}))))
+              (catch js/Error e
+                (js/console.error "[TODO-TEMPORAL] Error processing message:" e)))))
+    
+    (set! (.-onerror event-source)
+          (fn [e]
+            (js/console.error "[TODO-TEMPORAL]" subscription-id "SSE error:" e)))
+    
+    ;; Store subscription info
+    (swap! sql/active-subscriptions assoc subscription-id
+           {:sql sql
+            :as-of as-of
+            :callback callback
+            :event-source event-source})
+    
+    ;; Store SSE connection
+    (swap! sql/sse-connections assoc subscription-id event-source)
+    
+    ;; Send subscription request with as-of parameter
+    (-> (js/fetch (str server-url "/api/sql")
+                  #js {:method "POST"
+                       :headers #js {"Content-Type" "application/json"
+                                    "X-Session-ID" session-id}
+                       :body (js/JSON.stringify 
+                              (clj->js {:sql sql
+                                       :as-of as-of  ; Include as-of for server-side temporal handling
+                                       :subscription-id subscription-id}))})
+        (.then (fn [response]
+                 (if (.-ok response)
+                   (.json response)
+                   (throw (js/Error. (str "HTTP " (.-status response)))))))
+        (.then (fn [data]
+                 ;; Initial results
+                 (let [result-clj (js->clj data :keywordize-keys true)]
+                   (when (:results result-clj)
+                     (swap! sql/subscription-results assoc subscription-id (:results result-clj))
+                     (when callback
+                       (callback result-clj))))))
+        (.catch (fn [error]
+                  (js/console.error "[TODO-TEMPORAL]" subscription-id "subscription failed:" error))))
+    
+    ;; Return subscription ID
+    subscription-id))
+
 (defn setup-subscription!
   "Set up SQL subscription to todo_sessions table"
   []
@@ -70,21 +137,22 @@
     ;; Subscribe to our session's state with optional time travel
     ;; IMPORTANT: Query by _id to avoid conflicts with session system's rows
     (let [row-id (str "todo-" current-session)
-          query (if current-time
-                   ;; Use proper XTDB 2.0 temporal syntax
-                   (str "SELECT * FROM todo_sessions "
-                        "FOR VALID_TIME AS OF TIMESTAMP '" current-time "' "
-                        "WHERE _id = '" row-id "'")
-                   (str "SELECT * FROM todo_sessions WHERE _id = '" row-id "'"))
-          _ (js/console.log "Subscribing with query:" query "for session:" current-session)
+          ;; Base query without temporal clause - server will add it if as-of is provided
+          base-query (str "SELECT * FROM todo_sessions WHERE _id = '" row-id "'")
+          _ (js/console.log "Subscribing with query:" base-query 
+                           "for session:" current-session
+                           (when current-time (str " at time: " current-time)))
           ;; Use a stable subscription ID based on session and time
           ;; This allows proper tracking but still unique per session/time combo
           unique-sub-id (str "todo-" current-session "-" (or current-time "now"))
           _ (js/console.log "Creating subscription with ID:" unique-sub-id)
-          sub-id (sql/subscribe-sql!
-                  query
-                  {:subscription-id unique-sub-id
-                   :callback (fn [data]
+          ;; Create subscription with as-of parameter
+          ;; We need to send as-of in the request body for the server to handle
+          sub-id (subscribe-sql-with-temporal!
+                  base-query
+                  current-time
+                  unique-sub-id
+                  (fn [data]
                                (js/console.log "Subscription callback received for session" current-session ":" (clj->js data))
                                (if-let [results (:results data)]
                                  (if (empty? results)
@@ -119,7 +187,7 @@
                                          (reset! app-state new-state))
                                        (js/console.warn "No app_state or state field in row:" (clj->js row)))
                                      (js/console.warn "Unexpected empty first row")))
-                                 (js/console.warn "No results field in data:" (clj->js data))))})]
+                                 (js/console.warn "No results field in data:" (clj->js data)))))]
       (reset! subscription-id sub-id)
       (js/console.log "Subscribed to todo state with ID:" sub-id " for session:" current-session))))
 
@@ -128,26 +196,29 @@
 ;; ============================================================================
 
 (defn fetch-history! []
-  "Fetch all historical timestamps for this session using temporal query"
-  ;; Use execute-sql for one-time queries instead of subscribe
-  ;; Query by _id to avoid conflicts with session system's rows
+  "Fetch all historical timestamps for this session using the query-history API"
+  ;; Use the proper API endpoint that handles temporal queries server-side
   (let [row-id (str "todo-" @session-id)
-        query (str "SELECT DISTINCT _valid_from FROM todo_sessions "
-                   "FOR VALID_TIME ALL "
-                   "WHERE _id = '" row-id "' "
-                   "ORDER BY _valid_from DESC "
-                   "LIMIT 40")]
-    (js/console.log "Fetching history with query:" query)
-    ;; Use execute-sql for one-time query
-    (sql/execute-sql!
-     query
-     {:callback (fn [data]
-                  (js/console.log "History timestamps received:" (clj->js data))
-                  (when-let [results (:results data)]
-                    (let [timestamps (map :_valid_from results)]
-                      (reset! history-timestamps timestamps))))
-      :error-callback (fn [error]
-                        (js/console.error "Failed to fetch history:" error))})))
+        ;; Base query - server will determine the tables and get their history
+        base-query (str "SELECT * FROM todo_sessions WHERE _id = '" row-id "'")]
+    (js/console.log "Fetching history for query:" base-query)
+    ;; Use the query-history endpoint which handles XTDB temporal queries properly
+    (-> (js/fetch (str "http://localhost:4000/api/query-history")
+                  #js {:method "POST"
+                       :headers #js {"Content-Type" "application/json"}
+                       :body (js/JSON.stringify 
+                              (clj->js {:sql base-query
+                                       :limit 40}))})
+        (.then #(.json %))
+        (.then (fn [data]
+                 (js/console.log "History data received:" (clj->js data))
+                 (let [data-clj (js->clj data :keywordize-keys true)
+                       ;; The API returns {:timestamps [...], :tables [...]}
+                       timestamps (:timestamps data-clj)]
+                   (js/console.log "Parsed timestamps:" (clj->js timestamps))
+                   (reset! history-timestamps (vec timestamps)))))
+        (.catch (fn [error]
+                  (js/console.error "Failed to fetch history:" error))))))
 
 (defn time-travel-to! [timestamp]
   "Travel to a specific point in time"
@@ -406,7 +477,7 @@
                        :border-radius "3px" :padding "5px" :margin-top "5px"}}
          (doall
           (for [timestamp (reverse @history-timestamps)]
-            ^{:key timestamp}
+            ^{:key (str "tts" timestamp)}
             [:div {:style {:font-size "11px" :padding "2px 5px" :cursor "pointer"
                           :background (if (= timestamp @current-valid-time) "#e3f2fd" "white")
                           :border-bottom "1px solid #f0f0f0"}

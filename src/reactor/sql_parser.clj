@@ -91,6 +91,21 @@
         (clojure.string/replace sql #"(?i)(\s+LIMIT\s+)\d+" (str "$1" new-limit))
         (str sql " LIMIT " new-limit)))))
 
+(defn extract-where-clause
+  "Extract the WHERE clause from a SQL query (including the WHERE keyword)"
+  [sql]
+  (try
+    (let [stmt (parse-sql sql)]
+      (when (instance? Select stmt)
+        (let [select-body (.getSelectBody stmt)]
+          (when (instance? PlainSelect select-body)
+            (when-let [where (.getWhere select-body)]
+              (str "WHERE " (.toString where)))))))
+    (catch Exception e
+      ;; Fallback: regex extraction
+      (when-let [match (re-find #"(?i)(WHERE\s+.+?)(?:\s+ORDER\s+BY|\s+GROUP\s+BY|\s+LIMIT|\s+FOR\s+|$)" sql)]
+        (clojure.string/trim (second match))))))
+
 (defn remove-where-clause
   "Remove WHERE clause from a SQL query"
   [sql]
