@@ -16,9 +16,11 @@
 (defonce subscription-id (atom nil))
 (defonce current-valid-time (reagent/atom nil))
 (defonce history-timestamps (reagent/atom []))
+(defonce history-subscription (atom nil))
 (defonce available-sessions (reagent/atom ["default"]))
 (defonce new-session-name (reagent/atom ""))
 (defonce session-sub-id (atom nil))
+(defonce sessions-subscription (atom nil))
 
 ;; Configure SQL client
 (sql/set-config! {:server-url "http://localhost:4000"
@@ -30,7 +32,8 @@
 ;; ============================================================================
 
 (declare fetch-history!)
-(declare fetch-sessions!)
+(declare setup-sessions-subscription!)
+(declare setup-history-subscription!)
 
 (defn setup-subscription! []
   (js/console.log "Setting up subscription for session:" @session-id "at time:" @current-valid-time)
@@ -79,7 +82,7 @@
     
     (js/console.log "Created subscription with ID:" sub-id)
     (reset! subscription-id sub-id)
-    (fetch-history!)))
+    (setup-history-subscription!)))
 
 (defn update-state! [update-fn & args]
   (let [new-state (apply update-fn @app-state args)
@@ -98,14 +101,18 @@
                  (sql/execute-sql!
                   insert-sql
                   {:callback (fn [_] 
-                             (js/console.log "State persisted"))
+                             (js/console.log "State persisted")
+                             ;; Only refresh history timestamps, don't change current time
+                             (js/setTimeout #(fetch-history!) 200))
                    :error-callback (fn [e] 
                                     (js/console.error "Insert failed:" e))}))
       :error-callback (fn [_]
                        (sql/execute-sql!
                         insert-sql
                         {:callback (fn [_]
-                                    (js/console.log "State persisted (first insert)"))
+                                    (js/console.log "State persisted (first insert)")
+                                    ;; Only refresh history timestamps, don't change current time
+                                    (js/setTimeout #(fetch-history!) 200))
                          :error-callback (fn [e]
                                           (js/console.error "Failed to persist:" e))}))})))
 
@@ -126,29 +133,115 @@
                    (reset! history-timestamps (vec timestamps)))))
         (.catch (fn [e] (js/console.error "Failed to fetch history:" e))))))
 
-(defn fetch-sessions! []
-  (sql/execute-sql!
-   "SELECT DISTINCT session_id FROM todo_sessions"
-   {:callback (fn [result]
-               (when-let [results (:results result)]
-                 (let [sessions (vec (distinct (map :session_id results)))]
-                   (js/console.log "Available sessions:" sessions)
-                   (reset! available-sessions 
-                           (if (empty? sessions) 
-                             ["default"] 
-                             sessions)))))
-    :error-callback (fn [e]
-                     (js/console.error "Failed to fetch sessions:" e)
-                     (reset! available-sessions ["default"]))}))
+(defn setup-history-subscription! []
+  (js/console.log "Setting up history subscription for session:" @session-id)
+  
+  ;; Only set up if not already set up for this session
+  (when-not (and @history-subscription 
+                 (= (str "todo-history-" @session-id) 
+                    (:subscription-id (meta @history-subscription))))
+    ;; Clean up old history subscription if it exists
+    (when @history-subscription
+      (js/console.log "Cleaning up old history subscription")
+      (remove-watch @history-subscription :history-update)
+      (reset! history-subscription nil))
+    
+    ;; Create a reactive SQL subscription for history
+    (let [row-id (str "todo-" @session-id)
+          history-query (str "SELECT SYSTEM_TIME, _id FROM todo_sessions WHERE _id = '" row-id "' ORDER BY SYSTEM_TIME DESC LIMIT 30")
+          sub-id (str "todo-history-" @session-id)
+          result-atom (r/sql-subscribe-with-id! sub-id history-query)]
+      
+      ;; Watch the result atom for changes
+      (add-watch result-atom :history-update
+                 (fn [key ref old-val new-val]
+                   (js/console.log "History subscription update:" (clj->js new-val))
+                   (when-not (:loading new-val)
+                     (if (:error new-val)
+                       (js/console.error "History subscription error:" (:error new-val))
+                       (when-let [results (:data new-val)]
+                         (let [timestamps (vec (distinct (map :system_time results)))]
+                           (js/console.log "History timestamps updated:" (count timestamps) "versions")
+                           (reset! history-timestamps timestamps)))))))
+      
+      (js/console.log "Created history subscription with ID:" sub-id)
+      ;; Store subscription with metadata
+      (reset! history-subscription (with-meta result-atom {:subscription-id sub-id}))
+      
+      ;; Also fetch initial history
+      (fetch-history!))))
+
+(defn setup-sessions-subscription! []
+  (js/console.log "Setting up subscription for available sessions")
+  
+  ;; Clean up old sessions subscription if it exists
+  (when @sessions-subscription
+    (js/console.log "Cleaning up old sessions subscription")
+    (remove-watch @sessions-subscription :sessions-update)
+    (reset! sessions-subscription nil))
+  
+  ;; Create a reactive SQL subscription for sessions
+  (let [sessions-query "SELECT DISTINCT session_id FROM todo_sessions"
+        sub-id "todo-sessions-list"
+        result-atom (r/sql-subscribe-with-id! sub-id sessions-query)]
+    
+    ;; Watch the result atom for changes
+    (add-watch result-atom :sessions-update
+               (fn [key ref old-val new-val]
+                 (js/console.log "Sessions subscription update:" (clj->js new-val))
+                 (when-not (:loading new-val)
+                   (if (:error new-val)
+                     (do
+                       (js/console.error "Sessions subscription error:" (:error new-val))
+                       (reset! available-sessions ["default"]))
+                     (when-let [results (:data new-val)]
+                       (let [sessions (vec (distinct (map :session_id results)))]
+                         (js/console.log "Available sessions updated:" sessions)
+                         (reset! available-sessions
+                                 (if (empty? sessions)
+                                   ["default"]
+                                   (if (contains? (set sessions) "default")
+                                     sessions
+                                     (vec (cons "default" sessions))))))))))
+    
+    (js/console.log "Created sessions subscription with ID:" sub-id)
+    (reset! sessions-subscription result-atom))))
 
 (defn create-session! [name]
   (when (and (not (empty? name))
              (not (contains? (set @available-sessions) name)))
-    (reset! session-id name)
-    (reset! app-state {:todos {} :filter :all})
-    (setup-subscription!)
-    (swap! available-sessions conj name)
-    (reset! new-session-name "")))
+    (let [row-id (str "todo-" name)
+          empty-state {:todos {} :filter :all}
+          state-str (pr-str empty-state)
+          escaped-state (clojure.string/replace state-str "'" "''")
+          insert-sql (str "INSERT INTO todo_sessions RECORDS "
+                         "{_id: '" row-id "', "
+                         "session_id: '" name "', "
+                         "app_state: '" escaped-state "'}")]
+      ;; First insert the new session record into the database
+      (sql/execute-sql!
+       insert-sql
+       {:callback (fn [_]
+                   (js/console.log "New session created in database:" name)
+                   ;; Immediately add to available sessions (optimistic update)
+                   (swap! available-sessions #(vec (distinct (conj % name))))
+                   ;; Switch to the new session
+                   (reset! session-id name)
+                   (reset! app-state empty-state)
+                   ;; Set up subscription for the new session
+                   (setup-subscription!)
+                   ;; Clear the input field
+                   (reset! new-session-name "")
+                   ;; Force refresh of sessions subscription to ensure consistency
+                   (js/setTimeout 
+                    (fn []
+                      (js/console.log "Refreshing sessions subscription after create")
+                      (setup-sessions-subscription!))
+                    200))
+        :error-callback (fn [e]
+                         (js/console.error "Failed to create session:" e)
+                         ;; Remove optimistically added session on error
+                         (swap! available-sessions #(vec (remove #{name} %))))}))))
 
 ;; ============================================================================
 ;; Event Handlers
@@ -215,34 +308,68 @@
                  :box-shadow "0 2px 4px rgba(0,0,0,0.1)"
                  :width "300px"}}
    [:h4 {:style {:margin "0 0 10px 0"}} "Time Travel"]
-   [:button {:on-click #(fetch-history!)
-             :style {:margin-bottom "10px"}} 
-    "Load History"]
    
    (when (seq @history-timestamps)
-     [:div
-      [:div {:style {:margin-bottom "5px" :font-size "12px"}}
-       (if @current-valid-time
-         (str "Time: " (subs (str @current-valid-time) 11 19))
-         "Time: NOW")]
-      [:input {:type "range"
-               :min 0
-               :max (count @history-timestamps)
-               :value (if @current-valid-time
-                       (inc (.indexOf @history-timestamps @current-valid-time))
-                       0)
-               :on-change #(let [idx (js/parseInt (-> % .-target .-value))]
-                            (if (= idx 0)
-                              (do (reset! current-valid-time nil)
-                                  (setup-subscription!))
-                              (let [ts (nth @history-timestamps (dec idx))]
-                                (reset! current-valid-time ts)
-                                (setup-subscription!))))
-               :style {:width "100%"}}]
-      [:div {:style {:display "flex" :justify-content "space-between" 
-                     :font-size "10px" :color "#666"}}
-       [:span "NOW"]
-       [:span (str (count @history-timestamps) " versions")]]])])
+     (let [sorted-timestamps (vec (sort @history-timestamps))
+           max-idx (count sorted-timestamps)
+           current-idx (if @current-valid-time
+                        (.indexOf sorted-timestamps @current-valid-time)
+                        max-idx)
+           go-to-index! (fn [idx]
+                          (if (= idx max-idx)
+                            (do (reset! current-valid-time nil)
+                                (setup-subscription!))
+                            (let [ts (nth sorted-timestamps idx)]
+                              (reset! current-valid-time ts)
+                              (setup-subscription!))))]
+       [:div
+        [:div {:style {:margin-bottom "10px"}}
+         [:div {:style {:margin-bottom "5px" :font-size "12px"
+                        :display "flex" :justify-content "space-between"
+                        :align-items "center"}}
+          [:span (if @current-valid-time
+                   (str "Time: " (subs (str @current-valid-time) 11 19))
+                   "Time: NOW")]
+          [:span {:style {:color "#666" :font-size "11px"}}
+           (str current-idx "/" max-idx " versions")]]
+         
+         ;; Arrow controls
+         [:div {:style {:display "flex" :gap "5px" :margin-bottom "8px"
+                        :justify-content "center"}}
+          [:button {:on-click #(when (> current-idx 0)
+                                (go-to-index! (dec current-idx)))
+                    :disabled (= current-idx 0)
+                    :style {:padding "2px 8px"
+                           :cursor (if (= current-idx 0) "not-allowed" "pointer")
+                           :opacity (if (= current-idx 0) 0.5 1)}}
+           "← Older"]
+          [:button {:on-click #(when (< current-idx max-idx)
+                                (go-to-index! (inc current-idx)))
+                    :disabled (= current-idx max-idx)
+                    :style {:padding "2px 8px"
+                           :cursor (if (= current-idx max-idx) "not-allowed" "pointer")
+                           :opacity (if (= current-idx max-idx) 0.5 1)}}
+           "Newer →"]
+          [:button {:on-click #(go-to-index! max-idx)
+                    :disabled (= current-idx max-idx)
+                    :style {:padding "2px 8px"
+                           :cursor (if (= current-idx max-idx) "not-allowed" "pointer")
+                           :opacity (if (= current-idx max-idx) 0.5 1)}}
+           "NOW"]]]
+        
+        [:input {:type "range"
+                 :min 0
+                 :max max-idx
+                 :value current-idx
+                 :on-change #(let [idx (js/parseInt (-> % .-target .-value))]
+                              (go-to-index! idx))
+                 :style {:width "100%"}}]
+        [:div {:style {:display "flex" :justify-content "space-between" 
+                       :font-size "10px" :color "#666"}}
+         [:span (if (pos? (count sorted-timestamps))
+                  (subs (str (first sorted-timestamps)) 11 19)
+                  "Oldest")]
+         [:span "NOW"]]]))])
 
 (defn todo-input []
   [:header.header
@@ -325,7 +452,7 @@
 ;; ============================================================================
 
 (defn init []
-  (fetch-sessions!)
+  (setup-sessions-subscription!)
   (setup-subscription!)
   (rdom/render [todo-app] (.getElementById js/document "app")))
 
