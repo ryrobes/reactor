@@ -1,7 +1,7 @@
 (require '[next.jdbc :as jdbc])
 (require '[clojure.string :as str])
 
-(def conn (jdbc/get-connection "jdbc:xtdb://localhost:5432/xtdb"))
+(def conn (jdbc/get-connection "jdbc:xtdb://10.174.1.144:5432/xtdb"))
 
 ;; Test data with special characters
 (def test-state "{:todos {}}")

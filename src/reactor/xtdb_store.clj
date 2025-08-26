@@ -20,7 +20,7 @@
   ([]   
    (start-xtdb-node nil))
   ([{:keys [host port dbname] :as config}]
-   (let [host (or host "localhost")
+   (let [host (or host "10.174.1.144")
          port (or port 5432)
          dbname (or dbname "xtdb")
          jdbc-url (str "jdbc:xtdb://" host ":" port "/" dbname)]

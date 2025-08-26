@@ -108,7 +108,7 @@
                                   true
                                   (try
                                     ((resolve 'reactor.kafka-reactive/init!) 
-                                     {"bootstrap.servers" "localhost:9092"
+                                     {"bootstrap.servers" "10.174.1.144:9092"
                                       "group.id" "test-reactor"})
                                     true
                                     (catch Exception e

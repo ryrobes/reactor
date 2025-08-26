@@ -10,7 +10,7 @@
   
   ;; Initialize Kafka for reactive subscriptions (optional but recommended)
   (try
-    (kafka/init! {"bootstrap.servers" "localhost:9092"
+    (kafka/init! {"bootstrap.servers" "10.174.1.144:9092"
                   "group.id" "todo-app"})
     (println "✅ Kafka reactive system initialized")
     (catch Exception e

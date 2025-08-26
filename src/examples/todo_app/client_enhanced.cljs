@@ -53,53 +53,65 @@
     (when-not current-time
       (reset! current-valid-time nil))  ; Only reset if not time traveling
     
-    ;; Add a small delay to ensure clean EventSource closure
-    (js/setTimeout 
-     (fn []
-       ;; CRITICAL: Update SQL client config BEFORE creating subscription
-       ;; This ensures the SSE connection URL has the correct session-id
-       (js/console.log "Updating SQL config with session:" current-session "(captured from:" @session-id ")")
-       (sql/set-config! {:server-url "http://localhost:4000"
-                         :session-id current-session
-                         :debug? true})
-       (js/console.log "Config updated, about to create subscription...")
-     
-     ;; The subscription below will provide the data for the session
-     ;; No need to INSERT - sessions should already exist
-     
-     ;; Fetch history for the new session (unless we're time traveling)
-     (when-not current-time
-       (js/setTimeout #(fetch-history!) 500))  ; Small delay to let subscription establish
-     
-     ;; Subscribe to our session's state with optional time travel
-     ;; Use a unique subscription ID each time to force new SSE connection
-     (let [query (if current-time
-                    (str "SELECT * FROM todo_sessions "
-                         "AS OF TIMESTAMP '" current-time "' "
-                         "WHERE session_id = '" current-session "'")
-                    (str "SELECT * FROM todo_sessions WHERE session_id = '" current-session "'"))
-           _ (js/console.log "Subscribing with query:" query "for session:" current-session)
-           ;; Generate unique ID to force new SSE connection
-           ;; Include session-id in the subscription ID for clarity
-           unique-sub-id (str "todo-sub-" current-session "-" (random-uuid))
-           _ (js/console.log "Creating subscription with ID:" unique-sub-id)
-           sub-id (sql/subscribe-sql!
-                   query
-                   {:subscription-id unique-sub-id
-                    :callback (fn [data]
+    ;; CRITICAL: Update SQL client config immediately
+    ;; This ensures the SSE connection URL has the correct session-id
+    (js/console.log "Updating SQL config with session:" current-session)
+    (sql/set-config! {:server-url "http://localhost:4000"
+                      :session-id current-session
+                      :debug? true})
+    
+    ;; The subscription below will provide the data for the session
+    ;; No need to INSERT - sessions should already exist
+    
+    ;; Fetch history for the new session (unless we're time traveling)
+    (when-not current-time
+      (js/setTimeout #(fetch-history!) 500))  ; Small delay to let subscription establish
+    
+    ;; Subscribe to our session's state with optional time travel
+    ;; IMPORTANT: Query by _id to avoid conflicts with session system's rows
+    (let [row-id (str "todo-" current-session)
+          query (if current-time
+                   ;; Use proper XTDB 2.0 temporal syntax
+                   (str "SELECT * FROM todo_sessions "
+                        "FOR VALID_TIME AS OF TIMESTAMP '" current-time "' "
+                        "WHERE _id = '" row-id "'")
+                   (str "SELECT * FROM todo_sessions WHERE _id = '" row-id "'"))
+          _ (js/console.log "Subscribing with query:" query "for session:" current-session)
+          ;; Use a stable subscription ID based on session and time
+          ;; This allows proper tracking but still unique per session/time combo
+          unique-sub-id (str "todo-" current-session "-" (or current-time "now"))
+          _ (js/console.log "Creating subscription with ID:" unique-sub-id)
+          sub-id (sql/subscribe-sql!
+                  query
+                  {:subscription-id unique-sub-id
+                   :callback (fn [data]
                                (js/console.log "Subscription callback received for session" current-session ":" (clj->js data))
                                (if-let [results (:results data)]
                                  (if (empty? results)
                                    ;; No data for this session yet - initialize it
                                    (do 
-                                     (js/console.log "No data for session" current-session "- using empty state")
-                                     (reset! app-state {:todos {} :filter :all}))
+                                     (js/console.log "No data for session" current-session "- initializing with empty state")
+                                     (reset! app-state {:todos {} :filter :all})
+                                     ;; Insert initial empty state for this session
+                                     (let [row-id (str "todo-" current-session)
+                                           init-state (pr-str {:todos {} :filter :all})
+                                           init-sql (str "INSERT INTO todo_sessions RECORDS "
+                                                        "{_id: '" row-id "', "
+                                                        "session_id: '" current-session "', "
+                                                        "app_state: '" init-state "'}")]
+                                       (js/console.log "Creating initial state with SQL:" init-sql)
+                                       (sql/execute-sql!
+                                        init-sql
+                                        {:callback (fn [_] 
+                                                    (js/console.log "Initial state created for session:" current-session))
+                                         :error-callback (fn [error]
+                                                          (js/console.warn "Could not create initial state:" error))})))
                                    ;; We have results
                                    (if-let [row (first results)]
                                      ;; Try both app_state and state fields
                                      (if-let [state-str (or (:app_state row) (:state row))]
                                        ;; Parse the EDN string
-                                       (let [new-state (if (= state-str "{}")
+                                       (let [new-state (if (or (= state-str "{}") (= state-str ""))
                                                         {:todos {} :filter :all}  ; Default empty state
                                                         (reader/read-string state-str))]
                                          (js/console.log "Received state update:" (clj->js new-state))
@@ -108,9 +120,8 @@
                                        (js/console.warn "No app_state or state field in row:" (clj->js row)))
                                      (js/console.warn "Unexpected empty first row")))
                                  (js/console.warn "No results field in data:" (clj->js data))))})]
-       (reset! subscription-id sub-id)
-       (js/console.log "Subscribed to todo state with ID:" sub-id " for session:" current-session)))
-   50)))
+      (reset! subscription-id sub-id)
+      (js/console.log "Subscribed to todo state with ID:" sub-id " for session:" current-session))))
 
 ;; ============================================================================
 ;; Time Travel Functions
@@ -118,25 +129,25 @@
 
 (defn fetch-history! []
   "Fetch all historical timestamps for this session using temporal query"
-  ;; We need to use subscribe-sql to get query results
-  (let [query (str "SELECT DISTINCT _valid_from FROM todo_sessions "
+  ;; Use execute-sql for one-time queries instead of subscribe
+  ;; Query by _id to avoid conflicts with session system's rows
+  (let [row-id (str "todo-" @session-id)
+        query (str "SELECT DISTINCT _valid_from FROM todo_sessions "
                    "FOR VALID_TIME ALL "
-                   "WHERE session_id = '" @session-id "' "
+                   "WHERE _id = '" row-id "' "
                    "ORDER BY _valid_from DESC "
-                   "LIMIT 40")
-        sub-id (str "history-query-" (random-uuid))]
+                   "LIMIT 40")]
     (js/console.log "Fetching history with query:" query)
-    ;; Use a one-time subscription to get the results
-    (sql/subscribe-sql!
+    ;; Use execute-sql for one-time query
+    (sql/execute-sql!
      query
-     {:subscription-id sub-id
-      :callback (fn [data]
+     {:callback (fn [data]
                   (js/console.log "History timestamps received:" (clj->js data))
                   (when-let [results (:results data)]
                     (let [timestamps (map :_valid_from results)]
-                      (reset! history-timestamps timestamps)
-                      ;; Immediately unsubscribe since this is a one-time query
-                      (sql/unsubscribe! sub-id))))})))
+                      (reset! history-timestamps timestamps))))
+      :error-callback (fn [error]
+                        (js/console.error "Failed to fetch history:" error))})))
 
 (defn time-travel-to! [timestamp]
   "Travel to a specific point in time"
@@ -164,21 +175,45 @@
   (let [new-state (apply update-fn @app-state args)
         state-str (pr-str new-state)
         ;; Create a unique ID for each session's data
-        row-id (str "todo-" @session-id)]
+        row-id (str "todo-" @session-id)
+        ;; Escape single quotes in the state string for SQL
+        escaped-state (clojure.string/replace state-str "'" "''")
+        ;; XTDB uses INSERT ... RECORDS syntax
+        ;; Since XTDB doesn't have ON CONFLICT, we'll delete then insert for updates
+        delete-sql (str "DELETE FROM todo_sessions WHERE _id = '" row-id "'")
+        insert-sql (str "INSERT INTO todo_sessions RECORDS "
+                       "{_id: '" row-id "', "
+                       "session_id: '" @session-id "', "
+                       "app_state: '" escaped-state "'}")]
+    ;; Log the SQL for debugging
+    (js/console.log "Updating state with DELETE + INSERT:")
+    (js/console.log "  Delete SQL:" delete-sql)
+    (js/console.log "  Insert SQL:" insert-sql)
     ;; Optimistically update local state
     (reset! app-state new-state)
-    ;; Use PUT for XTDB which acts as an upsert (insert or update)
-    ;; The _id must be unique per row, session_id is just a field
+    ;; First delete, then insert (upsert pattern for XTDB)
     (sql/execute-sql!
-     (str "PUT todo_sessions {_id: '" row-id "', "
-          "session_id: '" @session-id "', "
-          "app_state: '" state-str "'}")
-     {:callback (fn [result]
-                 (js/console.log "State persisted to DB for session:" @session-id " with id:" row-id)
-                 ;; Fetch updated history after each change
-                 (fetch-history!))
+     delete-sql
+     {:callback (fn [_]
+                 ;; After delete, do the insert
+                 (sql/execute-sql!
+                  insert-sql
+                  {:callback (fn [result]
+                             (js/console.log "State persisted to DB for session:" @session-id)
+                             ;; Fetch updated history after each change
+                             (fetch-history!))
+                   :error-callback (fn [error]
+                                    (js/console.error "Failed to insert state:" error))}))  
       :error-callback (fn [error]
-                       (js/console.error "Failed to persist state:" error))})))
+                       ;; If delete fails, try insert anyway (might be first time)
+                       (js/console.warn "Delete failed (might be first insert), trying insert:" error)
+                       (sql/execute-sql!
+                        insert-sql
+                        {:callback (fn [result]
+                                    (js/console.log "State persisted to DB for session:" @session-id)
+                                    (fetch-history!))
+                         :error-callback (fn [error]
+                                          (js/console.error "Failed to persist state:" error))}))})))
 
 (defn add-todo! [todo]
   (update-state! #(assoc-in % [:todos (:id todo)] todo) ))

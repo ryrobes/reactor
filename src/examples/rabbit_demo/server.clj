@@ -186,8 +186,7 @@
 (defn -main []
   ;; Initialize Kafka reactive system first
   (try
-    (kafka/init! {"bootstrap.servers" "localhost:9092"
-                  "group.id" "rabbit-demo"})
+    (kafka/init! {"bootstrap.servers" "10.174.1.144:9092" "group.id" "rabbit-demo"})
     (println "Kafka reactive system initialized")
     (catch Exception e
       (println "WARNING: Could not initialize Kafka:" (.getMessage e))

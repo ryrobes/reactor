@@ -45,7 +45,7 @@
   ;; Start Kafka consumer (with mock config for testing)
   (println "2. Starting Kafka consumer...")
   (try
-    (kafka/init! {"bootstrap.servers" "localhost:9092"
+    (kafka/init! {"bootstrap.servers" "10.174.1.144:9092"
                   "group.id" "test-reactor-watcher"})
     (println "   Kafka consumer started successfully")
     (catch Exception e

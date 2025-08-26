@@ -21,8 +21,8 @@
 ;; Configuration
 ;; ============================================================================
 
-(defonce kafka-config 
-  (atom {"bootstrap.servers" "localhost:9092"
+(defonce kafka-config  
+  (atom {"bootstrap.servers" "10.174.1.144:9092"
          "group.id" "reactor-xtdb-watcher"
          "key.deserializer" "org.apache.kafka.common.serialization.ByteArrayDeserializer"
          "value.deserializer" "org.apache.kafka.common.serialization.ByteArrayDeserializer"
