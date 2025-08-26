@@ -273,30 +273,39 @@
                     :gap "10px"}}
       ;; Editor column
       [:div {:style {:flex 1}}
-       (when (and executed-sql (not= executed-sql sql))
-         [:div {:style {:background "rgba(0,255,159,0.1)"
-                        :border "1px solid rgba(0,255,159,0.3)"
-                        :border-radius "4px 4px 0 0"
-                        :padding "4px 8px"
-                        :font-size "10px"
-                        :font-family "'JetBrains Mono', monospace"
-                        :color "#00ff9f"
-                        :display "flex"
-                        :align-items "center"
-                        :gap "5px"
-                        :cursor "pointer"
-                        :transition "all 0.2s"}
-                :on-mouse-over #(set! (.. % -target -style -background) "rgba(0,255,159,0.2)")
-                :on-mouse-out #(set! (.. % -target -style -background) "rgba(0,255,159,0.1)")
-                :on-click (fn [e]
+       ;; Always render the container to prevent layout shift
+       [:div {:style {:background (if (and executed-sql (not= executed-sql sql))
+                                    "rgba(0,255,159,0.1)"
+                                    "transparent")
+                      :border (if (and executed-sql (not= executed-sql sql))
+                               "1px solid rgba(0,255,159,0.3)"
+                               "1px solid transparent")
+                      :border-radius "4px 4px 0 0"
+                      :padding "4px 8px"
+                      :font-size "10px"
+                      :font-family "'JetBrains Mono', monospace"
+                      :color "#00ff9f"
+                      :display "flex"
+                      :align-items "center"
+                      :gap "5px"
+                      :cursor (if (and executed-sql (not= executed-sql sql)) "pointer" "default")
+                      :transition "all 0.2s"
+                      :min-height "24px"  ;; Ensure consistent height
+                      :visibility (if (and executed-sql (not= executed-sql sql)) "visible" "hidden")}
+              :on-mouse-over (when (and executed-sql (not= executed-sql sql))
+                              #(set! (.. % -target -style -background) "rgba(0,255,159,0.2)"))
+              :on-mouse-out (when (and executed-sql (not= executed-sql sql))
+                             #(set! (.. % -target -style -background) "rgba(0,255,159,0.1)"))
+              :on-click (when (and executed-sql (not= executed-sql sql))
+                         (fn [e]
                            (.stopPropagation e)
                            ;; Reset to NOW - re-execute query without time travel
                            (let [current-sql @local-sql]
                              (rq/execute-block-query! id current-sql nil nil)
                              ;; Reset time travel slider to NOW position
-                             (tt/reset-time-travel! id current-sql)))}
-          [:span "⏰"]
-          [:span "TIME TRAVEL MODE - Click to return to NOW"]])
+                             (tt/reset-time-travel! id current-sql))))}
+        [:span "⏰"]
+        [:span "TIME TRAVEL MODE - Click to return to NOW"]]
        [:div {:style {:border (if (and executed-sql (not= executed-sql sql))
                                "1px solid rgba(0,255,159,0.5)"
                                "1px solid rgba(0,255,159,0.3)")

@@ -137,6 +137,9 @@
        :as-of as-of
        :transform #(or (get (first %) (keyword value-field)) default)})))
 
+;; Forward declaration for sql-exec! (defined later in the file)
+(declare sql-exec!)
+
 ;; Event registry for SQL-backed events
 (defonce sql-event-registry (atom {}))
 
@@ -169,9 +172,12 @@
         (sql-exec! sql params))
       (js/console.error "[CLIENT] No SQL event handler registered for:" event-id))))
 
-;; Enhanced subscription function that handles SQL subscriptions via registry
-(def original-subscribe subscribe)
+;; Store original subscribe function before redefining
+;; This is intentional - we're enhancing the base subscribe function with registry support
+(def ^:private subscribe-original subscribe)
 
+;; Enhanced subscription function that handles SQL subscriptions via registry
+;; WARNING: This intentionally redefines the subscribe function to add registry support
 (defn subscribe
   "Enhanced subscribe that supports registered SQL subscriptions
    In addition to existing patterns:
@@ -190,7 +196,7 @@
             {:keys [sql params as-of transform]
              :or {transform identity}} config
             ;; Create the SQL subscription
-            result-atom (original-subscribe [:sql sql params as-of])]
+            result-atom (subscribe-original [:sql sql params as-of])]
         ;; If there's a transform, wrap the atom to transform on deref
         (if transform
           (let [transformed-atom (r/atom nil)]
@@ -207,7 +213,7 @@
       
       ;; Fall back to original subscribe for other patterns
       :else
-      (original-subscribe query))))
+      (subscribe-original query))))
 
 ;; Helper to create SQL-backed key-value store operations
 (defn reg-sql-store
