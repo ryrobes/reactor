@@ -30,4 +30,11 @@
                   :asset-path "/js"
                   :modules {:todo-enhanced {:init-fn examples.todo-app.client-enhanced/init}}
                   :devtools {:http-root "resources/public"
-                            :http-port 8083}}}}
+                            :http-port 8083}}
+  
+  :todo-simple {:target :browser
+                :output-dir "resources/public/js"
+                :asset-path "/js"
+                :modules {:todo-simple {:init-fn examples.todo-app.client-simple/init}}
+                :devtools {:http-root "resources/public"
+                          :http-port 8083}}}}
