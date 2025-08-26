@@ -91,6 +91,151 @@
 (reg-sub :history-info (fn [_ _] @history-info))
 (reg-sub :connected? (fn [_ _] @connected?))
 
+;; ============================================================================
+;; Enhanced Re-frame-like SQL API
+;; ============================================================================
+
+;; SQL subscription registry - stores SQL subscription definitions
+(defonce sql-sub-registry (atom {}))
+
+(defn reg-sql-sub
+  "Register a SQL subscription with optional transform function
+   Handler should return a map with :sql, :params, :as-of, and optional :transform
+   
+   Example:
+   (reg-sql-sub :todos
+     (fn [[_ session-id]]
+       {:sql \"SELECT * FROM todos WHERE session_id = ?\"
+        :params [session-id]
+        :transform #(or (:todos (first %)) {})}))
+   
+   The subscription can then be used like:
+   (subscribe [:todos \"my-session\"])"
+  [id handler]
+  (swap! sql-sub-registry assoc id handler))
+
+(defn reg-sql-key
+  "Register a SQL-backed key-value subscription
+   This is a convenience for the common pattern of storing JSON in a single row
+   
+   Example:
+   (reg-sql-key :todo-state
+     {:table \"todo_sessions\"
+      :key-field \"_id\"  
+      :value-field \"app_state\"
+      :default {:todos {} :filter :all}})
+   
+   Then use like:
+   (subscribe [:todo-state session-id])
+   (dispatch-sql! [:todo-state session-id new-state])"
+  [id {:keys [table key-field value-field default]
+       :or {key-field "_id" value-field "app_state"}}]
+  (reg-sql-sub id
+    (fn [[_ key as-of]]
+      {:sql (str "SELECT * FROM " table " WHERE " key-field " = ?")
+       :params [key]
+       :as-of as-of
+       :transform #(or (get (first %) (keyword value-field)) default)})))
+
+;; Event registry for SQL-backed events
+(defonce sql-event-registry (atom {}))
+
+(defn reg-event-sql
+  "Register an event that executes SQL
+   Handler receives [params] and returns SQL string or {:sql ... :params ...}
+   
+   Example:
+   (reg-event-sql :add-todo
+     (fn [[_ session-id todo]]
+       {:sql \"INSERT INTO todos (session_id, id, text, completed) VALUES (?, ?, ?, ?)\"
+        :params [session-id (:id todo) (:text todo) (:completed todo)]}))
+   
+   Then dispatch like:
+   (dispatch-sql! [:add-todo \"my-session\" {:id 1 :text \"Buy milk\" :completed false}])"
+  [id handler]
+  (swap! sql-event-registry assoc id handler))
+
+(defn dispatch-sql!
+  "Dispatch a SQL event - executes SQL and triggers subscription updates
+   Returns a promise with the result"
+  [event-vec]
+  (let [[event-id & args] event-vec
+        handler (get @sql-event-registry event-id)]
+    (if handler
+      (let [sql-config (handler args)
+            {:keys [sql params]} (if (string? sql-config)
+                                   {:sql sql-config :params nil}
+                                   sql-config)]
+        (sql-exec! sql params))
+      (js/console.error "[CLIENT] No SQL event handler registered for:" event-id))))
+
+;; Enhanced subscription function that handles SQL subscriptions via registry
+(def original-subscribe subscribe)
+
+(defn subscribe
+  "Enhanced subscribe that supports registered SQL subscriptions
+   In addition to existing patterns:
+   - [:sql \"SELECT...\"] - Direct SQL subscription
+   - [:get [:path]] - Path subscription
+   
+   Now also supports:
+   - [:registered-sql-sub arg1 arg2] - Uses registered SQL subscription"
+  [query]
+  (let [[sub-type & args] query]
+    (cond
+      ;; Check if it's a registered SQL subscription
+      (contains? @sql-sub-registry sub-type)
+      (let [handler (get @sql-sub-registry sub-type)
+            config (handler query)
+            {:keys [sql params as-of transform]
+             :or {transform identity}} config
+            ;; Create the SQL subscription
+            result-atom (original-subscribe [:sql sql params as-of])]
+        ;; If there's a transform, wrap the atom to transform on deref
+        (if transform
+          (let [transformed-atom (r/atom nil)]
+            ;; Set up reactive computation to transform the data
+            (r/track! (fn []
+                       (let [raw-result @result-atom]
+                         (reset! transformed-atom
+                                (cond
+                                  (:loading raw-result) raw-result
+                                  (:error raw-result) raw-result
+                                  :else (assoc raw-result :data (transform (:data raw-result))))))))
+            transformed-atom)
+          result-atom))
+      
+      ;; Fall back to original subscribe for other patterns
+      :else
+      (original-subscribe query))))
+
+;; Helper to create SQL-backed key-value store operations
+(defn reg-sql-store
+  "Register a complete SQL-backed store with get/set operations
+   Creates both a subscription and an event for a key-value pattern
+   
+   Example:
+   (reg-sql-store :app-state
+     {:table \"app_sessions\"
+      :key-field \"session_id\"
+      :value-field \"state\"
+      :default {}})
+   
+   Then use like:
+   @(subscribe [:app-state \"session-123\"])  ; Get
+   (dispatch-sql! [:set-app-state \"session-123\" new-state])  ; Set"
+  [id {:keys [table key-field value-field default] :as config}]
+  ;; Register the subscription
+  (reg-sql-key id config)
+  ;; Register the setter event
+  (reg-event-sql (keyword (str "set-" (name id)))
+    (fn [[key value]]
+      {:sql (str "INSERT INTO " table " (" key-field ", " value-field ") "
+                 "VALUES (?, ?) "
+                 "ON CONFLICT (" key-field ") "
+                 "DO UPDATE SET " value-field " = EXCLUDED." value-field)
+       :params [key (pr-str value)]})))
+
 ;; Forward declarations
 (declare get-history-info!)
 (declare get-sessions!)

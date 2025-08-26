@@ -18,7 +18,9 @@ shadow-cljs watch magic
 # TODO App
 lein run -m examples.todo-app.server-simple  # Basic version
 lein run -m examples.todo-app.server         # Full reactive version
-shadow-cljs watch todo
+lein run -m examples.todo-app.server-reframe # Re-frame style with SQL-first API
+shadow-cljs watch todo           # Original
+shadow-cljs watch todo-reframe   # New re-frame style (port 8084)
 
 # Rabbit Demo (SQL Browser with time travel)
 lein run -m examples.rabbit-demo.server/-main
@@ -54,12 +56,63 @@ Reactor uses XTDB 2.0 which requires a running XTDB server:
 # Connection: jdbc:xtdb://localhost:5432/xtdb
 ```
 
+## Enhanced Re-frame API
+
+Reactor now includes an enhanced re-frame-like API that treats SQL as a first-class citizen:
+
+### SQL Subscriptions
+```clojure
+;; Register a SQL subscription with transform
+(r/reg-sql-sub :todos
+  (fn [[_ session-id]]
+    {:sql "SELECT * FROM todos WHERE session_id = ?"
+     :params [session-id]
+     :transform #(or (:todos (first %)) {})}))
+
+;; Use it like a normal re-frame subscription
+(def todos (r/subscribe [:todos "my-session"]))
+```
+
+### SQL Events
+```clojure
+;; Register SQL-backed events
+(r/reg-event-sql :add-todo
+  (fn [[session-id todo]]
+    {:sql "INSERT INTO todos (session_id, id, text) VALUES (?, ?, ?)"
+     :params [session-id (:id todo) (:text todo)]}))
+
+;; Dispatch like normal re-frame
+(r/dispatch-sql! [:add-todo "session-1" {:id 1 :text "Buy milk"}])
+```
+
+### SQL Key-Value Store
+```clojure
+;; Register a complete store with get/set operations
+(r/reg-sql-store :app-state
+  {:table "app_sessions"
+   :key-field "session_id"
+   :value-field "state"
+   :default {}})
+
+;; Get: @(r/subscribe [:app-state "session-123"])
+;; Set: (r/dispatch-sql! [:set-app-state "session-123" new-state])
+```
+
+### Benefits
+- **Less boilerplate** - No manual atom watching or subscription cleanup
+- **Declarative** - Define subscriptions once, use everywhere
+- **SQL-first** - Direct SQL with automatic reactivity
+- **Transforms** - Built-in data transformation support
+- **Backward compatible** - Existing code continues to work
+
 ## Architecture
 
 ### Core Components
 
 1. **Client (`reactor.core.cljs`)**
    - Provides `subscribe`/`dispatch!` API matching re-frame
+   - Enhanced re-frame-like API with `reg-sql-sub`, `reg-event-sql`, `reg-sql-store`
+   - SQL as first-class citizen with automatic atom management and transforms
    - Manages Server-Sent Events (SSE) connection for real-time updates
    - Handles SQL subscriptions and time travel controls
 
@@ -107,6 +160,8 @@ Reactor uses XTDB 2.0 which requires a running XTDB server:
 - `src/reactor/meta_tracking.clj` - Async meta-table tracking for debugging
 - `src/examples/rabbit_demo/client.cljs` - Complex UI with SQL browser and time travel
 - `src/reactor/time_travel_sql.clj` - Time travel SQL query execution
+- `src/examples/todo_app/client_reframe.cljs` - TODO app using enhanced re-frame-like API
+- `src/examples/todo_app/server_reframe.clj` - Simplified server for SQL-first approach
 
 ### Common Issues & Solutions
 

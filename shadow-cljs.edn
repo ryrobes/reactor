@@ -37,4 +37,11 @@
                 :asset-path "/js"
                 :modules {:todo-simple {:init-fn examples.todo-app.client-simple/init}}
                 :devtools {:http-root "resources/public"
-                          :http-port 8083}}}}
+                          :http-port 8083}}
+  
+  :todo-reframe {:target :browser
+                 :output-dir "resources/public/js"
+                 :asset-path "/js"
+                 :modules {:todo-reframe {:init-fn examples.todo-app.client-reframe/init}}
+                 :devtools {:http-root "resources/public"
+                           :http-port 8084}}}}
