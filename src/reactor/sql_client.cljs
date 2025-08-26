@@ -97,8 +97,11 @@
   [sql & [{:keys [callback subscription-id error-callback params]}]]
   (let [sub-id (or subscription-id (str "sql-sub-" (random-uuid)))
         {:keys [server-url session-id]} @config
-        event-source (js/EventSource. 
-                      (str server-url "/api/subscribe-sql?session=" session-id))]
+        ;; Add a unique identifier to force a new connection
+        connection-id (str (random-uuid))
+        sse-url (str server-url "/api/subscribe-sql?session=" session-id "&connection=" connection-id)
+        _ (js/console.log "[SQL-CLIENT] Creating EventSource for session:" session-id "with URL:" sse-url)
+        event-source (js/EventSource. sse-url)]
     
     ;; Set up SSE handlers
     (set! (.-onopen event-source)
@@ -158,7 +161,9 @@
 (defn unsubscribe!
   "Unsubscribe from a SQL query"
   [subscription-id]
+  (js/console.log "[SQL-CLIENT] Unsubscribing from:" subscription-id)
   (when-let [event-source (get @sse-connections subscription-id)]
+    (js/console.log "[SQL-CLIENT] Closing EventSource for:" subscription-id)
     (.close event-source)
     (swap! sse-connections dissoc subscription-id))
   (swap! active-subscriptions dissoc subscription-id)

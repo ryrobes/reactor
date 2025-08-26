@@ -14,6 +14,8 @@
 (defonce app-state (reagent/atom {:todos {} :filter :all}))
 (defonce session-id (reagent/atom "default"))
 (defonce subscription-id (atom nil))
+(defonce current-valid-time (reagent/atom nil))  ;; nil means "current time"
+(defonce history-timestamps (reagent/atom []))    ;; Track all valid_time values
 
 ;; Configure SQL client
 (sql/set-config! {:server-url "http://localhost:4000"
@@ -27,64 +29,130 @@
 ;; SQL Subscription Setup
 ;; ============================================================================
 
+(declare fetch-history!)
+
 (defn setup-subscription!
   "Set up SQL subscription to todo_sessions table"
   []
+  (js/console.log "=============================================")
   (js/console.log "setup-subscription! called for session:" @session-id)
   
-  ;; Unsubscribe from previous subscription if exists
-  (when @subscription-id
-    (js/console.log "Unsubscribing from previous subscription:" @subscription-id)
-    (sql/unsubscribe! @subscription-id)
-    (reset! subscription-id nil))
-  
-  ;; Clear current state when switching sessions
-  (reset! app-state {:todos {} :filter :all})
-  
-  ;; Update SQL client config with new session ID
-  (js/console.log "Updating SQL config with session:" @session-id)
-  (sql/set-config! {:server-url "http://localhost:4000"
-                    :session-id @session-id
-                    :debug? true})
-  
-  ;; First ensure our session exists
-  ;; Use session_id as both _id and session_id for simplicity
-  (sql/execute-sql! 
-   (str "INSERT INTO todo_sessions (_id, session_id, app_state) "
-        "VALUES ('" @session-id "', '" @session-id "', '{:todos {} :filter :all}') "
-        "ON CONFLICT (_id) DO NOTHING"))
-  
-  ;; Immediately fetch current state for the session
-  (sql/execute-sql!
-   (str "SELECT * FROM todo_sessions WHERE session_id = '" @session-id "'")
-   {:callback (fn [data]
-                (js/console.log "Loading session data response:" (clj->js data))
-                (if-let [row (first (:results data))]
-                  (if-let [app-state-str (:app_state row)]
-                    (let [new-state (reader/read-string app-state-str)]
-                      (js/console.log "Loaded session state:" (clj->js new-state))
-                      (reset! app-state new-state))
-                    (js/console.warn "No app_state in row:" (clj->js row)))
-                  (js/console.warn "No rows returned for session:" @session-id)))})
-  
-  ;; Subscribe to our session's state
-  ;; Use a unique subscription ID for each session
-  (let [sub-id (sql/subscribe-sql!
-                (str "SELECT * FROM todo_sessions WHERE session_id = '" @session-id "'")
-                {:subscription-id (str "todo-state-sub-" @session-id)
-                 :callback (fn [data]
-                            (js/console.log "Subscription callback received:" (clj->js data))
-                            (if-let [row (first (:results data))]
-                              (if-let [app-state-str (:app_state row)]
-                                ;; Parse the EDN string
-                                (let [new-state (reader/read-string app-state-str)]
-                                  (js/console.log "Received state update (via diff!):" (clj->js new-state))
-                                  ;; Update our local atom
-                                  (reset! app-state new-state))
-                                (js/console.warn "No app_state in subscription row:" (clj->js row)))
-                              (js/console.warn "No rows in subscription results:" (clj->js data))))})]
-    (reset! subscription-id sub-id)
-    (js/console.log "Subscribed to todo state with ID:" sub-id)))
+  ;; Capture the current session-id value to avoid stale closures
+  (let [current-session @session-id
+        current-time @current-valid-time]
+    
+    ;; Unsubscribe from previous subscription if exists
+    (when @subscription-id
+      (js/console.log "Unsubscribing from previous subscription:" @subscription-id)
+      (sql/unsubscribe! @subscription-id)
+      (reset! subscription-id nil))
+    
+    ;; Clear current state and history when switching sessions
+    (reset! app-state {:todos {} :filter :all})
+    (reset! history-timestamps [])
+    (when-not current-time
+      (reset! current-valid-time nil))  ; Only reset if not time traveling
+    
+    ;; Add a small delay to ensure clean EventSource closure
+    (js/setTimeout 
+     (fn []
+       ;; CRITICAL: Update SQL client config BEFORE creating subscription
+       ;; This ensures the SSE connection URL has the correct session-id
+       (js/console.log "Updating SQL config with session:" current-session "(captured from:" @session-id ")")
+       (sql/set-config! {:server-url "http://localhost:4000"
+                         :session-id current-session
+                         :debug? true})
+       (js/console.log "Config updated, about to create subscription...")
+     
+     ;; The subscription below will provide the data for the session
+     ;; No need to INSERT - sessions should already exist
+     
+     ;; Fetch history for the new session (unless we're time traveling)
+     (when-not current-time
+       (js/setTimeout #(fetch-history!) 500))  ; Small delay to let subscription establish
+     
+     ;; Subscribe to our session's state with optional time travel
+     ;; Use a unique subscription ID each time to force new SSE connection
+     (let [query (if current-time
+                    (str "SELECT * FROM todo_sessions "
+                         "AS OF TIMESTAMP '" current-time "' "
+                         "WHERE session_id = '" current-session "'")
+                    (str "SELECT * FROM todo_sessions WHERE session_id = '" current-session "'"))
+           _ (js/console.log "Subscribing with query:" query "for session:" current-session)
+           ;; Generate unique ID to force new SSE connection
+           ;; Include session-id in the subscription ID for clarity
+           unique-sub-id (str "todo-sub-" current-session "-" (random-uuid))
+           _ (js/console.log "Creating subscription with ID:" unique-sub-id)
+           sub-id (sql/subscribe-sql!
+                   query
+                   {:subscription-id unique-sub-id
+                    :callback (fn [data]
+                               (js/console.log "Subscription callback received for session" current-session ":" (clj->js data))
+                               (if-let [results (:results data)]
+                                 (if (empty? results)
+                                   ;; No data for this session yet - initialize it
+                                   (do 
+                                     (js/console.log "No data for session" current-session "- using empty state")
+                                     (reset! app-state {:todos {} :filter :all}))
+                                   ;; We have results
+                                   (if-let [row (first results)]
+                                     ;; Try both app_state and state fields
+                                     (if-let [state-str (or (:app_state row) (:state row))]
+                                       ;; Parse the EDN string
+                                       (let [new-state (if (= state-str "{}")
+                                                        {:todos {} :filter :all}  ; Default empty state
+                                                        (reader/read-string state-str))]
+                                         (js/console.log "Received state update:" (clj->js new-state))
+                                         ;; Update our local atom
+                                         (reset! app-state new-state))
+                                       (js/console.warn "No app_state or state field in row:" (clj->js row)))
+                                     (js/console.warn "Unexpected empty first row")))
+                                 (js/console.warn "No results field in data:" (clj->js data))))})]
+       (reset! subscription-id sub-id)
+       (js/console.log "Subscribed to todo state with ID:" sub-id " for session:" current-session)))
+   50)))
+
+;; ============================================================================
+;; Time Travel Functions
+;; ============================================================================
+
+(defn fetch-history! []
+  "Fetch all historical timestamps for this session using temporal query"
+  ;; We need to use subscribe-sql to get query results
+  (let [query (str "SELECT DISTINCT _valid_from FROM todo_sessions "
+                   "FOR VALID_TIME ALL "
+                   "WHERE session_id = '" @session-id "' "
+                   "ORDER BY _valid_from DESC "
+                   "LIMIT 40")
+        sub-id (str "history-query-" (random-uuid))]
+    (js/console.log "Fetching history with query:" query)
+    ;; Use a one-time subscription to get the results
+    (sql/subscribe-sql!
+     query
+     {:subscription-id sub-id
+      :callback (fn [data]
+                  (js/console.log "History timestamps received:" (clj->js data))
+                  (when-let [results (:results data)]
+                    (let [timestamps (map :_valid_from results)]
+                      (reset! history-timestamps timestamps)
+                      ;; Immediately unsubscribe since this is a one-time query
+                      (sql/unsubscribe! sub-id))))})))
+
+(defn time-travel-to! [timestamp]
+  "Travel to a specific point in time"
+  ;; Clean up timestamp format - remove [UTC] or any timezone suffix
+  (let [clean-timestamp (-> timestamp
+                           str
+                           (clojure.string/replace #"\[.*?\]" "") ; Remove [UTC] or similar
+                           clojure.string/trim)]
+    (js/console.log "Time traveling to:" clean-timestamp "(from:" timestamp ")")
+    (reset! current-valid-time clean-timestamp)
+    (setup-subscription!)))
+
+(defn time-travel-back! []
+  "Go to present time"
+  (reset! current-valid-time nil)
+  (setup-subscription!))
 
 ;; ============================================================================
 ;; Event Handlers - Update DB which triggers subscription updates
@@ -94,15 +162,23 @@
   "Update state in database, which will trigger subscription update"
   [update-fn & args]
   (let [new-state (apply update-fn @app-state args)
-        state-str (pr-str new-state)]
+        state-str (pr-str new-state)
+        ;; Create a unique ID for each session's data
+        row-id (str "todo-" @session-id)]
     ;; Optimistically update local state
     (reset! app-state new-state)
-    ;; Persist to database (will trigger diff-based update via subscription)
+    ;; Use PUT for XTDB which acts as an upsert (insert or update)
+    ;; The _id must be unique per row, session_id is just a field
     (sql/execute-sql!
-     (str "UPDATE todo_sessions SET app_state = '" state-str "' "
-          "WHERE session_id = '" @session-id "'")
+     (str "PUT todo_sessions {_id: '" row-id "', "
+          "session_id: '" @session-id "', "
+          "app_state: '" state-str "'}")
      {:callback (fn [result]
-                 (js/console.log "State persisted to DB"))})))
+                 (js/console.log "State persisted to DB for session:" @session-id " with id:" row-id)
+                 ;; Fetch updated history after each change
+                 (fetch-history!))
+      :error-callback (fn [error]
+                       (js/console.error "Failed to persist state:" error))})))
 
 (defn add-todo! [todo]
   (update-state! #(assoc-in % [:todos (:id todo)] todo) ))
@@ -252,7 +328,57 @@
           "Clear completed"])]
       [:div])))  ;; Return empty div instead of nil
 
-(defn time-travel-controls []
+(defn simple-time-travel-controls []
+  ;; Fetch history on mount
+  (reagent/create-class
+   {:component-did-mount
+    (fn [] (fetch-history!))
+    
+    :reagent-render
+    (fn []
+      [:div.time-travel-controls
+     {:style {:position "fixed"
+              :top "10px"
+              :right "10px"
+              :background "white"
+              :border "1px solid #ddd"
+              :padding "15px"
+              :border-radius "5px"
+              :box-shadow "0 2px 4px rgba(0,0,0,0.1)"
+              :max-width "300px"}}
+     [:h4 {:style {:margin-top 0}} "Time Travel"]
+     
+     ;; Current time status
+     [:div {:style {:margin-bottom "10px" :padding "5px" 
+                    :background (if @current-valid-time "#fff3cd" "#d4edda")
+                    :border-radius "3px"}}
+      (if @current-valid-time
+        [:div
+         [:div {:style {:font-size "12px" :font-weight "bold"}} "Viewing Past State"]
+         [:div {:style {:font-size "11px"}} (str "Time: " @current-valid-time)]
+         [:button {:on-click #(time-travel-back!)
+                   :style {:margin-top "5px" :background "#28a745" :color "white"
+                          :border "none" :padding "3px 8px" :border-radius "3px"}}
+          "← Back to Present"]]
+        [:div {:style {:font-size "12px"}} "Viewing Current State"])]
+     
+     ;; History timestamps
+     (when (seq @history-timestamps)
+       [:div
+        [:div {:style {:font-size "12px" :margin-top "10px" :font-weight "bold"}}
+         "History Points:"]
+        [:div {:style {:max-height "150px" :overflow-y "auto" :border "1px solid #ddd" 
+                       :border-radius "3px" :padding "5px" :margin-top "5px"}}
+         (doall
+          (for [timestamp (reverse @history-timestamps)]
+            ^{:key timestamp}
+            [:div {:style {:font-size "11px" :padding "2px 5px" :cursor "pointer"
+                          :background (if (= timestamp @current-valid-time) "#e3f2fd" "white")
+                          :border-bottom "1px solid #f0f0f0"}
+                   :on-click #(time-travel-to! timestamp)}
+             timestamp]))]])])}))  ;; Close reagent/create-class
+
+(defn time-travel-controls-old []
   (let [history-info (r/subscribe [:history-info])
         preview-state (reagent/atom nil)]
     ;(fn []
@@ -471,14 +597,8 @@
                             (setup-subscription!))
               :style {:margin "2px"}} "Test"]
     [:div {:style {:margin-top "5px" :font-size "12px"}}
-     "Current: " @session-id]
-    [:button {:on-click #(do 
-                          (js/console.log "Forcing reload for session:" @session-id)
-                          ;; Just resubscribe which should get initial data
-                          (setup-subscription!))
-              :style {:margin "2px" :background "#4CAF50" :color "white"}}
-     "Force Reload"]]
-   [time-travel-controls]
+     "Current: " @session-id]]
+   [simple-time-travel-controls]
    [:section.todoapp
     [todo-input]
     [todo-list]
@@ -517,12 +637,9 @@
   ;; Get initial history info and sessions
   (r/get-history-info!)
   (r/get-sessions!)
+  ;; Set up the initial subscription
   (setup-subscription!)
-  ;; Give subscription time to establish, then re-trigger
-  (js/setTimeout #(do
-                   (js/console.log "Re-triggering subscription after delay...")
-                   (setup-subscription!))
-                1000)
+  ;; Render the UI
   (rdom/render [:div
                 [todo-app]
                 [debug-panel]]
