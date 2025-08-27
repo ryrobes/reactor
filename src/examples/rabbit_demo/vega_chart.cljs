@@ -4,6 +4,7 @@
             [clojure.string :as str]
             [clojure.edn :as edn]
             [clojure.pprint :as pprint]
+            [examples.rabbit-demo.themes :as themes]
             [examples.rabbit-demo.monaco :as monaco]))
 
 (def base-font "Ubuntu")
@@ -118,13 +119,16 @@
   "Simple dropdown for selecting a field from the data"
   [{:keys [value on-change data label allow-none?]}]
   (let [fields (when (seq data)
-                 (keys (first data)))]
+                 (keys (first data)))
+        fonts (if (themes/get-font-family :monospace)
+                (str (themes/get-font-family :monospace) ", 'JetBrains Mono', 'Courier New', monospace")
+                "'JetBrains Mono', 'Courier New', monospace")]
     [:div {:style {:display "flex"
                    :align-items "center"
                    :gap "10px"
                    :margin "5px 0"}}
      [:label {:style {:color "#ff006e"
-                      :font-family "'JetBrains Mono', monospace"
+                      :font-family fonts ;"'JetBrains Mono', monospace"
                       :font-size "10px"
                       :text-transform "uppercase"
                       :min-width "80px"}}
@@ -135,7 +139,7 @@
                        :border "1px solid rgba(255,0,110,0.3)"
                        :border-radius "2px"
                        :padding "4px 8px"
-                       :font-family "'JetBrains Mono', monospace"
+                       :font-family fonts ; "'JetBrains Mono', monospace"
                        :font-size "11px"
                        :cursor "pointer"}
                :value (or value "")
@@ -148,33 +152,36 @@
 (defn chart-type-selector
   "Dropdown for selecting chart type"
   [{:keys [value on-change]}]
-  [:div {:style {:display "flex"
-                 :align-items "center"
-                 :gap "10px"
-                 :margin "5px 0"}}
-   [:label {:style {:color "#ff006e"
-                    :font-family "'JetBrains Mono', monospace"
-                    :font-size "10px"
-                    :text-transform "uppercase"
-                    :min-width "80px"}}
-    "Chart Type:"]
-   [:select {:style {:flex 1
-                     :background "rgba(0,0,0,0.3)"
-                     :color "#ff4f99"
-                     :border "1px solid rgba(255,0,110,0.3)"
-                     :border-radius "2px"
-                     :padding "4px 8px"
-                     :font-family "'JetBrains Mono', monospace"
-                     :font-size "11px"
-                     :cursor "pointer"}
-             :value value
-             :on-change #(on-change (-> % .-target .-value))}
-    [:option {:value "bar"} "Bar Chart"]
-    [:option {:value "line"} "Line Chart"]
-    [:option {:value "point"} "Scatter Plot"]
-    [:option {:value "area"} "Area Chart"]
-    [:option {:value "rect"} "Heatmap"]
-    [:option {:value "circle"} "Bubble Chart"]]])
+  (let [fonts (if (themes/get-font-family :monospace)
+                (str (themes/get-font-family :monospace) ", 'JetBrains Mono', 'Courier New', monospace")
+                "'JetBrains Mono', 'Courier New', monospace")]
+    [:div {:style {:display "flex"
+                   :align-items "center"
+                   :gap "10px"
+                   :margin "5px 0"}}
+     [:label {:style {:color "#ff006e"
+                      :font-family fonts ;"'JetBrains Mono', monospace"
+                      :font-size "10px"
+                      :text-transform "uppercase"
+                      :min-width "80px"}}
+      "Chart Type:"]
+     [:select {:style {:flex 1
+                       :background "rgba(0,0,0,0.3)"
+                       :color "#ff4f99"
+                       :border "1px solid rgba(255,0,110,0.3)"
+                       :border-radius "2px"
+                       :padding "4px 8px"
+                       :font-family fonts ;"'JetBrains Mono', monospace"
+                       :font-size "11px"
+                       :cursor "pointer"}
+               :value value
+               :on-change #(on-change (-> % .-target .-value))}
+      [:option {:value "bar"} "Bar Chart"]
+      [:option {:value "line"} "Line Chart"]
+      [:option {:value "point"} "Scatter Plot"]
+      [:option {:value "area"} "Area Chart"]
+      [:option {:value "rect"} "Heatmap"]
+      [:option {:value "circle"} "Bubble Chart"]]]))
 
 
 (declare render-vega-chart!)
@@ -197,6 +204,9 @@
                                        (:type (:mark @current-config))
                                        (:mark @current-config))
                                      "bar"))
+        fonts (if (themes/get-font-family :monospace)
+                (str (themes/get-font-family :monospace) ", 'JetBrains Mono', 'Courier New', monospace")
+                "'JetBrains Mono', 'Courier New', monospace")
         ;; Track if we've initialized
         initialized? (reagent/atom false)
         ;; Unique element ID for this chart - ensure it's a valid CSS selector
@@ -350,7 +360,7 @@
                             :border "1px solid #ff006e"
                             :border-radius "2px"
                             :cursor "pointer"
-                            :font-family "'JetBrains Mono', monospace"
+                            :font-family fonts ;"'JetBrains Mono', monospace"
                             :font-size "12px"
                             :line-height "1"
                             :display "flex"
@@ -376,7 +386,7 @@
                             :border "1px solid #ff006e"
                             :border-radius "2px 0 0 2px"
                             :cursor "pointer"
-                            :font-family "'JetBrains Mono', monospace"
+                            :font-family fonts ;"'JetBrains Mono', monospace"
                             :font-size "10px"
                             :font-weight "bold"}
                      :on-click (fn []
@@ -403,7 +413,7 @@
                             :border "1px solid #ff006e"
                             :border-radius "0 2px 2px 0"
                             :cursor "pointer"
-                            :font-family "'JetBrains Mono', monospace"
+                            :font-family fonts ;"'JetBrains Mono', monospace"
                             :font-size "10px"
                             :font-weight "bold"}
                      :on-click (fn []
@@ -415,7 +425,7 @@
             "EDIT"]]
           (when (seq data)
             [:span {:style {:color "#ff4f99"
-                           :font-family "'JetBrains Mono', monospace"
+                           :font-family fonts ;"'JetBrains Mono', monospace"
                            :font-size "10px"
                            :opacity 0.7}}
              (str (count data) " rows")])]
@@ -456,7 +466,7 @@
                                 :border-radius "2px"
                                 :cursor "pointer"
                                 :font-weight "bold"
-                                :font-family "'JetBrains Mono', monospace"
+                                :font-family fonts ;"'JetBrains Mono', monospace"
                                 :font-size "11px"
                                 :text-transform "uppercase"}
                          :on-click (fn []

@@ -6,7 +6,8 @@
             [clojure.string :as str]
             [clojure.pprint :as pprint]
             [goog.string :as gstr]
-            [goog.string.format]))
+            [goog.string.format]
+            [examples.rabbit-demo.themes :as themes]))
 
 (defn format-timestamp [date]
   (let [hours (.getHours date)
@@ -41,7 +42,7 @@
                      :align-items "center"
                      :gap "10px"}}
        [:span {:style {:color "#00ffd4"
-                       :font-family "'JetBrains Mono', monospace"
+                       :font-family (themes/get-font-family :monospace)
                        :font-size "10px"
                        :opacity 0.7}}
         (format-timestamp timestamp)]
@@ -56,20 +57,20 @@
                                (= platform "JS") "#ffff00"
                                :else "#00ff9f")
                        :border-radius "2px"
-                       :font-family "'JetBrains Mono', monospace"
+                       :font-family (themes/get-font-family :monospace)
                        :font-size "9px"
                        :font-weight "bold"}}
         platform]
        ;; Caller name
        (when (and caller (not= caller "anonymous"))
          [:span {:style {:color "#ff4f99"
-                        :font-family "'JetBrains Mono', monospace"
+                        :font-family (themes/get-font-family :monospace)
                         :font-size "10px"
                         :opacity 0.8}}
           caller])]
       ;; Value preview - show as much as block width allows
       [:span {:style {:color "#00ff9f"
-                      :font-family "'JetBrains Mono', monospace"
+                      :font-family (themes/get-font-family :monospace)
                       :font-size "10px"
                       :flex 1
                       :overflow "hidden"
@@ -128,7 +129,7 @@
                         :background "rgba(0,0,0,0.3)"
                         :border-radius "4px"
                         :color "#8ff0a4"
-                        :font-family "'JetBrains Mono', monospace"
+                        :font-family (themes/get-font-family :monospace)
                         :font-size "11px"
                         :overflow-x "auto"
                         :white-space "pre-wrap"
@@ -173,13 +174,13 @@
                           :align-items "center"
                           :margin-bottom "10px"}}
              [:span {:style {:color "#00ffd4"
-                            :font-family "'JetBrains Mono', monospace"
+                            :font-family (themes/get-font-family :monospace)
                             :font-size "12px"
                             :text-transform "uppercase"
                             :letter-spacing "1px"}}
               "TAP ENTRIES"]
              [:span {:style {:color "#00ff9f"
-                            :font-family "'JetBrains Mono', monospace"
+                            :font-family (themes/get-font-family :monospace)
                             :font-size "10px"
                             :opacity 0.7}}
               (str (count entries) " entries")]]
@@ -194,7 +195,7 @@
                               :border "1px solid rgba(0,255,212,0.3)"
                               :border-radius "2px"
                               :cursor "pointer"
-                              :font-family "'JetBrains Mono', monospace"
+                              :font-family (themes/get-font-family :monospace)
                               :font-size "10px"}
                        :on-click #(tap/clear-tap-entries!)}
               "CLEAR"]
@@ -206,7 +207,7 @@
                               :border "1px solid rgba(0,255,159,0.3)"
                               :border-radius "2px"
                               :cursor "pointer"
-                              :font-family "'JetBrains Mono', monospace"
+                              :font-family (themes/get-font-family :monospace)
                               :font-size "10px"}
                        :on-click #(swap! auto-scroll? not)}
               (if @auto-scroll? "AUTO-SCROLL ON" "AUTO-SCROLL OFF")]
@@ -222,7 +223,7 @@
                                :border "1px solid rgba(255,183,0,0.5)"
                                :border-radius "2px"
                                :cursor "pointer"
-                               :font-family "'JetBrains Mono', monospace"
+                               :font-family (themes/get-font-family :monospace)
                                :font-size "9px"
                                :font-weight "bold"}
                         :title "Toggle CLJ entries"
@@ -236,7 +237,7 @@
                                :border "1px solid rgba(0,255,159,0.5)"
                                :border-radius "2px"
                                :cursor "pointer"
-                               :font-family "'JetBrains Mono', monospace"
+                               :font-family (themes/get-font-family :monospace)
                                :font-size "9px"
                                :font-weight "bold"}
                         :title "Toggle CLJS entries"
@@ -250,7 +251,7 @@
                                :border "1px solid rgba(255,255,0,0.5)"
                                :border-radius "2px"
                                :cursor "pointer"
-                               :font-family "'JetBrains Mono', monospace"
+                               :font-family (themes/get-font-family :monospace)
                                :font-size "9px"
                                :font-weight "bold"}
                         :title "Toggle JS entries (console)"
@@ -267,7 +268,7 @@
                            :color "#00ffd4"
                            :border "1px solid rgba(0,255,212,0.2)"
                            :border-radius "2px"
-                           :font-family "'JetBrains Mono', monospace"
+                           :font-family (themes/get-font-family :monospace)
                            :font-size "11px"
                            :outline "none"}}]]
            ;; Entries list
@@ -283,7 +284,7 @@
                             :text-align "center"
                             :color "#00ffd4"
                             :opacity 0.5
-                            :font-family "'JetBrains Mono', monospace"
+                            :font-family (themes/get-font-family :monospace)
                             :font-size "11px"}}
                "No tap entries yet. Use (tap> value) in your code."]
               (for [entry entries]

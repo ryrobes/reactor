@@ -1,12 +1,15 @@
 (ns examples.rabbit-demo.monaco
   "Monaco Editor wrapper for ClojureScript"
   (:require [reagent.core :as r]
+            [examples.rabbit-demo.themes :as themes]
             ["@monaco-editor/react" :default MonacoEditor :refer [loader]]))
 
 ;; Define custom theme for Rabbit Demo
 (def rabbit-theme
   #js {:base "vs-dark"
        :inherit true
+       ;; :font-family (themes/get-font-family :monospace)
+       ;; :font (themes/get-font-family :monospace)
        :rules #js [;; Keywords - bright pink
                    #js {:token "keyword" :foreground "FF006E"}
                    ;; Strings - cyan/aqua
@@ -50,70 +53,80 @@
                  (let [editor (.-editor ^js monaco)]
                    (when editor
                      (.defineTheme ^js editor "rabbit-theme" rabbit-theme)
-                     (js/console.log "Rabbit theme initialized"))))))))
+                     ;; (js/console.log "Rabbit theme initialized")
+                     )))))))
 
 (defn sql-editor [{:keys [value on-change height width theme read-only?]}]
-  [:> MonacoEditor
-   {:height (or height "100px")
-    :width (or width "100%")
-    :language "sql"
-    :theme (or theme "vs-dark")
-    :value value
-    :onChange (when on-change
-                (fn [new-value]
-                  (on-change new-value)))
-    :options {:minimap {:enabled false}
-              :fontSize 16
-              :fontFamily "'JetBrains Mono', 'Courier New', monospace"
-              :lineNumbers "on"
-              :glyphMargin false
-              :folding false
-              :lineDecorationsWidth 10  ; Add padding between line numbers and content
-              :lineNumbersMinChars 3
-              :renderLineHighlight "none"
-              :scrollBeyondLastLine false
-              :readOnly (boolean read-only?)
-              :automaticLayout true
-              :wordWrap "on"
-              :padding {:top 5 :bottom 5 :left 5}}}])  ; Also add left padding
+  (let [font-family (themes/get-font-family :monospace)
+        theme-key (str "monaco-" (hash @themes/current-theme))]
+    ^{:key theme-key} ; Force re-mount when theme changes
+    [:> MonacoEditor
+     {:height (or height "100px")
+      :width (or width "100%")
+      :language "sql"
+      :theme (or theme "rabbit-dynamic-theme")
+      :value value
+      :onChange (when on-change
+                  (fn [new-value]
+                    (on-change new-value)))
+      :options {:minimap {:enabled false}
+                :fontSize 16
+                :fontFamily font-family
+                :lineNumbers "on"
+                :glyphMargin false
+                :folding false
+                :lineDecorationsWidth 10  ; Add padding between line numbers and content
+                :lineNumbersMinChars 3
+                :renderLineHighlight "none"
+                :scrollBeyondLastLine false
+                :readOnly (boolean read-only?)
+                :automaticLayout true
+                :wordWrap "on"
+                :padding {:top 5 :bottom 5 :left 5}}}]))  ; Also add left padding
 
 (defn text-editor [{:keys [value on-change height width theme read-only? language]}]
-  [:> MonacoEditor
-   {:height (or height "100px")
-    :width (or width "100%")
-    :language (or language "plaintext")
-    :theme (or theme "vs-dark")
-    :value value
-    :onChange (when on-change
-                (fn [new-value]
-                  (on-change new-value)))
-    :options {:minimap {:enabled false}
-              :fontSize 12
-              :fontFamily "'JetBrains Mono', 'Courier New', monospace"
-              :lineNumbers "off"
-              :glyphMargin false
-              :folding false
-              :lineDecorationsWidth 0
-              :renderLineHighlight "none"
-              :scrollBeyondLastLine false
-              :readOnly (boolean read-only?)
-              :automaticLayout true
-              :wordWrap "on"
-              :padding {:top 5 :bottom 5}}}])
+  (let [font-family (themes/get-font-family :monospace)
+        theme-key (str "monaco-text-" (hash @themes/current-theme))]
+    ^{:key theme-key}
+    [:> MonacoEditor
+     {:height (or height "100px")
+      :width (or width "100%")
+      :language (or language "plaintext")
+      :theme (or theme "rabbit-dynamic-theme")
+      :value value
+      :onChange (when on-change
+                  (fn [new-value]
+                    (on-change new-value)))
+      :options {:minimap {:enabled false}
+                :fontSize 12
+                :fontFamily font-family
+                :lineNumbers "off"
+                :glyphMargin false
+                :folding false
+                :lineDecorationsWidth 0
+                :renderLineHighlight "none"
+                :scrollBeyondLastLine false
+                :readOnly (boolean read-only?)
+                :automaticLayout true
+                :wordWrap "on"
+                :padding {:top 5 :bottom 5}}}]))
 
 (defn edn-editor [{:keys [value on-change height width theme read-only?]}]
-  [:> MonacoEditor
-   {:height (or height "100px")
-    :width (or width "100%")
-    :language "clojure"  ; Use Clojure syntax highlighting for EDN
-    :theme (or theme "rabbit-theme")  ; Use our custom theme by default
-    :value value
-    :onChange (when on-change
-                (fn [new-value]
-                  (on-change new-value)))
-    :options {:minimap {:enabled false}
-              :fontSize 11
-              :fontFamily "'JetBrains Mono', 'Courier New', monospace"
+  (let [font-family (themes/get-font-family :monospace)
+        theme-key (str "monaco-edn-" (hash @themes/current-theme))]
+    ^{:key theme-key}
+    [:> MonacoEditor
+     {:height (or height "100px")
+      :width (or width "100%")
+      :language "clojure"  ; Use Clojure syntax highlighting for EDN
+      :theme (or theme "rabbit-dynamic-theme")  ; Use our dynamic theme by default
+      :value value
+      :onChange (when on-change
+                  (fn [new-value]
+                    (on-change new-value)))
+      :options {:minimap {:enabled false}
+                :fontSize 11
+                :fontFamily font-family
               :lineNumbers "on"
               :glyphMargin false
               :folding true
@@ -128,4 +141,4 @@
               :scrollbar {:vertical "auto"
                          :horizontal "auto"
                          :verticalScrollbarSize 10
-                         :horizontalScrollbarSize 10}}}])
+                         :horizontalScrollbarSize 10}}}]))

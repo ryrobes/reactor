@@ -5,7 +5,8 @@
             [reagent.ratom :as ratom]
             [clojure.string :as str]
             [examples.rabbit-demo.template-resolver :as resolver]
-            [examples.rabbit-demo.reactive-queries :as rq]))
+            [examples.rabbit-demo.reactive-queries :as rq]
+            [examples.rabbit-demo.themes :as themes]))
 
 (defn iframe-block 
   "Iframe content component - just the inner content, wrapper is handled by client.cljs"
@@ -163,7 +164,7 @@
                     :color "#8a2be2"
                     :padding "4px 8px"
                     :border-radius "4px"
-                    :font-family "'JetBrains Mono', monospace"
+                    :font-family (themes/get-font-family :monospace)
                     :font-size "12px"}
             :on-change #(reset! temp-url (.. % -target -value))
             :on-key-down (fn [e]
@@ -189,7 +190,7 @@
            ;; Template URL display
            [:div
             {:style {:color (if @has-templates? "#00ff9f" "#8a2be2")
-                     :font-family "'JetBrains Mono', monospace"
+                     :font-family (themes/get-font-family :monospace)
                      :font-size "11px"
                      :padding "4px 8px"
                      :background (if @has-templates? 
@@ -208,7 +209,7 @@
            (when @has-templates?
              [:div
               {:style {:color "#666"
-                       :font-family "'JetBrains Mono', monospace"
+                       :font-family (themes/get-font-family :monospace)
                        :font-size "10px"
                        :padding "2px 8px"
                        :white-space "nowrap"
@@ -248,7 +249,7 @@
          ;; Zoom percentage display
          [:span
           {:style {:color "#8a2be2"
-                   :font-family "'JetBrains Mono', monospace"
+                   :font-family (themes/get-font-family :monospace)
                    :font-size "11px"
                    :min-width "45px"
                    :text-align "center"}}
@@ -282,7 +283,7 @@
                    :padding "2px 6px"
                    :border-radius "4px"
                    :cursor "pointer"
-                   :font-family "'JetBrains Mono', monospace"
+                   :font-family (themes/get-font-family :monospace)
                    :font-size "10px"
                    :margin-left "4px"}
            :on-click (fn []

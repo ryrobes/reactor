@@ -1,6 +1,7 @@
 (ns examples.rabbit-demo.edn-tree
   "Tree view component for EDN data visualization"
   (:require [reagent.core :as reagent]
+            [examples.rabbit-demo.themes :as themes]
             [clojure.string :as str]))
 
 ;; ============= Tree Node Component =============
@@ -62,6 +63,9 @@
                    (set? value) (map-indexed (fn [idx item] [(str "#{" idx "}") item]) value)
                    (list? value) (map-indexed (fn [idx item] [(str "(" idx ")") item]) value)
                    :else [])
+        fonts (if (themes/get-font-family :monospace)
+                (str (themes/get-font-family :monospace) ", 'JetBrains Mono', 'Courier New', monospace")
+                "'JetBrains Mono', 'Courier New', monospace")
         type-label (get-type-label value)
         is-selected? (= path selected-path)
         matches-search? (and search-term
@@ -100,7 +104,7 @@
                         :padding "1px 3px"
                         :border-radius "2px"
                         :margin-right "6px"
-                        :font-family "'JetBrains Mono', monospace"
+                        :font-family fonts ;"'JetBrains Mono', monospace"
                         :font-size "11px"}}
          (str label)])
       ;; Type label
@@ -109,7 +113,7 @@
                       :padding "1px 4px"
                       :border-radius "2px"
                       :opacity 0.9
-                      :font-family "'JetBrains Mono', monospace"
+                      :font-family fonts ;"'JetBrains Mono', monospace"
                       :font-size "10px"}}
        type-label]
       ;; Item count
@@ -117,7 +121,8 @@
         [:span {:style {:margin-left "6px"
                         :color "rgba(255,255,255,0.3)"
                         :font-size "9px"
-                        :font-family "'JetBrains Mono', monospace"}}
+                        :font-family fonts ;"'JetBrains Mono', monospace"
+                        }}
          (str (count children) " items")])]
      ;; Children (when expanded)
      (when expanded?
@@ -139,25 +144,28 @@
   [{:keys [path label value on-select selected-path search-term]}]
   (let [is-selected? (= path selected-path)
         formatted (format-value value)
+        fonts (if (themes/get-font-family :monospace)
+                (str (themes/get-font-family :monospace) ", 'JetBrains Mono', 'Courier New', monospace")
+                "'JetBrains Mono', 'Courier New', monospace")
         matches-search? (and search-term
                              (or (and label (str/includes? (str/lower-case (str label))
-                                                          (str/lower-case search-term)))
+                                                           (str/lower-case search-term)))
                                  (str/includes? (str/lower-case formatted)
-                                              (str/lower-case search-term))))]
+                                                (str/lower-case search-term))))]
     [:div {:style {:margin-left (if (empty? path) "0" "20px")
                    :display "flex"
                    :align-items "center"
                    :padding "2px 4px"
                    :cursor "pointer"
                    :background (cond
-                               is-selected? "rgba(0,255,212,0.2)"
-                               matches-search? "rgba(255,183,0,0.1)"
-                               :else "transparent")
+                                 is-selected? "rgba(0,255,212,0.2)"
+                                 matches-search? "rgba(255,183,0,0.1)"
+                                 :else "transparent")
                    :border-radius "2px"
                    :margin "1px 0"}
            :on-click (fn [e]
-                      (.stopPropagation e)
-                      (when on-select (on-select path value)))}
+                       (.stopPropagation e)
+                       (when on-select (on-select path value)))}
      ;; Spacer for alignment with collection nodes
      [:span {:style {:display "inline-block"
                      :width "16px"}}]
@@ -168,7 +176,7 @@
                        :padding "1px 3px"
                        :border-radius "2px"
                        :margin-right "6px"
-                       :font-family "'JetBrains Mono', monospace"
+                       :font-family fonts ;"'JetBrains Mono', monospace"
                        :font-size "11px"}}
         (str label)])
      ;; Value
@@ -176,7 +184,7 @@
                      :background (get-type-bg-color value)
                      :padding "1px 4px"
                      :border-radius "2px"
-                     :font-family "'JetBrains Mono', monospace"
+                     :font-family fonts ;"'JetBrains Mono', monospace"
                      :font-size "11px"
                      :max-width "300px"
                      :overflow "hidden"
@@ -218,7 +226,9 @@
       (expand-fn data [] 0)))
   
   [:div {:class "edn-tree-container"
-         :style {:font-family "'JetBrains Mono', monospace"
+         :style {:font-family (if (themes/get-font-family :monospace)
+                                (str (themes/get-font-family :monospace) ", 'JetBrains Mono', 'Courier New', monospace")
+                                "'JetBrains Mono', 'Courier New', monospace")
                  :font-size "12px"
                  :color "#fff"
                  :padding "10px"
@@ -247,42 +257,47 @@
 (defn tree-controls
   "Controls for the tree view (expand all, collapse all, search)"
   [{:keys [on-expand-all on-collapse-all on-search]}]
-  [:div {:style {:display "flex"
-                 :gap "10px"
-                 :padding "5px"
-                 :border-bottom "1px solid rgba(0,255,212,0.2)"
-                 :align-items "center"}}
-   [:button {:style {:padding "2px 6px"
-                     :background "rgba(0,255,212,0.1)"
-                     :color "#00ffd4"
-                     :border "1px solid rgba(0,255,212,0.3)"
-                     :border-radius "2px"
-                     :cursor "pointer"
-                     :font-size "9px"
-                     :font-family "'JetBrains Mono', monospace"}
-             :on-click on-expand-all}
-    "EXPAND ALL"]
-   [:button {:style {:padding "2px 6px"
-                     :background "rgba(0,255,212,0.1)"
-                     :color "#00ffd4"
-                     :border "1px solid rgba(0,255,212,0.3)"
-                     :border-radius "2px"
-                     :cursor "pointer"
-                     :font-size "9px"
-                     :font-family "'JetBrains Mono', monospace"}
-             :on-click on-collapse-all}
-    "COLLAPSE"]
-   [:input {:type "text"
-            :placeholder "Search..."
-            :style {:flex 1
-                    :background "rgba(0,255,212,0.05)"
-                    :color "#00ffd4"
-                    :border "1px solid rgba(0,255,212,0.2)"
-                    :border-radius "2px"
-                    :padding "2px 5px"
-                    :font-family "'JetBrains Mono', monospace"
-                    :font-size "10px"
-                    :outline "none"}
-            :on-change (fn [e]
-                        (when on-search
-                          (on-search (.. e -target -value))))}]])
+  (let [fonts (if (themes/get-font-family :monospace)
+          (str (themes/get-font-family :monospace) ", 'JetBrains Mono', 'Courier New', monospace")
+          "'JetBrains Mono', 'Courier New', monospace")]
+    [:div {:style {:display "flex"
+                   :gap "10px"
+                   :padding "5px"
+                   :border-bottom "1px solid rgba(0,255,212,0.2)"
+                   :align-items "center"}}
+     [:button {:style {:padding "2px 6px"
+                       :background "rgba(0,255,212,0.1)"
+                       :color "#00ffd4"
+                       :border "1px solid rgba(0,255,212,0.3)"
+                       :border-radius "2px"
+                       :cursor "pointer"
+                       :font-size "9px"
+                       :font-family fonts ;"'JetBrains Mono', monospace"
+                       }
+               :on-click on-expand-all}
+      "EXPAND ALL"]
+     [:button {:style {:padding "2px 6px"
+                       :background "rgba(0,255,212,0.1)"
+                       :color "#00ffd4"
+                       :border "1px solid rgba(0,255,212,0.3)"
+                       :border-radius "2px"
+                       :cursor "pointer"
+                       :font-size "9px"
+                       :font-family fonts ;"'JetBrains Mono', monospace"
+                       }
+               :on-click on-collapse-all}
+      "COLLAPSE"]
+     [:input {:type "text"
+              :placeholder "Search..."
+              :style {:flex 1
+                      :background "rgba(0,255,212,0.05)"
+                      :color "#00ffd4"
+                      :border "1px solid rgba(0,255,212,0.2)"
+                      :border-radius "2px"
+                      :padding "2px 5px"
+                      :font-family fonts ;"'JetBrains Mono', monospace"
+                      :font-size "10px"
+                      :outline "none"}
+              :on-change (fn [e]
+                           (when on-search
+                             (on-search (.. e -target -value))))}]]))

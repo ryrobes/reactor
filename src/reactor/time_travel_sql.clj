@@ -22,9 +22,9 @@
            results (xts/execute-sql node query)
            timestamps (map :_valid_from (:results results []))]
        ;; Log for debugging
-       (when (seq timestamps)
-         (log/info "[TIME-TRAVEL] Found" (count timestamps) "timestamps for" table-name 
-                  (when where-clause (str " with filter: " where-clause))))
+      ;;  (when (seq timestamps)
+      ;;    (log/info "[TIME-TRAVEL] Found" (count timestamps) "timestamps for" table-name 
+      ;;             (when where-clause (str " with filter: " where-clause))))
        ;; Return in reverse order (oldest to newest) for consistent timeline display
        (reverse timestamps))
      (catch Exception e

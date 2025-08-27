@@ -5,6 +5,7 @@
             [reactor.tap :as t]
             [reactor.console-tap :as console-tap]
             [reagent.dom :as rdom]
+            [reagent.dom.client :as rdom-client]
             [clojure.string :as str]
             [clojure.pprint :as pprint]
             [cljs.reader :as reader]
@@ -17,7 +18,8 @@
             [examples.rabbit-demo.sql-tap-block :as sql-tap-block]
             [examples.rabbit-demo.rule-flow-block :as rule-flow-block]
             [examples.rabbit-demo.iframe-block :as iframe-block]
-            [examples.rabbit-demo.template-resolver :as resolver]))
+            [examples.rabbit-demo.template-resolver :as resolver]
+            [examples.rabbit-demo.themes :as themes]))
 
 ;; ============= Subscriptions =============
 
@@ -196,23 +198,25 @@
                           (get @local-sizes id size)
                           size)]
     [:div.block.query-block
-     {:style {:position "absolute"
-              :left (:x actual-pos)
-              :top (:y actual-pos)
-              :width (:width actual-size)
-              :height (:height actual-size)
-              :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
-              :border (if (and @connection-mode (= (:source-id @connection-mode) id))
-                       "2px solid #ff006e"
-                       "1px solid #00ff9f")
-              :border-radius "4px"
-              :padding "10px"
-              :z-index 10
-              :box-shadow (if @connection-mode
-                           "0 0 30px rgba(255,0,110,0.5), inset 0 0 20px rgba(255,0,110,0.1)"
-                           "0 0 20px rgba(0,255,159,0.3), inset 0 0 20px rgba(0,255,159,0.05)")
-              :display "flex"
-              :flex-direction "column"}
+     {:style (themes/apply-block-style
+              {:position "absolute"
+               :left (:x actual-pos)
+               :top (:y actual-pos)
+               :width (:width actual-size)
+               :height (:height actual-size)
+               :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
+               :border (if (and @connection-mode (= (:source-id @connection-mode) id))
+                        "2px solid #ff006e"
+                        (str "1px solid " (themes/get-primary-color)))
+               :border-radius "4px"
+               :padding "10px"
+               :z-index 10
+               :box-shadow (if @connection-mode
+                            "0 0 30px rgba(255,0,110,0.5), inset 0 0 20px rgba(255,0,110,0.1)"
+                            (str "0 0 20px " (themes/get-primary-color) "4C, inset 0 0 20px " (themes/get-primary-color) "0D"))
+               :display "flex"
+               :flex-direction "column"}
+              :sql-block)
       :draggable false}
      ;; Resize handle
      [:div.resize-handle
@@ -222,7 +226,7 @@
                :width "15px"
                :height "15px"
                :cursor "nwse-resize"
-               :background "linear-gradient(135deg, transparent 50%, #00ff9f 50%)"
+               :background (str "linear-gradient(135deg, transparent 50%, " (themes/get-primary-color) " 50%)")
                :opacity 0.5}
        :on-mouse-down #(start-resize! id %)}]
      ;; Fixed header and controls container
@@ -233,7 +237,7 @@
                :justify-content "space-between"
                :margin-bottom "10px"
                :padding-bottom "5px"
-               :border-bottom "1px solid rgba(0,255,159,0.2)"
+               :border-bottom (str "1px solid " (themes/get-primary-color) "33")
                :cursor (if @connection-mode "pointer" "move")}
        :on-mouse-down (fn [e]
                         (when-not @connection-mode
@@ -246,13 +250,13 @@
                      (reset! connection-mode nil)))}
       [:div {:style {:display "flex" :align-items "center" :gap "10px"}}
        [:span {:style {:font-weight "bold" 
-                       :color "#00ff9f"
-                       :font-family "'JetBrains Mono', monospace"
+                       :color (themes/get-font-color :block-title)
+                       :font-family (themes/get-font-family :monospace)
                        :text-transform "uppercase"
                        :font-size "11px"
                        :letter-spacing "1px"}} "SQL QUERY"]
-       [:span {:style {:color "#8ff0a4"
-                       :font-family "'JetBrains Mono', monospace"
+       [:span {:style {:color (themes/get-font-color :block-title-secondary)
+                       :font-family (themes/get-font-family :monospace)
                        :font-size "9px"
                        :opacity 0.7}} 
         (str "#" id)]]
@@ -262,7 +266,7 @@
                            (r/dispatch! [:delete-block id]))
                 :style {:background "none"
                         :border "none"
-                        :color "#00ff9f"
+                        :color (themes/get-primary-color)
                         :cursor "pointer"
                         :font-size "20px"
                         :line-height "20px"}}
@@ -275,16 +279,16 @@
       [:div {:style {:flex 1}}
        ;; Always render the container to prevent layout shift
        [:div {:style {:background (if (and executed-sql (not= executed-sql sql))
-                                    "rgba(0,255,159,0.1)"
+                                    (str (themes/get-primary-color) "1A")
                                     "transparent")
                       :border (if (and executed-sql (not= executed-sql sql))
-                               "1px solid rgba(0,255,159,0.3)"
+                               (str "1px solid " (themes/get-primary-color) "4C")
                                "1px solid transparent")
                       :border-radius "4px 4px 0 0"
                       :padding "4px 8px"
                       :font-size "10px"
-                      :font-family "'JetBrains Mono', monospace"
-                      :color "#00ff9f"
+                      :font-family (themes/get-font-family :monospace)
+                      :color (themes/get-primary-color)
                       :display "flex"
                       :align-items "center"
                       :gap "5px"
@@ -293,9 +297,9 @@
                       :min-height "24px"  ;; Ensure consistent height
                       :visibility (if (and executed-sql (not= executed-sql sql)) "visible" "hidden")}
               :on-mouse-over (when (and executed-sql (not= executed-sql sql))
-                              #(set! (.. % -target -style -background) "rgba(0,255,159,0.2)"))
+                              #(set! (.. % -target -style -background) (str (themes/get-primary-color) "33")))
               :on-mouse-out (when (and executed-sql (not= executed-sql sql))
-                             #(set! (.. % -target -style -background) "rgba(0,255,159,0.1)"))
+                             #(set! (.. % -target -style -background) (str (themes/get-primary-color) "1A")))
               :on-click (when (and executed-sql (not= executed-sql sql))
                          (fn [e]
                            (.stopPropagation e)
@@ -307,14 +311,14 @@
         [:span "⏰"]
         [:span "TIME TRAVEL MODE - Click to return to NOW"]]
        [:div {:style {:border (if (and executed-sql (not= executed-sql sql))
-                               "1px solid rgba(0,255,159,0.5)"
-                               "1px solid rgba(0,255,159,0.3)")
+                               (str "1px solid " (themes/get-primary-color) "80")
+                               (str "1px solid " (themes/get-primary-color) "4C"))
                       :border-radius (if (and executed-sql (not= executed-sql sql))
                                        "0 0 4px 4px"
                                        "4px")
                       :overflow "hidden"
                       :background (when (and executed-sql (not= executed-sql sql))
-                                    "rgba(0,255,159,0.05)")}}
+                                    (str (themes/get-primary-color) "0D"))}}
         [monaco/sql-editor 
          {:value (or executed-sql @local-sql "SELECT * FROM sales")
           :on-change #(reset! local-sql %)  ;; Only update local state while typing
@@ -330,7 +334,7 @@
                      :justify-content "flex-end"}}
        [:button
         {:style {:padding "8px 12px"
-                 :background "linear-gradient(90deg, #00ff9f 0%, #00cc7f 100%)"
+                 :background (str "linear-gradient(90deg, " (themes/get-primary-color) " 0%, " (themes/get-secondary-color) " 100%)")
                  :color "#0a0a0a"
                  :border "none"
                  :border-radius "4px"
@@ -356,7 +360,7 @@
      ;; Time scrubber for this query
      [:div {:style {:margin "10px 0"
                     :padding "10px"
-                    :background "rgba(0,0,0,0.3)"
+                    :background "rgba(0,0,0,0.01)"
                     :border-radius "4px"}}
       ;; Time travel controls
       [tt/time-travel-controls {:block-id id :sql sql}]]
@@ -367,7 +371,7 @@
                      :border "1px solid rgba(255,0,0,0.3)"
                      :border-radius "4px"
                      :color "#ff6b6b"
-                     :font-family "'JetBrains Mono', monospace"
+                     :font-family (themes/get-font-family :monospace)
                      :font-size "11px"}}
         error])]  ;; Close fixed-content div
      (when results
@@ -387,7 +391,7 @@
                               (str n)))
              ;; Calculate font size based on block dimensions
              ;; Aim for about 1/3 of height, max 120px
-             font-size (min 120 (int (/ (:height actual-size) 3)))]
+             font-size (min 100 (int (/ (:height actual-size) 4)))]
          (if is-single-value?
            ;; Render as large callout text
            [:div.single-value-result
@@ -396,18 +400,20 @@
                      :align-items "center"
                      :justify-content "center"
                      :margin-top "10px"
-                     :background "rgba(0,0,0,0.3)"
-                     :border "1px solid rgba(0,255,159,0.2)"
+                     :background "rgba(0,0,0,0.01)"
+                     :border (str "1px solid " (themes/get-primary-color) "33")
                      :padding "20px"
                      :overflow "hidden"}}
-            [:div {:style {:color "#00ff9f"
-                          :font-family "'JetBrains Mono', 'Courier New', monospace"
-                          :font-weight "bold"
-                          :font-size (str font-size "px")
-                          :text-align "center"
-                          :word-break "break-word"
-                          :line-height "1.1"
-                          :max-width "100%"}}
+            [:div {:style {:color (themes/get-primary-color)
+                           :font-family (if (themes/get-font-family :monospace)
+                                          (str (themes/get-font-family :monospace) ", 'JetBrains Mono', 'Courier New', monospace")
+                                          "'JetBrains Mono', 'Courier New', monospace")
+                           :font-weight "bold"
+                           :font-size (str font-size "px")
+                           :text-align "center"
+                           :word-break "break-word"
+                           :line-height "1.1"
+                           :max-width "100%"}}
              (if (number? single-value)
                (format-number single-value)
                (str single-value))]]
@@ -417,8 +423,8 @@
                      :margin-top "10px"
                      :min-height 0  ;; Important for flex children to shrink properly
                      :overflow "auto"
-                     :background "rgba(0,0,0,0.3)"
-                     :border "1px solid rgba(0,255,159,0.2)"
+                     :background "rgba(0,0,0,0.03)"
+                     :border (str "1px solid " (themes/get-primary-color) "33")
                      :padding "5px"
                      :display "flex"
                      :flex-direction "column"}}
@@ -430,28 +436,31 @@
                              :background "rgba(26,26,46,0.95)"
                              :z-index 1}}
               [:tr
-               (for [col (keys (first results))]
-                 ^{:key col}
-                 [:th {:style {:text-align "left" 
-                              :padding "4px"
-                              :color "#00ff9f"
-                              :border-bottom "1px solid rgba(0,255,159,0.2)"
-                              :font-family "'JetBrains Mono', monospace"
-                              :text-transform "uppercase"
-                              :font-size "10px"}} (name col)])]]
+               (doall
+                (for [col (keys (first results))]
+                  ^{:key col}
+                  [:th {:style {:text-align "left"
+                                :padding "4px"
+                                :color (themes/get-primary-color)
+                                :border-bottom (str "1px solid " (themes/get-primary-color) "33")
+                                :font-family (themes/get-font-family :monospace)
+                                :text-transform "uppercase"
+                                :font-size "10px"}} (name col)]))]]
              [:tbody
-              (for [row results]
-                ^{:key (or (:ID row) (:id row) (:xt/id row) (str (hash row)))}
-                [:tr
-                 (for [col (keys (first results))]
-                   ^{:key col}
-                   [:td {:style {:padding "4px"
-                                :color "#8ff0a4"
-                                :font-family "'JetBrains Mono', monospace"
-                                :font-size "10px"
-                                :overflow "hidden"
-                                :text-overflow "ellipsis"
-                                :white-space "nowrap"}} (str (get row col))])])]]])))]))})))
+              (doall
+               (for [row results]
+                 ^{:key (or (:ID row) (:id row) (:xt/id row) (str (hash row)))}
+                 [:tr
+                  (doall
+                   (for [col (keys (first results))]
+                     ^{:key col}
+                     [:td {:style {:padding "4px"
+                                   :color (themes/get-secondary-color)
+                                   :font-family (themes/get-font-family :monospace)
+                                   :font-size "10px"
+                                   :overflow "hidden"
+                                   :text-overflow "ellipsis"
+                                   :white-space "nowrap"}} (str (get row col))]))]))]]])))]))})))
 
 (defn chart-block [{:keys [id position size source-id chart-config]}]
   (reagent/create-class
@@ -490,19 +499,17 @@
                                ;"chart-data:" (clj->js chart-data)
                                "chart-data count:" (count chart-data)))]
     [:div.block.chart-block
-     {:style {:position "absolute"
-              :left (:x actual-pos)
-              :top (:y actual-pos)
-              :width (:width actual-size)
-              :height (:height actual-size)
-              :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
-              :border "1px solid #ff006e"
-              :border-radius "4px"
-              :padding "10px"
-              :z-index 10
-              :box-shadow "0 0 20px rgba(255,0,110,0.3), inset 0 0 20px rgba(255,0,110,0.05)"
-              :display "flex"
-              :flex-direction "column"}
+     {:style (themes/apply-block-style
+              {:position "absolute"
+               :left (:x actual-pos)
+               :top (:y actual-pos)
+               :width (:width actual-size)
+               :height (:height actual-size)
+               :padding "10px"
+               :z-index 10
+               :display "flex"
+               :flex-direction "column"}
+              :chart-block)
       :draggable false}  ;; Remove the on-mouse-down from here
      ;; Resize handle
      [:div.resize-handle
@@ -524,8 +531,8 @@
                :cursor "move"}  ;; Add cursor: move to the header
        :on-mouse-down #(start-drag! id %)}
       [:span {:style {:font-weight "bold" 
-                      :color "#ff006e"
-                      :font-family "'JetBrains Mono', monospace"
+                      :color (themes/get-secondary-color)
+                      :font-family (themes/get-font-family :monospace)
                       :text-transform "uppercase"
                       :font-size "11px"
                       :letter-spacing "1px"}} "CHART"]
@@ -533,7 +540,7 @@
                               (r/dispatch! [:delete-block id]))
                 :style {:background "none"
                         :border "none"
-                        :color "#ff006e"
+                        :color (themes/get-secondary-color)
                         :cursor "pointer"
                         :font-size "20px"
                         :line-height "20px"}} "×"]]
@@ -541,17 +548,17 @@
      [:div {:style {:margin "10px 0"}}
       [:div {:style {:display "flex" :align-items "center" :gap "10px"}}
        [:label {:style {:color "#ff006e"
-                        :font-family "'JetBrains Mono', monospace"
+                        :font-family (themes/get-font-family :monospace)
                         :font-size "10px"
                         :text-transform "uppercase"}}
         "Source:"]
        (if source-id
          [:span {:style {:color "#ff4f99"
-                        :font-family "'JetBrains Mono', monospace"
+                        :font-family (themes/get-font-family :monospace)
                         :font-size "11px"}} 
           (str "#" source-id)]
          [:span {:style {:color "#ff4f99"
-                        :font-family "'JetBrains Mono', monospace"
+                        :font-family (themes/get-font-family :monospace)
                         :font-size "11px"
                         :opacity 0.5}} 
           "Not connected"])]
@@ -562,10 +569,10 @@
                                     "linear-gradient(90deg, #ff006e 0%, #ff4f99 100%)"
                                     "transparent")
                        :color (if @connection-mode "#0a0a0a" "#ff006e")
-                       :border "1px solid #ff006e"
+                       :border (str "1px solid " (themes/get-secondary-color))
                        :border-radius "2px"
                        :cursor "pointer"
-                       :font-family "'JetBrains Mono', monospace"
+                       :font-family (themes/get-font-family :monospace)
                        :font-size "10px"
                        :text-transform "uppercase"
                        :letter-spacing "1px"}
@@ -647,7 +654,7 @@
              :on-mouse-down #(start-drag! id %)}
             [:span {:style {:font-weight "bold" 
                             :color "#ffb700"
-                            :font-family "'JetBrains Mono', monospace"
+                            :font-family (themes/get-font-family :monospace)
                             :text-transform "uppercase"
                             :font-size "11px"
                             :letter-spacing "1px"}} "SQL EXECUTE"]
@@ -700,7 +707,7 @@
                            :border "1px solid rgba(255,0,0,0.3)"
                            :border-radius "4px"
                            :color "#ff6b6b"
-                           :font-family "'JetBrains Mono', monospace"
+                           :font-family (themes/get-font-family :monospace)
                            :font-size "11px"}}
               error])
            ;; Success result display
@@ -711,7 +718,7 @@
                            :border "1px solid rgba(255,183,0,0.3)"
                            :border-radius "4px"
                            :color "#ffb700"
-                           :font-family "'JetBrains Mono', monospace"
+                           :font-family (themes/get-font-family :monospace)
                            :font-size "11px"}}
               (str "Success: " result)])]))})))  ; Close reagent-render and create-class
 
@@ -811,17 +818,17 @@
              :on-mouse-down #(start-drag! id %)}
             [:div {:style {:display "flex" :align-items "center" :gap "10px"}}
              [:span {:style {:font-weight "bold" 
-                             :color "#9b59b6"
-                             :font-family "'JetBrains Mono', monospace"
+                             :color (or (themes/get-theme-property :pop-4) "#9b59b6")
+                             :font-family (themes/get-font-family :monospace)
                              :text-transform "uppercase"
                              :font-size "11px"
                              :letter-spacing "1px"}} "REACTOR DEBUG"]
-             [:select {:style {:background "rgba(0,0,0,0.3)"
-                               :color "#9b59b6"
+             [:select {:style {:background "rgba(0,0,0,0.03)"
+                               :color (or (themes/get-theme-property :pop-4) "#9b59b6")
                                :border "1px solid rgba(155,89,182,0.3)"
                                :border-radius "2px"
                                :padding "2px 5px"
-                               :font-family "'JetBrains Mono', monospace"
+                               :font-family (themes/get-font-family :monospace)
                                :font-size "10px"
                                :cursor "pointer"}
                        :value (name @local-mode)
@@ -861,7 +868,7 @@
                                     (r/dispatch! [:delete-block id]))
                       :style {:background "none"
                               :border "none"
-                              :color "#9b59b6"
+                              :color (or (themes/get-theme-property :pop-4) "#9b59b6")
                               :cursor "pointer"
                               :font-size "20px"
                               :line-height "20px"}} "×"]]
@@ -873,7 +880,7 @@
                            :align-items "center"
                            :justify-content "center"
                            :color "#9b59b6"
-                           :font-family "'JetBrains Mono', monospace"}}
+                           :font-family (themes/get-font-family :monospace)}}
               "Loading..."]
              
              error
@@ -883,7 +890,7 @@
                            :border "1px solid rgba(255,0,0,0.3)"
                            :border-radius "4px"
                            :color "#ff6b6b"
-                           :font-family "'JetBrains Mono', monospace"
+                           :font-family (themes/get-font-family :monospace)
                            :font-size "11px"}}
               error]
              
@@ -892,7 +899,7 @@
               {:style {:flex 1
                        :min-height 0
                        :overflow "auto"
-                       :background "rgba(0,0,0,0.3)"
+                       :background "rgba(0,0,0,0.03)"
                        :border "1px solid rgba(155,89,182,0.2)"
                        :padding "5px"}}
               [:table {:style {:width "100%" 
@@ -903,29 +910,32 @@
                                :background "rgba(26,26,46,0.95)"
                                :z-index 1}}
                 [:tr
-                 (for [col (keys (first results))]
-                   ^{:key col}
-                   [:th {:style {:text-align "left" 
-                                :padding "4px"
-                                :color "#9b59b6"
-                                :border-bottom "1px solid rgba(155,89,182,0.2)"
-                                :font-family "'JetBrains Mono', monospace"
-                                :text-transform "uppercase"
-                                :font-size "9px"}} (name col)])]]
+                 (doall
+                  (for [col (keys (first results))]
+                    ^{:key col}
+                    [:th {:style {:text-align "left"
+                                  :padding "4px"
+                                  :color (or (themes/get-theme-property :pop-4) "#9b59b6")
+                                  :border-bottom "1px solid rgba(155,89,182,0.2)"
+                                  :font-family (themes/get-font-family :monospace)
+                                  :text-transform "uppercase"
+                                  :font-size "9px"}} (name col)]))]]
                [:tbody
-                (for [row results]
-                  ^{:key (or (:_id row) (str (hash row)))}
-                  [:tr
-                   (for [col (keys (first results))]
-                     ^{:key col}
-                     [:td {:style {:padding "4px"
-                                  :color "#d8b4fe"
-                                  :font-family "'JetBrains Mono', monospace"
-                                  :font-size "9px"
-                                  :overflow "hidden"
-                                  :text-overflow "ellipsis"
-                                  :white-space "nowrap"}} 
-                      (str (get row col))])])]]]
+                (doall
+                 (for [row results]
+                   ^{:key (or (:_id row) (str (hash row)))}
+                   [:tr
+                    (doall
+                     (for [col (keys (first results))]
+                       ^{:key col}
+                       [:td {:style {:padding "4px"
+                                     :color "#d8b4fe"
+                                     :font-family (themes/get-font-family :monospace)
+                                     :font-size "9px"
+                                     :overflow "hidden"
+                                     :text-overflow "ellipsis"
+                                     :white-space "nowrap"}}
+                        (str (get row col))]))]))]]]
              
              results  ;; Empty results array
              [:div {:style {:flex 1
@@ -933,7 +943,7 @@
                            :align-items "center"
                            :justify-content "center"
                            :color "#9b59b6"
-                           :font-family "'JetBrains Mono', monospace"
+                           :font-family (themes/get-font-family :monospace)
                            :opacity 0.5
                            :flex-direction "column"
                            :gap "10px"}}
@@ -955,7 +965,7 @@
                            :align-items "center"
                            :justify-content "center"
                            :color "#9b59b6"
-                           :font-family "'JetBrains Mono', monospace"
+                           :font-family (themes/get-font-family :monospace)
                            :opacity 0.5}}
               "Loading..."])]))})))
 
@@ -980,23 +990,17 @@
             ;; Block height - header(~35px) - controls(~35px) - view toggle(~35px) - padding(20px) - border(2px)
             tree-height (- (:height actual-size) 127)]
         [:div.block.edn-browser-block
-     {:style {:position "absolute"
-              :left (:x actual-pos)
-              :top (:y actual-pos)
-              :width (:width actual-size)
-              :height (:height actual-size)
-              :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
-              :border (if (and @connection-mode (= (:source-id @connection-mode) id))
-                       "2px solid #00ffd4"
-                       "1px solid #00ffd4")
-              :border-radius "4px"
-              :padding "10px"
-              :z-index 10
-              :box-shadow (if @connection-mode
-                           "0 0 30px rgba(0,255,212,0.5), inset 0 0 20px rgba(0,255,212,0.1)"
-                           "0 0 20px rgba(0,255,212,0.3), inset 0 0 20px rgba(0,255,212,0.05)")
-              :display "flex"
-              :flex-direction "column"}
+     {:style (themes/apply-block-style
+              {:position "absolute"
+               :left (:x actual-pos)
+               :top (:y actual-pos)
+               :width (:width actual-size)
+               :height (:height actual-size)
+               :padding "10px"
+               :z-index 10
+               :display "flex"
+               :flex-direction "column"}
+              :edn-block)
       :draggable false}
      ;; Resize handle
      [:div.resize-handle
@@ -1006,7 +1010,7 @@
                :width "15px"
                :height "15px"
                :cursor "nwse-resize"
-               :background "linear-gradient(135deg, transparent 50%, #00ffd4 50%)"
+               :background (str "linear-gradient(135deg, transparent 50%, " (themes/get-primary-color) " 50%)")
                :opacity 0.5}
        :on-mouse-down #(start-resize! id %)}]
      ;; Header
@@ -1026,15 +1030,15 @@
                      ;; Update the EDN browser block to link to this query block
                      (r/dispatch! [:update-block (:source-id conn) {:source-id id}])
                      (reset! connection-mode nil)))}
-      [:span {:style {:color "#00ffd4"
-                      :font-family "'JetBrains Mono', monospace"
+      [:span {:style {:color (themes/get-primary-color)
+                      :font-family (themes/get-font-family :monospace)
                       :font-size "12px"
                       :text-transform "uppercase"
                       :letter-spacing "1px"}}
        "EDN BROWSER"]
       [:button {:style {:background "none"
                         :border "none"
-                        :color "#00ffd4"
+                        :color (themes/get-tertiary-color)
                         :cursor "pointer"
                         :font-size "20px"
                         :line-height "20px"
@@ -1087,17 +1091,17 @@
            [:div {:style {:display "flex"
                           :align-items "center"
                           :gap "5px"}}
-            [:span {:style {:color "#00ffd4"
-                            :font-family "'JetBrains Mono', monospace"
+            [:span {:style {:color (themes/get-primary-color)
+                            :font-family (themes/get-font-family :monospace)
                             :font-size "10px"
                             :opacity 0.7}}
              "FIELD:"]
             [:select {:style {:background "rgba(0,255,212,0.1)"
-                              :color "#00ffd4"
+                              :color (themes/get-tertiary-color)
                               :border "1px solid rgba(0,255,212,0.3)"
                               :border-radius "2px"
                               :padding "2px 5px"
-                              :font-family "'JetBrains Mono', monospace"
+                              :font-family (themes/get-font-family :monospace)
                               :font-size "10px"
                               :cursor "pointer"}
                       :value current-field-index
@@ -1112,17 +1116,17 @@
            [:div {:style {:display "flex"
                           :align-items "center"
                           :gap "5px"}}
-            [:span {:style {:color "#00ffd4"
-                            :font-family "'JetBrains Mono', monospace"
+            [:span {:style {:color (themes/get-primary-color)
+                            :font-family (themes/get-font-family :monospace)
                             :font-size "10px"
                             :opacity 0.7}}
              "ROW:"]
             [:select {:style {:background "rgba(0,255,212,0.1)"
-                              :color "#00ffd4"
+                              :color (themes/get-tertiary-color)
                               :border "1px solid rgba(0,255,212,0.3)"
                               :border-radius "2px"
                               :padding "2px 5px"
-                              :font-family "'JetBrains Mono', monospace"
+                              :font-family (themes/get-font-family :monospace)
                               :font-size "10px"
                               :cursor "pointer"}
                       :value current-row-index
@@ -1141,24 +1145,24 @@
                              :background (if (= @local-view-mode :monaco)
                                           "rgba(0,255,212,0.2)"
                                           "rgba(0,255,212,0.05)")
-                             :color "#00ffd4"
+                             :color (themes/get-tertiary-color)
                              :border "1px solid rgba(0,255,212,0.3)"
                              :border-radius "2px 0 0 2px"
                              :cursor "pointer"
                              :font-size "9px"
-                             :font-family "'JetBrains Mono', monospace"}
+                             :font-family (themes/get-font-family :monospace)}
                      :on-click #(reset! local-view-mode :monaco)}
             "CODE"]
            [:button {:style {:padding "3px 8px"
                              :background (if (= @local-view-mode :tree)
                                           "rgba(0,255,212,0.2)"
                                           "rgba(0,255,212,0.05)")
-                             :color "#00ffd4"
+                             :color (themes/get-tertiary-color)
                              :border "1px solid rgba(0,255,212,0.3)"
                              :border-radius "0 2px 2px 0"
                              :cursor "pointer"
                              :font-size "9px"
-                             :font-family "'JetBrains Mono', monospace"
+                             :font-family (themes/get-font-family :monospace)
                              :margin-left "-1px"}
                      :on-click #(reset! local-view-mode :tree)}
             "TREE"]
@@ -1169,11 +1173,11 @@
                       :style {:flex 1
                               :margin-left "10px"
                               :background "rgba(0,255,212,0.05)"
-                              :color "#00ffd4"
+                              :color (themes/get-tertiary-color)
                               :border "1px solid rgba(0,255,212,0.2)"
                               :border-radius "2px"
                               :padding "2px 5px"
-                              :font-family "'JetBrains Mono', monospace"
+                              :font-family (themes/get-font-family :monospace)
                               :font-size "9px"
                               :outline "none"}
                       :on-change #(reset! search-term (.. % -target -value))}])]
@@ -1195,8 +1199,8 @@
                             :align-items "center"
                             :justify-content "center"
                             :height "100%"
-                            :color "#00ffd4"
-                            :font-family "'JetBrains Mono', monospace"
+                            :color (themes/get-tertiary-color)
+                            :font-family (themes/get-font-family :monospace)
                             :opacity 0.5}}
               "No data"]
              
@@ -1225,18 +1229,18 @@
                       :align-items "center"
                       :justify-content "center"
                       :gap "10px"}}
-        [:div {:style {:color "#00ffd4"
-                       :font-family "'JetBrains Mono', monospace"
+        [:div {:style {:color (themes/get-primary-color)
+                       :font-family (themes/get-font-family :monospace)
                        :font-size "11px"
                        :opacity 0.7}}
          "Not connected to a query block"]
         [:button {:style {:padding "6px 12px"
                           :background "transparent"
-                          :color "#00ffd4"
-                          :border "1px solid #00ffd4"
+                          :color (themes/get-tertiary-color)
+                          :border (str "1px solid " (themes/get-tertiary-color))
                           :border-radius "2px"
                           :cursor "pointer"
-                          :font-family "'JetBrains Mono', monospace"
+                          :font-family (themes/get-font-family :monospace)
                           :font-size "10px"}
                   :on-click (fn []
                               (reset! connection-mode {:source-id id}))}
@@ -1407,7 +1411,7 @@
                                              (:execution_count stats)))
                                      0)]
                    ^{:key rule-id}
-                   [:div {:style {:background "rgba(0,0,0,0.3)"
+                   [:div {:style {:background "rgba(0,0,0,0.03)"
                                  :border "1px solid #444"
                                  :border-radius "4px"
                                  :padding "8px"
@@ -1430,7 +1434,7 @@
                      (when stats
                        [:div {:style {:text-align "right"}}
                         [:div {:style {:font-size "10px"
-                                      :color (if (>= success-rate 90) "#00ff88" 
+                                      :color (if (>= success-rate 90) (themes/get-primary-color) 
                                                (if (>= success-rate 50) "#ffaa00" "#ff4444"))}}
                          (str (.toFixed success-rate 1) "% success")]
                         [:div {:style {:font-size "9px"
@@ -1448,7 +1452,7 @@
                   [:div {:style {:color "#666"
                                 :text-align "center"
                                 :padding "20px"
-                                :background "rgba(0,0,0,0.3)"
+                                :background "rgba(0,0,0,0.03)"
                                 :border-radius "4px"}}
                    "No cascade relationships detected yet. Rules will cascade when one rule's action writes to a table that another rule watches."]
                   (let [;; Build adjacency map with counts
@@ -1464,7 +1468,7 @@
                                              (str "    " source_rule " -->|" execution_count "x| " target_rule))))]
                     [:div
                      ;; Mermaid Diagram
-                     [:div {:style {:background "rgba(0,0,0,0.4)"
+                     [:div {:style {:background "rgba(0,0,0,0.04)"
                                    :padding "20px"
                                    :border-radius "8px"
                                    :margin-bottom "15px"}}
@@ -1514,12 +1518,12 @@
                       ;; Legend
                       [:div {:style {:margin-top "15px"
                                     :padding "10px"
-                                    :background "rgba(0,0,0,0.3)"
+                                    :background "rgba(0,0,0,0.03)"
                                     :border-radius "4px"
                                     :font-size "10px"
                                     :color "#888"}}
                        [:div {:style {:margin-bottom "5px"}}
-                        [:span {:style {:color "#00ff9f"}} "→"] 
+                        [:span {:style {:color (themes/get-primary-color)}} "→"] 
                         " Arrows show cascade triggers"]
                        [:div {:style {:margin-bottom "5px"}}
                         [:span {:style {:color "#9933ff"
@@ -1539,10 +1543,10 @@
                        "View Mermaid source"]
                       [:pre {:style {:margin "10px 0 0 0"
                                     :padding "10px"
-                                    :background "rgba(0,0,0,0.5)"
+                                    :background "rgba(0,0,0,0.05)"
                                     :border-radius "4px"
-                                    :color "#00ffd4"
-                                    :font-family "'JetBrains Mono', monospace"
+                                    :color (themes/get-tertiary-color)
+                                    :font-family (themes/get-font-family :monospace)
                                     :font-size "10px"
                                     :white-space "pre-wrap"
                                     :overflow-x "auto"}}
@@ -1562,7 +1566,7 @@
                   "← Back to Overview"]
                  
                  ;; Rule details with EDN viewer
-                 [:div {:style {:background "rgba(0,0,0,0.3)"
+                 [:div {:style {:background "rgba(0,0,0,0.03)"
                                :padding "10px"
                                :border-radius "4px"}}
                   [:div {:style {:color "#9933ff"
@@ -1589,14 +1593,14 @@
                                     :margin-bottom "5px"}}
                        "CONDITION SQL:"]
                       (if (string? condition)
-                        [:div {:style {:background "rgba(0,0,0,0.4)"
+                        [:div {:style {:background "rgba(0,0,0,0.04)"
                                       :padding "8px"
                                       :border-radius "4px"
                                       :max-height "300px"
                                       :overflow-y "auto"}}
                          [:pre {:style {:margin 0
-                                       :color "#00ffd4"
-                                       :font-family "'JetBrains Mono', monospace"
+                                       :color (themes/get-tertiary-color)
+                                       :font-family (themes/get-font-family :monospace)
                                        :font-size "11px"
                                        :white-space "pre"
                                        :overflow-x "auto"}}
@@ -1610,14 +1614,14 @@
                                     :margin-bottom "5px"}}
                        "ACTION SQL:"]
                       (if (and (string? action) (not (coll? action)))
-                        [:div {:style {:background "rgba(0,0,0,0.4)"
+                        [:div {:style {:background "rgba(0,0,0,0.04)"
                                       :padding "8px"
                                       :border-radius "4px"
                                       :max-height "300px"
                                       :overflow-y "auto"}}
                          [:pre {:style {:margin 0
-                                       :color "#00ffd4"
-                                       :font-family "'JetBrains Mono', monospace"
+                                       :color (themes/get-tertiary-color)
+                                       :font-family (themes/get-font-family :monospace)
                                        :font-size "11px"
                                        :white-space "pre"
                                        :overflow-x "auto"}}
@@ -1641,7 +1645,7 @@
                          [:div [:span {:style {:color "#666"}} "Runs: "] 
                           [:span {:style {:color "#9933ff"}} (:execution_count stats)]]
                          [:div [:span {:style {:color "#666"}} "Success: "] 
-                          [:span {:style {:color "#00ff88"}} (:success_count stats)]]
+                          [:span {:style {:color (themes/get-primary-color)}} (:success_count stats)]]
                          [:div [:span {:style {:color "#666"}} "Errors: "] 
                           [:span {:style {:color "#ff4444"}} (:error_count stats)]]
                          [:div [:span {:style {:color "#666"}} "Avg time: "] 
@@ -1710,7 +1714,7 @@
                             :align-items "center"}
                     :on-mouse-down #(start-drag! (:id block) %)}
                    [:span {:style {:color "#8a2be2"
-                                   :font-family "'JetBrains Mono', monospace"
+                                   :font-family (themes/get-font-family :monospace)
                                    :text-transform "uppercase"
                                    :font-size "11px"
                                    :letter-spacing "1px"}} "IFRAME"]
@@ -1780,7 +1784,7 @@
                              (r/dispatch! [:update-block (:source-id conn) {:source-id (:id block)}])
                              (reset! connection-mode nil)))}
                [:span {:style {:color "#ff4f99"
-                               :font-family "'JetBrains Mono', monospace"
+                               :font-family (themes/get-font-family :monospace)
                                :text-transform "uppercase"
                                :font-size "11px"
                                :letter-spacing "1px"}} "TAP"]
@@ -1823,9 +1827,9 @@
                              :width (:width actual-size)
                              :height (:height actual-size)
                              :background "linear-gradient(135deg, #0a0a0a 0%, #1a2e1a 100%)"
-                             :border "1px solid #00ff9f"
+                             :border (str "1px solid " (themes/get-primary-color))
                              :border-radius "4px"
-                             :box-shadow "0 4px 20px rgba(0,255,159,0.3)"
+                             :box-shadow (str "0 4px 20px " (themes/get-primary-color) "4C")
                              :z-index 10
                              :display "flex"
                              :flex-direction "column"
@@ -1834,22 +1838,22 @@
                     ;; Header
                     [:div.block-header
                      {:style {:padding "10px"
-                              :background "rgba(0,255,159,0.1)"
-                              :border-bottom "1px solid rgba(0,255,159,0.3)"
+                              :background (str (themes/get-primary-color) "1A")
+                              :border-bottom (str "1px solid " (themes/get-primary-color) "4C")
                               :cursor "move"
                               :display "flex"
                               :justify-content "space-between"
                               :align-items "center"}
                       :on-mouse-down #(start-drag! (:id block) %)}
-                     [:span {:style {:color "#00ff9f"
-                                     :font-family "'JetBrains Mono', monospace"
+                     [:span {:style {:color (themes/get-primary-color)
+                                     :font-family (themes/get-font-family :monospace)
                                      :text-transform "uppercase"
                                      :font-size "11px"
                                      :letter-spacing "1px"}} "RULES"]
                      [:button {:on-click #(r/dispatch! [:delete-block (:id block)])
                                :style {:background "transparent"
                                        :border "none"
-                                       :color "#00ff9f"
+                                       :color (themes/get-primary-color)
                                        :cursor "pointer"
                                        :font-size "16px"
                                        :padding "0 5px"}}
@@ -1867,7 +1871,7 @@
                               :width "15px"
                               :height "15px"
                               :cursor "nwse-resize"
-                              :background "radial-gradient(circle at center, rgba(0,255,159,0.5) 0%, transparent 70%)"}
+                              :background (str "radial-gradient(circle at center, " (themes/get-primary-color) "80 0%, transparent 70%)")}
                       :on-mouse-down #(start-resize! (:id block) %)}]])
       (do
         (js/console.warn "Unknown block type:" block-type "original:" (:type block))
@@ -1877,18 +1881,20 @@
 
 (defonce table-dropdown-open (reagent/atom false))
 (defonce table-list (reagent/atom {:public [] :system [] :reactor []}))
+(defonce theme-dropdown-open (reagent/atom false))
 
 (defn canvas []
   (let [blocks (r/subscribe [:blocks])]
     (fn []
       [:div#canvas
-       {:style {:position "relative"
-                :width "100%"
-                :height "calc(100vh - 120px)"
-                :background "radial-gradient(circle at 20% 50%, #1a1a2e 0%, #0a0a0a 100%)"
-                :overflow "auto"
-                :box-shadow "inset 0 0 100px rgba(0,0,0,0.5)"
-                :cursor (when @connection-mode "crosshair")}
+       {:style (themes/apply-canvas-style
+                {:position "relative"
+                 :width "100%"
+                 :height "calc(100vh - 120px)"
+                 :background "radial-gradient(circle at 20% 50%, #1a1a2e 0%, #0a0a0a 100%)"
+                 :overflow "auto"
+                 :box-shadow "inset 0 0 100px rgba(0,0,0,0.5)"
+                 :cursor (when @connection-mode "crosshair")})
         :on-click (fn []
                    ;; Close dropdown when clicking on canvas
                    (reset! table-dropdown-open false))
@@ -1905,7 +1911,7 @@
        [:div {:style {:position "absolute"
                      :width "100%"
                      :height "100%"
-                     :background-image "linear-gradient(rgba(0,255,159,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0,255,159,0.03) 1px, transparent 1px)"
+                     :background-image (str "linear-gradient(" (themes/get-primary-color) "08 1px, transparent 1px), linear-gradient(90deg, " (themes/get-primary-color) "08 1px, transparent 1px)")
                      :background-size "50px 50px"
                      :pointer-events "none"}}]
        ;; Connection lines SVG
@@ -1948,7 +1954,7 @@
                                      :y1 (+ (:y source-pos) (/ (:height source-size) 2))
                                      :x2 (+ (:x target-pos) (/ (:width target-size) 2))
                                      :y2 (+ (:y target-pos) (/ (:height target-size) 2))
-                                     :stroke "#00ff9f"
+                                     :stroke (themes/get-primary-color)
                                      :stroke-width 4
                                      :opacity 1}])))
                                  (remove nil?)
@@ -2005,7 +2011,7 @@
                        :color "#0a0a0a"
                        :padding "10px 20px"
                        :border-radius "4px"
-                       :font-family "'JetBrains Mono', monospace"
+                       :font-family (themes/get-font-family :monospace)
                        :font-size "12px"
                        :font-weight "bold"
                        :text-transform "uppercase"
@@ -2014,8 +2020,8 @@
                        :box-shadow "0 0 30px rgba(255,0,110,0.5)"}}
           "Click on a Query Block header to connect"])
        (if (empty? @blocks)
-         [:div {:style {:color "#00ff9f"
-                       :font-family "'JetBrains Mono', monospace"
+         [:div {:style {:color (themes/get-primary-color)
+                       :font-family (themes/get-font-family :monospace)
                        :position "absolute"
                        :top "50%"
                        :left "50%"
@@ -2034,8 +2040,10 @@
 (defn toolbar []
   [:div.toolbar
    {:style {:height "60px"
-            :background "linear-gradient(90deg, #0a0a0a 0%, #1a1a2e 100%)"
-            :border-bottom "1px solid rgba(0,255,159,0.2)"
+            :background (or (themes/get-theme-property :toolbar-background)
+                          (themes/get-theme-property :base-block-color)
+                          "linear-gradient(90deg, #0a0a0a 0%, #1a1a2e 100%)")
+            :border-bottom (str "1px solid " (themes/get-primary-color) "33")
             :display "flex"
             :align-items "center"
             :padding "0 20px"
@@ -2044,16 +2052,16 @@
    [:button
     {:style {:padding "8px 16px"
              :background "transparent"
-             :color "#00ff9f"
-             :border "1px solid #00ff9f"
+             :color (themes/get-primary-color)
+             :border (str "1px solid " (themes/get-primary-color))
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "'JetBrains Mono', monospace"
+             :font-family (themes/get-font-family :monospace)
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
              :transition "all 0.3s"}
-     :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
+     :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) (str (themes/get-primary-color) "1A"))
      :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
      :on-click (fn []
                  (let [block-data {:id (str (random-uuid))
@@ -2069,11 +2077,11 @@
     [:button
      {:style {:padding "8px 16px"
               :background "transparent"
-              :color "#00ff9f"
-              :border "1px solid #00ff9f"
+              :color (themes/get-primary-color)
+              :border (str "1px solid " (themes/get-primary-color))
               :border-radius "2px"
               :cursor "pointer"
-              :font-family "'JetBrains Mono', monospace"
+              :font-family (themes/get-font-family :monospace)
               :font-size "12px"
               :text-transform "uppercase"
               :letter-spacing "1px"
@@ -2081,7 +2089,7 @@
               :display "flex"
               :align-items "center"
               :gap "5px"}
-      :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
+      :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) (str (themes/get-primary-color) "1A"))
       :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
       :on-click (fn []
                  (swap! table-dropdown-open not)
@@ -2106,111 +2114,114 @@
                      :left 0
                      :margin-top "5px"
                      :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
-                     :border "1px solid #00ff9f"
+                     :border (str "1px solid " (themes/get-primary-color))
                      :border-radius "4px"
                      :min-width "200px"
                      :max-height "400px"
                      :overflow-y "auto"
                      :z-index 1000
-                     :box-shadow "0 4px 20px rgba(0,255,159,0.3)"}}
+                     :box-shadow (str "0 4px 20px " (themes/get-primary-color) "4C")}}
        ;; User tables (dynamically loaded)
        [:div {:style {:padding "5px 10px"
-                      :color "#00ff9f"
-                      :font-family "'JetBrains Mono', monospace"
+                      :color (themes/get-primary-color)
+                      :font-family (themes/get-font-family :monospace)
                       :font-size "10px"
                       :text-transform "uppercase"
-                      :border-bottom "1px solid rgba(0,255,159,0.2)"
+                      :border-bottom (str "1px solid " (themes/get-primary-color) "33")
                       :opacity 0.7}}
         "Data Tables"]
-       (for [table (filter #(not (str/starts-with? % "test_")) (:public @table-list))]
-         ^{:key table}
-         [:div {:style {:padding "8px 15px"
-                        :color "#8ff0a4"
-                        :font-family "'JetBrains Mono', monospace"
-                        :font-size "11px"
-                        :cursor "pointer"
-                        :transition "all 0.2s"}
-                :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(0,255,159,0.1)")
-                :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
-                :on-click (fn []
-                           (reset! table-dropdown-open false)
-                           (let [block-data {:id (str (random-uuid))
-                                           :type :query
-                                           :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
-                                           :size {:width 400 :height 300}
-                                           :sql (str "SELECT * FROM " table " LIMIT 10")}]
-                             (r/dispatch! [:add-block block-data])))}
-          table])
+       (doall
+        (for [table (filter #(not (str/starts-with? % "test_")) (:public @table-list))]
+          ^{:key table}
+          [:div {:style {:padding "8px 15px"
+                         :color (themes/get-secondary-color)
+                         :font-family (themes/get-font-family :monospace)
+                         :font-size "11px"
+                         :cursor "pointer"
+                         :transition "all 0.2s"}
+                 :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) (str (themes/get-primary-color) "1A"))
+                 :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+                 :on-click (fn []
+                             (reset! table-dropdown-open false)
+                             (let [block-data {:id (str (random-uuid))
+                                               :type :query
+                                               :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
+                                               :size {:width 400 :height 300}
+                                               :sql (str "SELECT * FROM " table " LIMIT 10")}]
+                               (r/dispatch! [:add-block block-data])))}
+           table]))
        ;; Reactor tables
        (when (seq (:reactor @table-list))
          [:div
           [:div {:style {:padding "5px 10px"
                          :color "#9b59b6"
-                         :font-family "'JetBrains Mono', monospace"
+                         :font-family (themes/get-font-family :monospace)
                          :font-size "10px"
                          :text-transform "uppercase"
                          :border-bottom "1px solid rgba(155,89,182,0.2)"
                          :margin-top "5px"
                          :opacity 0.7}}
            "Reactor Debug Tables"]
-          (for [table (:reactor @table-list)]
-            ^{:key table}
-            [:div {:style {:padding "8px 15px"
-                           :color "#d8b4fe"
-                           :font-family "'JetBrains Mono', monospace"
-                           :font-size "11px"
-                           :cursor "pointer"
-                           :transition "all 0.2s"}
-                   :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(155,89,182,0.1)")
-                   :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
-                   :on-click (fn []
-                              (reset! table-dropdown-open false)
-                              (let [block-data {:id (str (random-uuid))
-                                              :type :query
-                                              :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
-                                              :size {:width 400 :height 300}
-                                              :sql (str "SELECT * FROM " table " LIMIT 10")}]
-                                (r/dispatch! [:add-block block-data])))}
-             table])])
+          (doall
+           (for [table (:reactor @table-list)]
+             ^{:key table}
+             [:div {:style {:padding "8px 15px"
+                            :color "#d8b4fe"
+                            :font-family (themes/get-font-family :monospace)
+                            :font-size "11px"
+                            :cursor "pointer"
+                            :transition "all 0.2s"}
+                    :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(155,89,182,0.1)")
+                    :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+                    :on-click (fn []
+                                (reset! table-dropdown-open false)
+                                (let [block-data {:id (str (random-uuid))
+                                                  :type :query
+                                                  :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
+                                                  :size {:width 400 :height 300}
+                                                  :sql (str "SELECT * FROM " table " LIMIT 10")}]
+                                  (r/dispatch! [:add-block block-data])))}
+              table]))])
        ;; System tables
        (when (seq (:system @table-list))
          [:div
           [:div {:style {:padding "5px 10px"
-                         :color "#ff006e"
-                         :font-family "'JetBrains Mono', monospace"
+                         :color (themes/get-secondary-color)
+                         :font-family (themes/get-font-family :monospace)
                          :font-size "10px"
                          :text-transform "uppercase"
                          :border-bottom "1px solid rgba(255,0,110,0.2)"
                          :margin-top "5px"
                          :opacity 0.7}}
            "System Tables"]
-          (for [table (:system @table-list)]
-            ^{:key table}
-            [:div {:style {:padding "8px 15px"
-                           :color "#ff4f99"
-                           :font-family "'JetBrains Mono', monospace"
-                           :font-size "11px"
-                           :cursor "pointer"
-                           :transition "all 0.2s"}
-                   :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(255,0,110,0.1)")
-                   :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
-                   :on-click (fn []
-                              (reset! table-dropdown-open false)
-                              (let [block-data {:id (str (random-uuid))
-                                              :type :query
-                                              :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
-                                              :size {:width 400 :height 300}
-                                              :sql (str "SELECT * FROM " table " LIMIT 10")}]
-                                (r/dispatch! [:add-block block-data])))}
-             table])])])]
+          (doall
+           (for [table (:system @table-list)]
+             ^{:key table}
+             [:div {:style {:padding "8px 15px"
+                            :color "#ff4f99"
+                            :font-family (themes/get-font-family :monospace)
+                            :font-size "11px"
+                            :cursor "pointer"
+                            :transition "all 0.2s"}
+                    :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(255,0,110,0.1)")
+                    :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+                    :on-click (fn []
+                                (reset! table-dropdown-open false)
+                                (let [block-data {:id (str (random-uuid))
+                                                  :type :query
+                                                  :position {:x (+ 100 (rand-int 200)) :y (+ 100 (rand-int 200))}
+                                                  :size {:width 400 :height 300}
+                                                  :sql (str "SELECT * FROM " table " LIMIT 10")}]
+                                  (r/dispatch! [:add-block block-data])))}
+              table]))])])]
    [:button
     {:style {:padding "8px 16px"
              :background "transparent"
-             :color "#ff006e"
-             :border "1px solid #ff006e"
+             :color (themes/get-secondary-color)
+             :border (str "1px solid " (themes/get-secondary-color))
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "'JetBrains Mono', monospace"
+             :font-family (themes/get-font-family :monospace)
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
@@ -2232,7 +2243,7 @@
              :border "1px solid #ffb700"
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "'JetBrains Mono', monospace"
+             :font-family (themes/get-font-family :monospace)
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
@@ -2254,7 +2265,7 @@
              :border "1px solid #9b59b6"
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "'JetBrains Mono', monospace"
+             :font-family (themes/get-font-family :monospace)
              :font-size "12px"
              :font-weight "bold"
              :text-transform "uppercase"
@@ -2272,11 +2283,11 @@
    [:button
     {:style {:padding "8px 16px"
              :background "transparent"
-             :color "#00ffd4"
-             :border "1px solid #00ffd4"
+             :color (themes/get-tertiary-color)
+             :border (str "1px solid " (themes/get-primary-color))
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "'JetBrains Mono', monospace"
+             :font-family (themes/get-font-family :monospace)
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
@@ -2297,7 +2308,7 @@
              :border "1px solid #9933ff"
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "'JetBrains Mono', monospace"
+             :font-family (themes/get-font-family :monospace)
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
@@ -2320,7 +2331,7 @@
              :border "1px solid #ff4f99"
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "'JetBrains Mono', monospace"
+             :font-family (themes/get-font-family :monospace)
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
@@ -2341,7 +2352,7 @@
              :border "1px solid #8a2be2"
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "'JetBrains Mono', monospace"
+             :font-family (themes/get-font-family :monospace)
              :font-size "12px"
              :text-transform "uppercase"
              :letter-spacing "1px"
@@ -2358,6 +2369,115 @@
                    (js/console.log "Adding iframe block:" (clj->js block-data))
                    (r/dispatch! [:add-block block-data])))}
     "+ IFRAME"]
+   
+   ;; Theme selector dropdown
+   [:div {:style {:position "relative"}}
+    [:button
+     {:style {:padding "8px 16px"
+              :background "transparent"
+              :color "#ffd700"
+              :border "1px solid #ffd700"
+              :border-radius "2px"
+              :cursor "pointer"
+              :font-family (themes/get-font-family :monospace)
+              :font-size "12px"
+              :text-transform "uppercase"
+              :letter-spacing "1px"
+              :transition "all 0.3s"
+              :display "flex"
+              :align-items "center"
+              :gap "5px"
+              :margin-left "10px"}
+      :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(255,215,0,0.1)")
+      :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+      :on-click (fn []
+                 (swap! theme-dropdown-open not)
+                 ;; Fetch available themes when opening
+                 (when @theme-dropdown-open
+                   (themes/fetch-available-themes!)))}
+     "THEME"
+     ;; Show current theme name
+     (let [saved-theme (js/localStorage.getItem "rabbit-demo-theme")]
+       (when saved-theme
+         [:span {:style {:font-size "10px"
+                         :opacity 0.7
+                         :margin-left "5px"
+                         :font-weight "normal"
+                         :text-transform "none"}}
+          (str ": " (-> saved-theme
+                       (str/replace #"\.edn$" "")
+                       (str/replace #"[-_]" " ")
+                       (str/split #" ")
+                       (->> (take 2)
+                            (str/join " "))))]))
+     [:span {:style {:font-size "10px"
+                     :margin-left "5px"}} "▼"]]
+    ;; Theme dropdown menu
+    (when @theme-dropdown-open
+      [:div {:style {:position "absolute"
+                     :top "100%"
+                     :left 0
+                     :margin-top "5px"
+                     :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
+                     :border "1px solid #ffd700"
+                     :border-radius "4px"
+                     :min-width "250px"
+                     :max-height "400px"
+                     :overflow-y "auto"
+                     :z-index 1000
+                     :box-shadow "0 4px 20px rgba(255,215,0,0.3)"}}
+       ;; Default theme option
+       (let [is-default? (nil? (js/localStorage.getItem "rabbit-demo-theme"))]
+         [:div {:style {:padding "8px 15px"
+                        :color (if is-default? "#00ff9f" "#ffd700")
+                        :font-family (themes/get-font-family :monospace)
+                        :font-size "11px"
+                        :cursor "pointer"
+                        :transition "all 0.2s"
+                        :border-bottom "1px solid rgba(255,215,0,0.2)"
+                        :background (when is-default? "rgba(0,255,159,0.05)")
+                        :position "relative"}
+                :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(255,215,0,0.1)")
+                :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) (if is-default? "rgba(0,255,159,0.05)" "transparent"))
+                :on-click (fn []
+                           (reset! theme-dropdown-open false)
+                           (themes/set-theme! nil)
+                           (reset! themes/current-theme themes/default-theme))}
+          [:span "Default Theme"]
+          (when is-default?
+            [:span {:style {:position "absolute"
+                           :right "15px"
+                           :color "#00ff9f"
+                           :font-size "10px"}} "✓"])])
+       ;; Available theme files
+       (when @themes/available-themes
+         (doall
+          (for [theme-file @themes/available-themes]
+            (let [is-active? (= theme-file (js/localStorage.getItem "rabbit-demo-theme"))]
+              ^{:key theme-file}
+              [:div {:style {:padding "8px 15px"
+                             :color (if is-active? "#00ff9f" "#f0e68c")
+                             :font-family (themes/get-font-family :monospace)
+                             :font-size "11px"
+                             :cursor "pointer"
+                             :transition "all 0.2s"
+                             :background (when is-active? "rgba(0,255,159,0.05)")
+                             :position "relative"}
+                     :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(255,215,0,0.1)")
+                     :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) (if is-active? "rgba(0,255,159,0.05)" "transparent"))
+                     :on-click (fn []
+                                 (reset! theme-dropdown-open false)
+                                 (themes/set-theme! theme-file))}
+               [:span (-> theme-file
+                         (str/replace #"\.edn$" "")
+                         (str/replace #"-" " ")
+                         (str/replace #"_" " "))]
+               (when is-active?
+                 [:span {:style {:position "absolute"
+                                :right "15px"
+                                :color "#00ff9f"
+                                :font-size "10px"}} "✓"])]))))])]
+   
    [:div {:style {:flex 1}}]
    ;; Console tap toggle
    [:button
@@ -2365,11 +2485,11 @@
              :background (if @console-tap/hijacked? 
                           "rgba(0,255,212,0.1)" 
                           "transparent")
-             :color "#00ffd4"
-             :border (str "1px solid " (if @console-tap/hijacked? "#00ffd4" "rgba(0,255,212,0.5)"))
+             :color (themes/get-tertiary-color)
+             :border (str "1px solid " (if @console-tap/hijacked? (themes/get-primary-color) (str (themes/get-primary-color) "80")))
              :border-radius "2px"
              :cursor "pointer"
-             :font-family "'JetBrains Mono', monospace"
+             :font-family (themes/get-font-family :monospace)
              :font-size "10px"
              :margin-right "10px"}
      :title (if @console-tap/hijacked? 
@@ -2388,7 +2508,7 @@
                 :border "1px solid #ff9f00"
                 :border-radius "2px"
                 :cursor "pointer"
-                :font-family "'JetBrains Mono', monospace"
+                :font-family (themes/get-font-family :monospace)
                 :font-size "9px"}
         :title "Test console.log"
         :on-click #(js/console.log "Test message from console.log" {:data "test" :timestamp (js/Date.now)})}
@@ -2400,7 +2520,7 @@
                 :border "1px solid #ff4444"
                 :border-radius "2px"
                 :cursor "pointer"
-                :font-family "'JetBrains Mono', monospace"
+                :font-family (themes/get-font-family :monospace)
                 :font-size "9px"}
         :title "Test console.error"
         :on-click #(js/console.error "Test error from console.error" (js/Error. "Test error"))}
@@ -2412,14 +2532,14 @@
                 :border "1px solid #ffff00"
                 :border-radius "2px"
                 :cursor "pointer"
-                :font-family "'JetBrains Mono', monospace"
+                :font-family (themes/get-font-family :monospace)
                 :font-size "9px"}
         :title "Test console.warn"
         :on-click #(js/console.warn "Test warning from console.warn" "Warning details")}
        "TEST WARN"]])
    
-   [:span {:style {:color "#00ff9f"
-                   :font-family "'JetBrains Mono', monospace"
+   [:span {:style {:color (themes/get-primary-color)
+                   :font-family (themes/get-font-family :monospace)
                    :font-size "14px"
                    :text-transform "uppercase"
                    :letter-spacing "2px"}} "RABBIT//SQL_BROWSER"]])
@@ -2457,18 +2577,18 @@
        [:button
         {:style {:padding "6px 12px"
                  :background "transparent"
-                 :color "#00ff9f"
-                 :border "1px solid rgba(0,255,159,0.5)"
+                 :color (themes/get-primary-color)
+                 :border (str "1px solid " (themes/get-primary-color) "80")
                  :border-radius "2px"
                  :cursor "pointer"
-                 :font-family "'JetBrains Mono', monospace"
+                 :font-family (themes/get-font-family :monospace)
                  :font-size "11px"
                  :text-transform "uppercase"
                  :display "flex"
                  :align-items "center"
                  :gap "5px"}
          :on-click #(swap! session-dropdown-open not)}
-        [:span {:style {:color "#00ff9f"
+        [:span {:style {:color (themes/get-primary-color)
                         :opacity 0.7
                         :font-size "10px"}} "SESSION:"]
         [:span @current-session]
@@ -2481,16 +2601,16 @@
                         :right 0
                         :margin-bottom "5px"
                         :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
-                        :border "1px solid #00ff9f"
+                        :border (str "1px solid " (themes/get-primary-color))
                         :border-radius "4px"
                         :min-width "250px"
                         :max-height "300px"
                         :overflow-y "auto"
                         :z-index 1000
-                        :box-shadow "0 -4px 20px rgba(0,255,159,0.3)"}}
+                        :box-shadow (str "0 -4px 20px " (themes/get-primary-color) "4C")}}
           ;; New session input
           [:div {:style {:padding "10px"
-                         :border-bottom "1px solid rgba(0,255,159,0.2)"}}
+                         :border-bottom (str "1px solid " (themes/get-primary-color) "33")}}
            [:div {:style {:display "flex" :gap "5px"}}
             [:input {:type "text"
                      :placeholder "New session name"
@@ -2499,10 +2619,10 @@
                      :style {:flex 1
                              :padding "4px 8px"
                              :background "rgba(0,0,0,0.3)"
-                             :border "1px solid rgba(0,255,159,0.3)"
+                             :border (str "1px solid " (themes/get-primary-color) "4C")
                              :border-radius "2px"
-                             :color "#00ff9f"
-                             :font-family "'JetBrains Mono', monospace"
+                             :color (themes/get-primary-color)
+                             :font-family (themes/get-font-family :monospace)
                              :font-size "11px"}
                      :on-key-down #(when (= (.-which %) 13)
                                     (when (seq @new-session-name)
@@ -2512,12 +2632,12 @@
                                       (reset! new-session-name "")
                                       (load-sessions!)))}]
             [:button {:style {:padding "4px 10px"
-                              :background "linear-gradient(90deg, #00ff9f 0%, #00cc7f 100%)"
+                              :background (str "linear-gradient(90deg, " (themes/get-primary-color) " 0%, " (themes/get-secondary-color) " 100%)")
                               :color "#0a0a0a"
                               :border "none"
                               :border-radius "2px"
                               :cursor "pointer"
-                              :font-family "'JetBrains Mono', monospace"
+                              :font-family (themes/get-font-family :monospace)
                               :font-size "10px"
                               :font-weight "bold"}
                       :on-click (fn []
@@ -2540,9 +2660,9 @@
                             :cursor "pointer"
                             :transition "all 0.2s"
                             :background (when (= (:session-id session) @current-session)
-                                         "rgba(0,255,159,0.1)")}
+                                         (str (themes/get-primary-color) "1A"))}
                     :on-mouse-over #(when (not= (:session-id session) @current-session)
-                                     (set! (.-style.background ^js (.-currentTarget %)) "rgba(0,255,159,0.05)"))
+                                     (set! (.-style.background ^js (.-currentTarget %)) (str (themes/get-primary-color) "0D")))
                     :on-mouse-out #(when (not= (:session-id session) @current-session)
                                     (set! (.-style.background ^js (.-currentTarget %)) "transparent"))
                     :on-click (fn []
@@ -2550,12 +2670,12 @@
                                (reset! current-session (:session-id session))
                                (reset! session-dropdown-open false))}
               [:div {:style {:flex 1}}
-               [:div {:style {:color "#00ff9f"
-                              :font-family "'JetBrains Mono', monospace"
+               [:div {:style {:color (themes/get-primary-color)
+                              :font-family (themes/get-font-family :monospace)
                               :font-size "11px"}} 
                 (:session-id session)]
-               [:div {:style {:color "#8ff0a4"
-                              :font-family "'JetBrains Mono', monospace"
+               [:div {:style {:color (themes/get-secondary-color)
+                              :font-family (themes/get-font-family :monospace)
                               :font-size "9px"
                               :opacity 0.7}} 
                 (str (count (get-in session [:canvas :blocks] {})) " blocks")]]
@@ -2567,7 +2687,7 @@
                                   :border-radius "2px"
                                   :color "#ff6b6b"
                                   :cursor "pointer"
-                                  :font-family "'JetBrains Mono', monospace"
+                                  :font-family (themes/get-font-family :monospace)
                                   :font-size "9px"}
                           :on-click (fn [e]
                                      (.stopPropagation ^js e)
@@ -2596,19 +2716,19 @@
                 :right 0
                 :height "60px"
                 :background "linear-gradient(90deg, #0a0a0a 0%, #1a1a2e 100%)"
-                :border-top "1px solid rgba(0,255,159,0.2)"
+                :border-top (str "1px solid " (themes/get-primary-color) "33")
                 :display "flex"
                 :align-items "center"
                 :padding "0 20px"
                 :gap "20px"
-                :box-shadow "0 -2px 20px rgba(0,0,0,0.5)"}}
+                :box-shadow "0 -2px 20px rgba(0,0,0,0.05)"}}
        [:button {:style {:padding "6px 12px"
                          :background "transparent"
-                         :color "#00ff9f"
-                         :border "1px solid rgba(0,255,159,0.5)"
+                         :color (themes/get-primary-color)
+                         :border (str "1px solid " (themes/get-primary-color) "80")
                          :border-radius "2px"
                          :cursor "pointer"
-                         :font-family "'JetBrains Mono', monospace"
+                         :font-family (themes/get-font-family :monospace)
                          :font-size "11px"
                          :text-transform "uppercase"
                          :opacity (if (:can-undo @history-info) 1 0.5)}
@@ -2616,20 +2736,20 @@
                  :on-click #(r/undo!)} "← UNDO"]
        [:button {:style {:padding "6px 12px"
                          :background "transparent"
-                         :color "#00ff9f"
-                         :border "1px solid rgba(0,255,159,0.5)"
+                         :color (themes/get-primary-color)
+                         :border (str "1px solid " (themes/get-primary-color) "80")
                          :border-radius "2px"
                          :cursor "pointer"
-                         :font-family "'JetBrains Mono', monospace"
+                         :font-family (themes/get-font-family :monospace)
                          :font-size "11px"
                          :text-transform "uppercase"
                          :opacity (if (:can-redo @history-info) 1 0.5)}
                  :disabled (not (:can-redo @history-info))
                  :on-click #(r/redo!)} "REDO →"]
        [:div {:style {:flex 1 :display "flex" :align-items "center" :gap "15px"}}
-        [:span {:style {:color "#00ff9f" :font-family "'JetBrains Mono', monospace" :font-size "11px" :text-transform "uppercase"}} 
+        [:span {:style {:color (themes/get-primary-color) :font-family (themes/get-font-family :monospace) :font-size "11px" :text-transform "uppercase"}} 
          "TIMELINE:"]
-        [:span {:style {:color "#8ff0a4" :font-family "'JetBrains Mono', monospace" :font-size "10px"}}
+        [:span {:style {:color (themes/get-secondary-color) :font-family (themes/get-font-family :monospace) :font-size "10px"}}
          (str "State " (- (:total-states @history-info 0) (:current-index @history-info 0))
               " of " (:total-states @history-info 0))]
         [:input {:type "range"
@@ -2640,7 +2760,7 @@
                  :style {:flex 1 
                         :-webkit-appearance "none"
                         :height "2px"
-                        :background "rgba(0,255,159,0.2)"
+                        :background (str (themes/get-primary-color) "33")
                         :outline "none"}
                  :on-change #(let [val (js/parseInt (.. % -target -value))
                                   max-idx (max 0 (dec (:total-states @history-info 1)))
@@ -2665,10 +2785,15 @@
 
 ;; ============= Initialize =============
 
+;; Store the React root for hot reload support
+(defonce react-root (atom nil))
+
 (defn ^:export init! []
   ;; Set app name for snapshot tracking
   (set! js/window.REACTOR_APP_NAME "rabbit")
   (r/init! {:server-url "http://localhost:5000"})
+  ;; Initialize theming system
+  (themes/init!)
   ;; Hijack console by default to send to tap>
   (console-tap/hijack-console!)
   ;; Initialize with default session or get from query params
@@ -2690,4 +2815,13 @@
       (r/get-history-info!))
     500)  ;; Give more time for state to load
   (load-sessions!)
-  (rdom/render [rabbit-app] (.getElementById js/document "app")))
+  ;; Use React 18 createRoot API
+  (let [root-element (.getElementById js/document "app")]
+    (when root-element
+      (if-let [existing-root @react-root]
+        ;; Re-render on existing root (for hot reload)
+        (rdom-client/render existing-root [rabbit-app])
+        ;; Create new root on first load
+        (let [root (rdom-client/create-root root-element)]
+          (reset! react-root root)
+          (rdom-client/render root [rabbit-app]))))))

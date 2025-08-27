@@ -150,14 +150,16 @@
          [:table
           [:thead
            [:tr
-            (for [col (keys (first (:results @results)))]
-              ^{:key col} [:th (name col)])]]
+            (doall
+             (for [col (keys (first (:results @results)))]
+               ^{:key col} [:th (name col)]))]]
           [:tbody
-           (for [row (:results @results)]
-             ^{:key (hash row)}
-             [:tr
-              (for [[k v] row]
-                ^{:key k} [:td (str v)])])]]
+           (doall
+            (for [row (:results @results)]
+              ^{:key (hash row)}
+              [:tr
+               (for [[k v] row]
+                 ^{:key k} [:td (str v)])]))]]
          
          :else
          [:div "No results"])])))

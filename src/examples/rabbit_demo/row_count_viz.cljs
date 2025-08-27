@@ -2,6 +2,7 @@
   "Row count visualization for time travel scrubber"
   (:require [reagent.core :as reagent]
             [reactor.core :as r]
+            [examples.rabbit-demo.themes :as themes]
             [clojure.string :as str]))
 
 ;; ============= Row Count Cache =============
@@ -131,7 +132,7 @@
         results (atom cached-counts)  ; Start with cached values
         completed (atom 0)]
     (when (seq missing-timestamps)
-      (js/console.log "Calculating row counts for" (count missing-timestamps) "new timestamps out of" (count timestamps))
+      ;; (js/console.log "Calculating row counts for" (count missing-timestamps) "new timestamps out of" (count timestamps))
       (doseq [ts missing-timestamps]
         (calculate-row-count! sql ts
           (fn [count]
@@ -155,7 +156,7 @@
         results (atom cached-sizes)  ; Start with cached values
         completed (atom 0)]
     (when (seq missing-timestamps)
-      (js/console.log "Calculating data sizes for" (count missing-timestamps) "new timestamps out of" (count timestamps))
+      ;; (js/console.log "Calculating data sizes for" (count missing-timestamps) "new timestamps out of" (count timestamps))
       (doseq [ts missing-timestamps]
         (calculate-data-size! sql ts
           (fn [size]
@@ -227,15 +228,17 @@
        ;; Area fill
        [:path {:d path-data
                :fill (case mode
-                      :data-size "rgba(138,43,226,0.15)"  ; Purple for data-size
-                      "rgba(0,255,159,0.15)")              ; Green for row counts
+                       :data-size "rgba(138,43,226,0.15)"  ; Purple for data-size
+                      ;"rgba(0,255,159,0.15)"
+                       (str (themes/get-primary-color) "15"))              ; Green for row counts
                :stroke "none"}]
        ;; Top line
        [:polyline {:points (str/join " " (map #(str (:x %) "," (:y %)) points))
                    :fill "none"
                    :stroke (case mode
-                           :data-size "rgba(138,43,226,0.4)"  ; Purple for data-size
-                           "rgba(0,255,159,0.4)")              ; Green for row counts
+                             :data-size "rgba(138,43,226,0.4)"  ; Purple for data-size
+                             ;"rgba(0,255,159,0.4)"
+                             (str (themes/get-primary-color) "40"))              ; Green for row counts
                    :stroke-width "1"}]])))
 
 (defn row-count-overlay

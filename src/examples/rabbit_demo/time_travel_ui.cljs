@@ -4,7 +4,8 @@
             [reactor.core :as r]
             [clojure.string :as cstr]
             [examples.rabbit-demo.reactive-queries :as rq]
-            [examples.rabbit-demo.row-count-viz :as rcv]))
+            [examples.rabbit-demo.row-count-viz :as rcv]
+            [examples.rabbit-demo.themes :as themes]))
 
 (defonce block-history (reagent/atom {}))  ;; block-id -> {:timestamps [...] :current-index N :hover-index N}
 (defonce debounce-timers (atom {}))  ;; block-id -> timer-id for debouncing
@@ -243,7 +244,7 @@
             [:div {:ref #(reset! container-ref %)
                    :style {:margin "10px 0"
                           :padding "10px"
-                          :background "rgba(0,0,0,0.3)"
+                          ;:background "rgba(0,0,0,0.3)"
                           :border-radius "4px"}}
        ;; Header with TIME TRAVEL label and link button
        [:div {:style {:display "flex"
@@ -256,15 +257,15 @@
               linked-count (count (get-linked-blocks-for-table table-name))]
           [:button {:style {:padding "2px 4px"
                            :background (if is-linked 
-                                        "rgba(0,255,159,0.3)" 
-                                        "rgba(0,255,159,0.1)")
+                                        (str (themes/get-primary-color) "4C") 
+                                        (str (themes/get-primary-color) "1A"))
                            :border (if is-linked
-                                    "1px solid #00ff9f"
-                                    "1px solid rgba(0,255,159,0.3)")
+                                    (str "1px solid " (themes/get-primary-color))
+                                    (str "1px solid " (themes/get-primary-color) "4C"))
                            :border-radius "3px"
-                           :color "#00ff9f"
+                           :color (themes/get-primary-color)
                            :font-size "9px"
-                           :font-family "'JetBrains Mono', monospace"
+                           :font-family (themes/get-font-family :monospace)
                            :cursor "pointer"
                            :margin-right "5px"
                            :display "flex"
@@ -282,14 +283,14 @@
            (when (and is-linked (> linked-count 1))
              [:span {:style {:font-size "8px"}} 
               (dec linked-count)])])
-        [:span {:style {:color "#00ff9f"
+        [:span {:style {:color (themes/get-primary-color)
                         :font-size "11px"
-                        :font-family "'JetBrains Mono', monospace"}}
+                        :font-family (themes/get-font-family :monospace)}}
          "TIME TRAVEL"]
         ;; Show current or hovered time with row count diff
-        [:span {:style {:color (if hover-index "#ffd700" "#8ff0a4")
+        [:span {:style {:color (if hover-index "#ffd700" (themes/get-secondary-color))
                         :font-size "10px"
-                        :font-family "'JetBrains Mono', monospace"
+                        :font-family (themes/get-font-family :monospace)
                         :flex 1}}
          (let [display-index (or hover-index current-index)
                is-now? (= display-index (dec (count timestamps)))
@@ -332,15 +333,16 @@
                "NO HISTORY")))]
         ;; Toggle for cumulative mode
         [:button {:style {:padding "2px 6px"
-                          :background (case (get @chart-mode block-id-str :differential)
-                                       :cumulative "rgba(255,165,0,0.3)"
-                                       :data-size "rgba(138,43,226,0.3)"
-                                       "rgba(0,255,159,0.1)")
-                          :border "1px solid rgba(0,255,159,0.5)"
+                          ;; :background (case (get @chart-mode block-id-str :differential)
+                          ;;              :cumulative2 "rgba(255,165,0,0.3)"
+                          ;;              :data-size2 "rgba(138,43,226,0.3)"
+                          ;;              (str (themes/get-primary-color) "1A"))
+                          :background (str (themes/get-primary-color) "1A")
+                          :border (str "1px solid " (themes/get-primary-color) "80")
                           :border-radius "3px"
-                          :color "#00ff9f"
+                          :color (themes/get-primary-color)
                           :font-size "9px"
-                          :font-family "'JetBrains Mono', monospace"
+                          :font-family (themes/get-font-family :monospace)
                           :cursor "pointer"}
                   :on-click (fn []
                              (swap! chart-mode update block-id-str
@@ -359,14 +361,14 @@
        [:div {:style {:position "relative"
                       :height "40px"
                       :margin-bottom "5px"
-                      :background "rgba(0,0,0,0.2)"
+                      :background "rgba(0,0,0,0.01)"
                       :border-radius "3px"
                       :overflow "hidden"}}
         ;; Background gradient showing time density
         [:div {:style {:position "absolute"
                        :width "100%"
                        :height "100%"
-                       :background "linear-gradient(to right, rgba(0,255,159,0.05), rgba(0,255,159,0.15))"
+                       :background (str "linear-gradient(to right, " (themes/get-primary-color) "10, " (themes/get-primary-color) "26)")
                        :pointer-events "none"}}]
         
         ;; Time markers (1h, 1d, 1w ago)
@@ -387,13 +389,13 @@
                    [:div {:style {:position "absolute"
                                  :left (str position "%")
                                  :height "100%"
-                                 :border-left "1px dashed rgba(0,255,159,0.3)"}}
+                                 :border-left (str "1px dashed " (themes/get-primary-color) "99")}}
                     [:span {:style {:position "absolute"
                                    :top "2px"
                                    :left "2px"
                                    :font-size "8px"
-                                   :color "rgba(0,255,159,0.6)"
-                                   :font-family "'JetBrains Mono', monospace"}}
+                                   :color (str (themes/get-primary-color) "99")
+                                   :font-family (themes/get-font-family :monospace)}}
                      "1h"]]))
                ;; Day marker
                (when (> range-ms (* 24 60 60 1000))
@@ -404,13 +406,13 @@
                    [:div {:style {:position "absolute"
                                  :left (str position "%")
                                  :height "100%"
-                                 :border-left "1px dashed rgba(0,255,159,0.4)"}}
+                                 :border-left (str "1px dashed " (themes/get-primary-color) "66")}}
                     [:span {:style {:position "absolute"
                                    :top "12px"
                                    :left "2px"
                                    :font-size "8px"
-                                   :color "rgba(0,255,159,0.7)"
-                                   :font-family "'JetBrains Mono', monospace"}}
+                                   :color (str (themes/get-primary-color) "B3")
+                                   :font-family (themes/get-font-family :monospace)}}
                      "1d"]]))
                ;; Week marker
                (when (> range-ms (* 7 24 60 60 1000))
@@ -421,13 +423,13 @@
                    [:div {:style {:position "absolute"
                                  :left (str position "%")
                                  :height "100%"
-                                 :border-left "1px dashed rgba(0,255,159,0.5)"}}
+                                 :border-left (str "1px dashed " (themes/get-primary-color) "80")}}
                     [:span {:style {:position "absolute"
                                    :top "22px"
                                    :left "2px"
                                    :font-size "8px"
-                                   :color "rgba(0,255,159,0.8)"
-                                   :font-family "'JetBrains Mono', monospace"}}
+                                   :color (str (themes/get-primary-color) "CC")
+                                   :font-family (themes/get-font-family :monospace)}}
                      "1w"]]))])))
         
              ;; Row count area chart overlay
@@ -450,36 +452,38 @@
                        :height "100%"
                        :display "flex"
                        :align-items "center"}}
-         (map-indexed 
+         (doall 
+          (map-indexed 
           (fn [idx ts]
             (when ts ;; Skip NOW (nil) marker
-              [:div {:key idx
+              [:div {:key (str idx "sliders")
                      :style {:position "absolute"
                             :left (str (* 100 (/ idx (dec (count timestamps)))) "%")
                             :width "2px"
                             :height "20px"
                             :background (if (= idx current-index)
-                                       "rgba(0,255,159,1)"
-                                       "rgba(0,255,159,0.3)")
+                                       (themes/get-primary-color)
+                                       (str (themes/get-primary-color) "4C"))
                             :transition "all 0.2s"}}]))
-          timestamps)]]
+          timestamps))]]
        
        ;; Slider control
        [:div {:style {:position "relative"
                       :display "flex"
+                      ;:color (str (themes/get-primary-color) "99")
                       :align-items "center"}}
         ;; Visual track line
         [:div {:style {:position "absolute"
                        :width "100%"
                        :height "2px"
-                       :background "rgba(0,255,159,0.2)"
+                       :background (str (themes/get-primary-color) "33")
                        :border-radius "1px"
                        :pointer-events "none"}}]
         ;; Progress line
         [:div {:style {:position "absolute"
                        :width (str (* 100 (/ current-index (max 1 (dec (count timestamps))))) "%")
                        :height "2px"
-                       :background "rgba(0,255,159,0.6)"
+                       :background (str (themes/get-primary-color) "99")
                        :border-radius "1px"
                        :pointer-events "none"
                        :transition "width 0.2s"}}]
@@ -589,13 +593,13 @@
                                  (rq/execute-block-query! block-id sql nil timestamp)))}])
          (when-not (:timestamps history)
            [:button {:style {:padding "4px 8px"
-                            :background "rgba(0,255,159,0.1)"
-                            :color "#00ff9f"
-                            :border "1px solid #00ff9f"
+                            :background (str (themes/get-primary-color) "1A")
+                            :color (themes/get-primary-color)
+                            :border (str "1px solid " (themes/get-primary-color))
                             :border-radius "3px"
                             :cursor "pointer"
                             :font-size "10px"
-                            :font-family "'JetBrains Mono', monospace"}
+                            :font-family (themes/get-font-family :monospace)}
                     :on-click #(fetch-query-history! block-id sql)}
             "LOAD HISTORY"])]))})))
 

@@ -54,7 +54,9 @@
   [id path]
   (reg-sub id (fn [db _] (get-in db path))))
 
-(defn subscribe
+(declare subscribe)
+
+(defn subscribe-base
   "Subscribe to data - returns a reactive atom
    Supports both keypath subscriptions [:get [:some :path]] and
    SQL subscriptions [:sql \"SELECT * FROM table\"]"
@@ -172,9 +174,9 @@
         (sql-exec! sql params))
       (js/console.error "[CLIENT] No SQL event handler registered for:" event-id))))
 
-;; Store original subscribe function before redefining
+;; Store reference to base subscribe function
 ;; This is intentional - we're enhancing the base subscribe function with registry support
-(def ^:private subscribe-original subscribe)
+(def ^:private subscribe-original subscribe-base)
 
 ;; Enhanced subscription function that handles SQL subscriptions via registry
 ;; WARNING: This intentionally redefines the subscribe function to add registry support
@@ -920,7 +922,8 @@
                                    :loading false 
                                    :executed-sql (:executed-sql (:result data))
                                    :metrics (:metrics (:result data))}))
-                        (js/console.log "[CLIENT] Full update applied -" (count (:results (:result data))) "results"))
+                        ;; (js/console.log "[CLIENT] Full update applied -" (count (:results (:result data))) "results")
+                        )
                       (js/console.warn "[CLIENT] No subscription found for ID:" sub-id)))
                   
                   ;; Diff update (both row-based and field-based)

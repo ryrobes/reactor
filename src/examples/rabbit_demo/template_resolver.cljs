@@ -123,7 +123,7 @@
         path2 (if (= (get path2 0) :*timestamp) [:*timestamp block-id-str] path2)
         result (when data (if (= path2 [:*timestamp block-id-str])
                             (let [ts (get-in @rq/block-results path2)]
-                              (js/console.log "[TEMPLATE] Resolving timestamp for" block-id-str "got:" ts)
+                              ;; (js/console.log "[TEMPLATE] Resolving timestamp for" block-id-str "got:" ts)
                               ts)
                             (get-in data path2)))]
     (when (nil? result)
@@ -141,25 +141,26 @@
   [template-str blocks]
   (if-not template-str
     ""
-    (let [_ (js/console.log "[TEMPLATE] Input template:" template-str)
+    (let [;; _ (js/console.log "[TEMPLATE] Input template:" template-str)
           refs (parse-template-refs template-str)
           ;; First pass - resolve all template values
           resolved (reduce
                      (fn [result-str {:keys [full-ref] :as ref}]
                        (let [value (resolve-template-ref blocks ref)
                              new-str (str/replace result-str full-ref (if (nil? value) "" (str value)))]
-                         (js/console.log "[TEMPLATE] Replacing" full-ref "with" value "=>" new-str)
+                         ;; (js/console.log "[TEMPLATE] Replacing" full-ref "with" value "=>" new-str)
                          new-str))
                      template-str
-                     refs)
-          _ (js/console.log "[TEMPLATE] After replacements:" resolved)]
+                     refs)]
+          ;; (js/console.log "[TEMPLATE] After replacements:" resolved)
       ;; Second pass - clean up URL parameters
       (let [;; Match timestamps with or without milliseconds and Z
             with-at-fix (str/replace resolved 
                                      #"&(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)" 
                                      "&at=$1")]
         (when (not= resolved with-at-fix)
-          (js/console.log "[TEMPLATE] Fixed missing at= parameter:" resolved "->" with-at-fix))
+          ;; (js/console.log "[TEMPLATE] Fixed missing at= parameter:" resolved "->" with-at-fix)
+          )
         (-> with-at-fix
           ;; Remove empty parameters that come after other parameters
           ;; Match &param= when followed by & or end of string

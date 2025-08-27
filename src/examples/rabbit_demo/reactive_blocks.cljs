@@ -4,7 +4,8 @@
             [reactor.sql-client :as sql]
             [reagent.core :as reagent]
             [clojure.string :as str]
-            [examples.rabbit-demo.template-resolver :as resolver]))
+            [examples.rabbit-demo.template-resolver :as resolver]
+            [examples.rabbit-demo.themes :as themes]))
 
 (defonce block-subscriptions (atom {}))
 (defonce block-results (reagent/atom {}))
@@ -150,7 +151,8 @@
            {:value (or executed-sql sql "")
             :placeholder "Enter SQL query..."
             :style (when executed-sql
-                     {:background "rgba(0,255,159,0.05)"
+                     {:background (str (themes/get-primary-color) "50")
+                      ;;"rgba(0,255,159,0.05)"
                       :border-color "#00ff9f"})
             :on-change (fn [e]
                         (let [new-sql (.. e -target -value)]
@@ -163,12 +165,12 @@
          
          ;; Show time travel indicator when active
          (when (and executed-sql (not= executed-sql sql))
-           [:div.time-travel-indicator {:style {:background "rgba(0,255,159,0.1)"
-                                                :border "1px solid rgba(0,255,159,0.3)"
+           [:div.time-travel-indicator {:style {:background (str (themes/get-primary-color) "10") ;"rgba(0,255,159,0.1)"
+                                                :border (str "1px solid " (themes/get-primary-color) "30") ; "1px solid rgba(0,255,159,0.3)"
                                                 :padding "4px 8px"
                                                 :margin "5px 0"
                                                 :font-size "10px"
-                                                :font-family "'JetBrains Mono', monospace"
+                                                :font-family (themes/get-font-family :monospace)
                                                 :color "#00ff9f"
                                                 :display "flex"
                                                 :align-items "center"
@@ -185,14 +187,16 @@
                     [:table
                      [:thead
                       [:tr
-                       (for [col (keys (first results))]
-                         ^{:key col} [:th (name col)])]]
+                       (doall
+                        (for [col (keys (first results))]
+                          ^{:key col} [:th (name col)]))]]
                      [:tbody
-                      (for [row results]
-                        ^{:key (hash row)}
-                        [:tr
-                         (for [[k v] row]
-                           ^{:key k} [:td (str v)])])]]]
+                      (doall
+                       (for [row results]
+                         ^{:key (hash row)}
+                         [:tr
+                          (for [[k v] row]
+                            ^{:key k} [:td (str v)])]))]]]
             :else [:div.no-results "No results"])]])})))
 
 (defn handle-sql-exec!

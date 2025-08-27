@@ -157,6 +157,27 @@
                          "Access-Control-Allow-Origin" "*"}
                 :body (json/generate-string {:error "Missing session_id or timestamp"})}))
            
+           ;; Serve individual theme files (dynamic path)
+           (clojure.string/starts-with? path "/api/themes/")
+           (let [theme-name (last (clojure.string/split path #"/"))]
+             (try
+               (let [theme-file (clojure.java.io/file "themes" theme-name)]
+                 (if (.exists theme-file)
+                   {:status 200
+                    :headers {"Content-Type" "application/edn"
+                             "Access-Control-Allow-Origin" "*"}
+                    :body (slurp theme-file)}
+                   {:status 404
+                    :headers {"Content-Type" "application/json"
+                             "Access-Control-Allow-Origin" "*"}
+                    :body (json/generate-string {:error "Theme not found"})}))
+               (catch Exception e
+                 (log/error e "Failed to load theme:" theme-name)
+                 {:status 500
+                  :headers {"Content-Type" "application/json"
+                           "Access-Control-Allow-Origin" "*"}
+                  :body (json/generate-string {:error (str "Failed to load theme: " (.getMessage e))})})))
+           
            ;; Load snapshot by ID (dynamic path)
            (clojure.string/starts-with? path "/api/snapshot/")
            (let [snapshot-id (last (clojure.string/split path #"/"))
@@ -665,6 +686,35 @@
               (add-watch session-atom ::sse
                          (fn [_ _ _ new-state]
                            (http/send! channel (str "data: " (json/generate-string new-state) "\n\n") false)))))
+          
+          ;; Theme endpoints for rabbit demo
+          "/api/themes"
+          (case method
+            :get
+            ;; Return list of available theme files
+            (try
+              (let [themes-dir (clojure.java.io/file "themes")
+                    theme-files (when (.exists themes-dir)
+                                 (->> (.listFiles themes-dir)
+                                      (filter #(.endsWith (.getName %) ".edn"))
+                                      (map #(.getName %))
+                                      (sort)))]
+                {:status 200
+                 :headers {"Content-Type" "application/json"
+                          "Access-Control-Allow-Origin" "*"}
+                 :body (json/generate-string theme-files)})
+              (catch Exception e
+                (log/error e "Failed to list themes")
+                {:status 500
+                 :headers {"Content-Type" "application/json"
+                          "Access-Control-Allow-Origin" "*"}
+                 :body (json/generate-string {:error (str "Failed to list themes: " (.getMessage e))})}))
+            
+            ;; Default for other methods
+            {:status 405
+             :headers {"Content-Type" "application/json"
+                      "Access-Control-Allow-Origin" "*"}
+             :body (json/generate-string {:error "Method not allowed"})})
           
           ;; Fall back to base handler
           (base-handler req)))))))))

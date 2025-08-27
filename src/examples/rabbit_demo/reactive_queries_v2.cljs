@@ -17,7 +17,7 @@
 (defn execute-block-query!
   "Execute a SQL query for a block with reactive subscription"
   [block-id sql & [params as-of]]
-  (js/console.log "[RQ-V2] Executing query for block" block-id)
+  ;; (js/console.log "[RQ-V2] Executing query for block" block-id)
   
   ;; Check if we already have a subscription for this exact query
   (let [existing-sub (get @block-subscriptions block-id)]
@@ -25,7 +25,7 @@
                (= (:sql existing-sub) sql)
                (= (:params existing-sub) params)
                (= (:as-of existing-sub) as-of))
-      (js/console.log "[RQ-V2] Reusing existing subscription for block" block-id)
+      ;; (js/console.log "[RQ-V2] Reusing existing subscription for block" block-id)
       ;; Just trigger a refresh of the existing subscription
       (when-let [result-atom (:result-atom existing-sub)]
         ;; The subscription is already active, just return
@@ -33,7 +33,7 @@
   
   ;; Clear old subscription if it exists
   (when-let [old-sub (get @block-subscriptions block-id)]
-    (js/console.log "[RQ-V2] Clearing old subscription for block" block-id)
+    ;; (js/console.log "[RQ-V2] Clearing old subscription for block" block-id)
     (when-let [result-atom (:result-atom old-sub)]
       (remove-watch result-atom (keyword (str "block-" block-id)))))
   
