@@ -35,6 +35,22 @@
   (fn [db _]
     (get-in db [:canvas :blocks] {})))
 
+;; Subscribe to UI settings separately from canvas to avoid triggering block updates
+(r/reg-sub :ui-settings-db
+  (fn [db _]
+    (get db :ui-settings {:monaco-font-size 12})))
+
+;; Simple client-side atom for UI settings - will be synced with server
+(defonce ui-settings (reagent/atom {:monaco-font-size 12}))
+
+;; Watch UI settings changes from server and sync to local atom
+(defonce ui-settings-watcher
+  (let [ui-settings-sub (r/subscribe [:ui-settings-db])]
+    (add-watch ui-settings-sub ::ui-sync
+      (fn [_ _ _ new-ui]
+        (when new-ui
+          (reset! ui-settings new-ui))))))
+
 ;; ============= Dragging & Resizing State =============
 
 (defonce drag-state (reagent/atom nil))
@@ -159,35 +175,92 @@
 
 ;; ============= Block Components =============
 
+;; ============= Query Management - Completely separate from rendering =============
+
+;; Track if we've done initial load
+(defonce initial-queries-loaded (atom false))
+
+;; Watch for blocks that need queries and manage them separately
+(defonce blocks-query-watcher
+  (let [blocks-sub (r/subscribe [:blocks])
+        ;; Helper to initialize all queries
+        initialize-all-queries! (fn [blocks]
+                                  (js/console.log "[QUERY-MANAGER] Initializing all query blocks...")
+                                  (doseq [[id block] blocks]
+                                    (when (and (= (:type block) :query) (:sql block))
+                                      (js/console.log "[QUERY-MANAGER] Initial load - starting query for block" id)
+                                      (rq/execute-block-query! id (:sql block) nil nil)))
+                                  (reset! initial-queries-loaded true))]
+    
+    ;; Initial load - wait for app to stabilize then run all queries
+    (js/setTimeout
+     (fn []
+       (when-not @initial-queries-loaded
+         (let [current-blocks @blocks-sub]
+           (when (seq current-blocks)
+             (js/console.log "[QUERY-MANAGER] Initial page load - starting queries after delay")
+             (initialize-all-queries! current-blocks)))))
+     500) ; 500ms delay to let everything settle
+    
+    ;; Watch for changes
+    (add-watch blocks-sub ::query-manager
+               (fn [_ _ old-blocks new-blocks]
+                 ;; If this is the first time we have blocks and we haven't initialized
+                 (when (and (empty? old-blocks) 
+                           (not-empty new-blocks)
+                           (not @initial-queries-loaded))
+                   (js/console.log "[QUERY-MANAGER] First blocks loaded - initializing after delay")
+                   (js/setTimeout 
+                    #(initialize-all-queries! new-blocks)
+                    300))
+                 
+                 ;; Normal change detection
+                 (when @initial-queries-loaded
+                   ;; Check each block to see if it needs a query
+                   (doseq [[id block] new-blocks]
+                     (when (= (:type block) :query)
+                       (let [sql (:sql block)
+                             old-block (get old-blocks id)
+                             old-sql (:sql old-block)]
+                         (cond
+                           ;; New block with SQL - initialize query
+                           (and sql (nil? old-block))
+                           (do
+                             (js/console.log "[QUERY-MANAGER] New query block" id "- initializing")
+                             (rq/execute-block-query! id sql nil nil))
+                           
+                           ;; SQL changed - update query
+                           (and sql old-sql (not= sql old-sql))
+                           (do
+                             (js/console.log "[QUERY-MANAGER] SQL changed for block" id)
+                             (rq/execute-block-query! id sql nil nil))
+                           
+                           ;; Block exists, query should already be running
+                           (and sql old-sql (= sql old-sql))
+                           nil)))) ; Do nothing - query already running
+                   
+                   ;; Clean up removed blocks
+                   (doseq [[id old-block] old-blocks]
+                     (when (and (= (:type old-block) :query)
+                                (nil? (get new-blocks id)))
+                       (js/console.log "[QUERY-MANAGER] Block removed" id "- unsubscribing")
+                       (rq/unsubscribe-block! id))))))))
+
 (defn query-block [{:keys [id position size sql as-of] :as block}]
   (let [;; Local state for SQL editing - prevents re-renders while typing
         local-sql (reagent/atom sql)]
+    
+    ;; NO QUERY EXECUTION HERE - just rendering!
+    ;; Queries are managed by the blocks-query-watcher above
+    
     (reagent/create-class
-     {:component-did-mount
-      (fn []
-        (when sql
-          ;; Initialize subscription on mount
-          (js/console.log "[QUERY-BLOCK] Initializing subscription for block" id "with SQL:" sql)
-          (rq/execute-block-query! id sql nil nil)))
-      
-      :component-did-update
-      (fn [this [_ old-props]]
-        (let [new-props (reagent/props this)]
-          ;; Update local SQL if props change (e.g., from undo/redo or external update)
-          (when (and (:sql new-props)
-                    (not= (:sql old-props) (:sql new-props)))
-            (reset! local-sql (:sql new-props))
-            (js/console.log "[QUERY-BLOCK] SQL changed externally for block" (:id new-props) "re-subscribing")
-            (rq/execute-block-query! (:id new-props) (:sql new-props) nil nil))))
-      
-      :component-will-unmount
-      (fn []
-        (rq/unsubscribe-block! id))
-      
-      :reagent-render
+     {:reagent-render
       (fn [{:keys [id position size sql as-of] :as block}]
         (let [;; Get results from reactive-queries module - including executed-sql
               {:keys [results error loading executed-sql]} (rq/get-block-results id)
+            ;; Get UI settings - deref the atom directly for reactivity
+            ui-settings-val @ui-settings
+            font-size (or (:monaco-font-size ui-settings-val) 12)
             ;; Use local position only while dragging, otherwise use state position
             is-dragging? (= id (:block-id @drag-state))
             is-resizing? (= id (:block-id @resize-state))
@@ -271,6 +344,74 @@
                         :font-size "20px"
                         :line-height "20px"}}
        "×"]]
+     ;; Placeholder area with font size controls
+     [:div {:style {:display "flex"
+                    :justify-content "space-between"
+                    :align-items "center"
+                    :margin-bottom "5px"
+                    :min-height "20px"}}
+      ;; Time travel indicator (left side)
+      (when (and executed-sql (not= executed-sql sql))
+        [:div {:style {:display "flex"
+                       :align-items "center"
+                       :gap "5px"
+                       :padding "2px 8px"
+                       :background (str (themes/get-primary-color) "1A")
+                       :border (str "1px solid " (themes/get-primary-color) "33")
+                       :border-radius "2px"
+                       :font-size "10px"
+                       :font-family (themes/get-font-family :monospace)
+                       :color (themes/get-primary-color)
+                       :cursor "pointer"}
+               :on-click (when (and executed-sql (not= executed-sql sql))
+                          (fn [e]
+                            (.stopPropagation e)
+                            ;; Reset to NOW - re-execute query without time travel
+                            (let [current-sql @local-sql]
+                              (rq/execute-block-query! id current-sql nil nil)
+                              ;; Reset time travel slider to NOW position
+                              (tt/reset-time-travel! id current-sql))))}
+         [:span "⏰"]
+         [:span "TIME TRAVEL MODE - Click to return to NOW"]])
+      ;; Font size controls (right side)
+      [:div {:style {:display "flex"
+                     :align-items "center"
+                     :gap "2px"}}
+       [:button {:style {:background "transparent"
+                        :border (str "1px solid " (themes/get-primary-color) "33")
+                        :color (themes/get-primary-color)
+                        :padding "0 6px"
+                        :font-size "12px"
+                        :line-height "16px"
+                        :border-radius "2px"
+                        :cursor "pointer"}
+                :on-click (fn [e]
+                           (.stopPropagation e)
+                           (let [new-size (max 8 (dec font-size))
+                                 new-ui (assoc @ui-settings :monaco-font-size new-size)]
+                             (swap! ui-settings assoc :monaco-font-size new-size)
+                             (r/dispatch! [:update-canvas-ui new-ui])))}
+        "−"]
+       [:span {:style {:padding "0 4px"
+                      :font-size "10px"
+                      :color (themes/get-primary-color)
+                      :font-family (themes/get-font-family :monospace)}}
+        (str font-size "px")]
+       [:button {:style {:background "transparent"
+                        :border (str "1px solid " (themes/get-primary-color) "33")
+                        :color (themes/get-primary-color)
+                        :padding "0 6px"
+                        :font-size "12px"
+                        :line-height "16px"
+                        :border-radius "2px"
+                        :cursor "pointer"}
+                :on-click (fn [e]
+                           (.stopPropagation e)
+                           (let [new-size (min 24 (inc font-size))
+                                 new-ui (assoc @ui-settings :monaco-font-size new-size)]
+                             (swap! ui-settings assoc :monaco-font-size new-size)
+                             (r/dispatch! [:update-canvas-ui new-ui])))}
+        "+"]]]
      ;; SQL Editor with Execute button to the right
      [:div {:style {:margin "10px 0"
                     :display "flex"
@@ -324,6 +465,7 @@
           :on-change #(reset! local-sql %)  ;; Only update local state while typing
           :height "100px"
           :theme "vs-dark"
+          :font-size font-size
           :options (when executed-sql
                      {:readOnly false  ;; Keep editable but show visual indicator
                       :lineDecorationsWidth 10
@@ -1667,6 +1809,7 @@
                          :cursor "se-resize"}
                   :on-mouse-down #(start-resize! id %)}]]]))})))
 
+
 (defn render-block [block]
   ;(js/console.log "Rendering block:" (clj->js block) "Type:" (:type block))
   (let [block-type (if (string? (:type block))
@@ -1917,6 +2060,7 @@
        ;; Connection lines SVG
        (let [local-pos @local-positions
              local-sz @local-sizes
+             ;; Only deref blocks here for connection lines
              all-blocks @blocks
              ;; Get implicit template connections
              implicit-connections (resolver/get-implicit-connections)
@@ -2808,8 +2952,8 @@
     (fn []
       ;; Only dispatch init-rabbit for truly new/empty sessions
       (let [current-state @(r/subscribe [:get []])]
-        (when-not (:canvas current-state)
-          (js/console.log "No canvas found, initializing...")
+        (when-not (or (:canvas current-state) (:ui-settings current-state))
+          (js/console.log "No canvas or UI settings found, initializing...")
           (r/dispatch! [:init-rabbit])))
       ;; Always get history info for time travel
       (r/get-history-info!))

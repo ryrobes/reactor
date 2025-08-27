@@ -7,12 +7,12 @@
    {:text-shadow "0 0 15px #00ff3b22"
     :border-radius "2px"
     :filter "none"
-    :background-color "#00000099"
-    :backdrop-filter "brightness(60%) contrast(660%)"
+    :background-color "#00000059"
+    :backdrop-filter "brightness(60%) contrast(66%)"
     :border "1px solid #1a2f1a"
     :border-top "1px solid #00ff3b44"
     :box-shadow
-      "inset 0 0 30px #00000099,                                        inset 0 0 2px #00ff3b22,                                       0 1px 3px #00000088"}
+      "inset 0 0 30px #00000089,                                        inset 0 0 2px #00ff3b22,                                       0 1px 3px #00000088"}
  :vega-defaults
    {:mark    {:font "JetBrains Mono" :stroke "#00ff3b" :color "#00ff3b65"}
     :legend  {:labelFont  "JetBrains Mono"
@@ -96,7 +96,7 @@
                "date"        "#afffbe"}
  :editor-grid-selected-font-color "#0a0f0a"
  :monospaced-font "JetBrains Mono"
- :editor-grid-selected-background-color "#00ff3b"
+ :editor-grid-selected-background-color "#00ff3b99"
  :_vega-default-color-scheme {:scheme "custom"}
  :nivo-defaults
    {:font-family "JetBrains Mono"

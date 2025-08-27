@@ -165,6 +165,7 @@
             justify-content: center;
             align-items: center;
             height: 100vh;
+            font-family: 'Outrun future', 'Roboto Mono', 'JetBrains Mono', monospace;
             background: #0a0a0a;
             position: relative;
             overflow: hidden;
@@ -182,12 +183,13 @@
         }
 
         .loading h2 {
-            color: #00ff9f;
-            font-family: 'Roboto Mono', 'JetBrains Mono', monospace;
-            font-weight: 300;
-            text-transform: uppercase;
+            color: cyan;
+            font-family: 'Outrun future', 'Roboto Mono', 'JetBrains Mono', monospace;
+            font-weight: 700;
+            font-size: 50px;
+            /* text-transform: uppercase; */
             letter-spacing: 3px;
-            animation: pulse 1.5s ease-in-out infinite;
+            /* animation: pulse 1.5s ease-in-out infinite; */
             text-shadow: 0 0 20px rgba(0, 255, 159, 0.5);
         }
 
@@ -249,7 +251,8 @@
 <body>
     <div id="app">
         <div class="loading">
-            <h2>INITIALIZING RABBIT//SQL_BROWSER</h2>
+            <h2>
+                INITIALIZING RABBIT//<br/>SQL_BROWSER / REACTOR_DEBUGGER</h2>
         </div>
     </div>
     <script src="/js/rabbit.js"></script>

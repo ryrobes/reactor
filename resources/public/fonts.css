@@ -47,6 +47,14 @@
     font-style: normal;
 }
 
+@font-face {
+    font-display: swap;
+    font-family: 'Outrun future';
+    src: url('fonts/Outrun-future-bold.otf') format('opentype');
+    font-weight: bold;
+    font-style: normal;
+}
+
 
 @font-face {
     font-display: swap;

@@ -7,8 +7,11 @@
             [examples.rabbit-demo.themes :as themes]
             [examples.rabbit-demo.monaco :as monaco]))
 
-(def base-font "Ubuntu")
-(def base-single-color "magenta")
+(defn base-font [] 
+  (or (themes/get-theme-property :base-font)
+      (themes/get-theme-property :monospaced-font)
+      "Ubuntu"))
+(defn base-single-color [] (themes/get-chart-color))
 
 (defn format-edn
   "Format EDN data structure to a pretty-printed string"
@@ -16,67 +19,67 @@
   (with-out-str (pprint/pprint data)))
 
 ;; Default Vega-Lite spec template
-(def default-vega-spec
+(defn default-vega-spec []
   {:$schema "https://vega.github.io/schema/vega-lite/v5.json"
    :description "A simple bar chart"
    :mark {:type "bar"
-          :color "#ff4f99"}  ;; Pink color to match the chart block theme
+          :color (themes/get-chart-color)}
    :encoding {:x {:field "x-field"
                   :type "nominal"
                   :title "X Axis"
-                  :axis {:labelColor "#ff4f99"
-                         :titleColor "#ff006e"
-                         :gridColor "rgba(255, 0, 110, 0.1)"
-                         :domainColor "#ff006e"
-                         :tickColor "#ff006e"}}
+                  :axis {:labelColor (themes/get-chart-color)
+                         :titleColor (themes/get-chart-color)
+                         :gridColor (str (themes/get-chart-color) "1a")
+                         :domainColor (themes/get-chart-color)
+                         :tickColor (themes/get-chart-color)}}
               ;:color {:value 1}
               :y {:field "y-field"
                   :type "quantitative"
                   :aggregate "sum"
                   :title "Y Axis"
-                  :axis {:labelColor "#ff4f99"
-                         :titleColor "#ff006e"
-                         :gridColor "rgba(255, 0, 110, 0.1)"
-                         :domainColor "#ff006e"
-                         :tickColor "#ff006e"}}}
+                  :axis {:labelColor (themes/get-chart-color)
+                         :titleColor (themes/get-chart-color)
+                         :gridColor (str (themes/get-chart-color) "1a")
+                         :domainColor (themes/get-chart-color)
+                         :tickColor (themes/get-chart-color)}}}
    :width "container"
    :height "container"
    :autosize {:type "fit" :contains "padding"}
    :background "transparent"  ;; Transparent background
    :config {:view   {:stroke "transparent"}
-            :axis   {:domainColor "#ffffff22"
+            :axis   {:domainColor (str (themes/get-primary-color) "33")
                      :grid        true
-                     :labelColor  "#ffffff88"
-                     :titleFont   base-font
-                     :axisFont    base-font
-                     :font        base-font
-                     :titleColor  "#ffffff99"
-                     :labelFont   base-font
+                     :labelColor  (str (themes/get-primary-color) "88")
+                     :titleFont   (base-font)
+                     :axisFont    (base-font)
+                     :font        (base-font)
+                     :titleColor  (str (themes/get-primary-color) "99")
+                     :labelFont   (base-font)
                      :domain      false
-                     :gridColor   "#ffffff22"
-                     :tickColor   "#ffffff22"
+                     :gridColor   (str (themes/get-primary-color) "33")
+                     :tickColor   (str (themes/get-primary-color) "33")
                      :labelFontSize 10
                      :titleFontSize 11}
-            :legend {:labelFont  base-font
-                     :legendFont base-font
-                     :labelColor "#ffffff99"
-                     :titleColor "#ffffff99"
-                     :stroke     "#ffffff99"
-                     :titleFont  base-font}
-            :header {:labelFont base-font
-                     :titleFont base-font
-                     :titleColor "#ffffff99"}
-            :mark {:color base-single-color
-                   :font base-font}
-            :point {:color base-single-color}
-            :area {:fill "#f0f0f0"
-                   :stroke "#ffffff"
+            :legend {:labelFont  (base-font)
+                     :legendFont (base-font)
+                     :labelColor (str (themes/get-primary-color) "99")
+                     :titleColor (str (themes/get-primary-color) "99")
+                     :stroke     (str (themes/get-primary-color) "99")
+                     :titleFont  (base-font)}
+            :header {:labelFont (base-font)
+                     :titleFont (base-font)
+                     :titleColor (str (themes/get-primary-color) "99")}
+            :mark {:color (base-single-color)
+                   :font (base-font)}
+            :point {:color (base-single-color)}
+            :area {:fill (str (themes/get-chart-color) "33")
+                   :stroke (themes/get-chart-color)
                    :strokeWidth 1}
-            :title  {:font         base-font
-                     :subtitleFont base-font
-                     :labelFont    base-font
-                     :titleFont    base-font
-                     :titleColor   "#ffffff99"}}})
+            :title  {:font         (base-font)
+                     :subtitleFont (base-font)
+                     :labelFont    (base-font)
+                     :titleFont    (base-font)
+                     :titleColor   (str (themes/get-primary-color) "99")}}})
 
 (defn render-vega-chart!
   "Render a Vega-Lite chart into a DOM element"
@@ -87,9 +90,56 @@
      (try
        ;; Clear any existing chart content first to avoid duplicates
        (set! (.-innerHTML elem) "")
-       ;; Convert EDN spec to JS object, ensuring data is included
-       ;; Override height with calculated pixel value if provided
-       (let [js-spec (clj->js (cond-> (assoc spec :data {:values (or data [])})
+       ;; Update spec with current theme colors
+       (let [;; Get theme-specific vega defaults if they exist
+             theme-vega-defaults (themes/get-theme-property :vega-defaults)
+             updated-spec (-> spec
+                             ;; Merge theme vega-defaults into config if they exist
+                             (update :config (fn [config]
+                                             (if theme-vega-defaults
+                                               (merge-with merge config theme-vega-defaults)
+                                               config)))
+                             ;; Update mark color if it exists (override theme defaults with dynamic color)
+                             (update :mark (fn [mark]
+                                           (if (map? mark)
+                                             (assoc mark :color (themes/get-chart-color))
+                                             {:type mark :color (themes/get-chart-color)})))
+                             ;; Update config colors with current theme (these override vega-defaults)
+                             (assoc-in [:config :mark :color] (themes/get-chart-color))
+                             (assoc-in [:config :point :color] (themes/get-chart-color))
+                             (assoc-in [:config :area :fill] (str (themes/get-chart-color) "33"))
+                             (assoc-in [:config :area :stroke] (themes/get-chart-color))
+                             ;; Update axis colors (merge with theme defaults then override with dynamic colors)
+                             (update-in [:config :axis] merge
+                                      {:labelColor (str (themes/get-primary-color) "88")
+                                       :titleColor (str (themes/get-primary-color) "99")
+                                       :gridColor (str (themes/get-primary-color) "33")
+                                       :domainColor (str (themes/get-primary-color) "33")
+                                       :tickColor (str (themes/get-primary-color) "33")})
+                             ;; Update encoding axis colors if they exist
+                             (update-in [:encoding :x :axis] #(when % 
+                                                               (merge % {:labelColor (themes/get-chart-color)
+                                                                        :titleColor (themes/get-chart-color)
+                                                                        :gridColor (str (themes/get-chart-color) "1a")
+                                                                        :domainColor (themes/get-chart-color)
+                                                                        :tickColor (themes/get-chart-color)})))
+                             (update-in [:encoding :y :axis] #(when %
+                                                               (merge % {:labelColor (themes/get-chart-color)
+                                                                        :titleColor (themes/get-chart-color)
+                                                                        :gridColor (str (themes/get-chart-color) "1a")
+                                                                        :domainColor (themes/get-chart-color)
+                                                                        :tickColor (themes/get-chart-color)}))))
+             ;; Convert EDN spec to JS object, ensuring data is included
+             ;; Override height with calculated pixel value if provided
+             ;; Apply theme's color scheme if there's a color encoding
+            theme-color-scheme (themes/get-theme-property :vega-default-color-scheme)
+            final-spec (if (and theme-color-scheme 
+                               (get-in updated-spec [:encoding :color]))
+                        (assoc-in updated-spec [:encoding :color :scale] 
+                                 (or (get-in updated-spec [:encoding :color :scale]) 
+                                     theme-color-scheme))
+                        updated-spec)
+            js-spec (clj->js (cond-> (assoc final-spec :data {:values (or data [])})
                                 height (assoc :height height)
                                 ;; Keep width as container for responsiveness
                                 true (assoc :width "container")))]
@@ -127,16 +177,16 @@
                    :align-items "center"
                    :gap "10px"
                    :margin "5px 0"}}
-     [:label {:style {:color "#ff006e"
+     [:label {:style {:color (themes/get-chart-color)
                       :font-family fonts ;"'JetBrains Mono', monospace"
                       :font-size "10px"
                       :text-transform "uppercase"
                       :min-width "80px"}}
       label]
      [:select {:style {:flex 1
-                       :background "rgba(0,0,0,0.3)"
-                       :color "#ff4f99"
-                       :border "1px solid rgba(255,0,110,0.3)"
+                       :background (str (themes/get-primary-color) "0d")
+                       :color (themes/get-chart-color)
+                       :border (str "1px solid " (themes/get-chart-color) "4d")
                        :border-radius "2px"
                        :padding "4px 8px"
                        :font-family fonts ; "'JetBrains Mono', monospace"
@@ -159,16 +209,16 @@
                    :align-items "center"
                    :gap "10px"
                    :margin "5px 0"}}
-     [:label {:style {:color "#ff006e"
+     [:label {:style {:color (themes/get-chart-color)
                       :font-family fonts ;"'JetBrains Mono', monospace"
                       :font-size "10px"
                       :text-transform "uppercase"
                       :min-width "80px"}}
       "Chart Type:"]
      [:select {:style {:flex 1
-                       :background "rgba(0,0,0,0.3)"
-                       :color "#ff4f99"
-                       :border "1px solid rgba(255,0,110,0.3)"
+                       :background (str (themes/get-primary-color) "0d")
+                       :color (themes/get-chart-color)
+                       :border (str "1px solid " (themes/get-chart-color) "4d")
                        :border-radius "2px"
                        :padding "4px 8px"
                        :font-family fonts ;"'JetBrains Mono', monospace"
@@ -194,7 +244,7 @@
         edit-mode? (reagent/atom (boolean (:edit-mode config)))
         collapsed? (reagent/atom (boolean (:collapsed config)))
         ;; Parse existing config or use defaults
-        current-config (reagent/atom (merge default-vega-spec (:vega-spec config)))
+        current-config (reagent/atom (merge (default-vega-spec) (:vega-spec config)))
         edn-text (reagent/atom (format-edn @current-config))
         ;; Simple mode selections
         x-field (reagent/atom (get-in @current-config [:encoding :x :field] ""))
@@ -348,7 +398,7 @@
                         :justify-content "space-between"
                         :margin-bottom "10px"
                         :padding "5px"
-                        :background "rgba(0,0,0,0.3)"
+                        :background (str (themes/get-primary-color) "0d")
                         :border-radius "4px"}}
           [:div {:style {:display "flex"
                          :gap "5px"
@@ -356,8 +406,8 @@
            ;; Collapse/expand button
            [:button {:style {:padding "4px 6px"
                             :background "transparent"
-                            :color "#ff006e"
-                            :border "1px solid #ff006e"
+                            :color (themes/get-chart-color)
+                            :border (str "1px solid " (themes/get-chart-color))
                             :border-radius "2px"
                             :cursor "pointer"
                             :font-family fonts ;"'JetBrains Mono', monospace"
@@ -381,9 +431,9 @@
            [:button {:style {:padding "4px 8px"
                             :background (if @edit-mode? 
                                          "transparent"
-                                         "linear-gradient(90deg, #ff006e 0%, #ff4f99 100%)")
-                            :color (if @edit-mode? "#ff006e" "#0a0a0a")
-                            :border "1px solid #ff006e"
+                                         (str "linear-gradient(90deg, " (themes/get-chart-color) " 0%, " (themes/get-tertiary-color) " 100%)"))
+                            :color (if @edit-mode? (themes/get-chart-color) "#0a0a0a")
+                            :border (str "1px solid " (themes/get-chart-color))
                             :border-radius "2px 0 0 2px"
                             :cursor "pointer"
                             :font-family fonts ;"'JetBrains Mono', monospace"
@@ -407,10 +457,10 @@
             "SIMPLE"]
            [:button {:style {:padding "4px 8px"
                             :background (if @edit-mode?
-                                         "linear-gradient(90deg, #ff006e 0%, #ff4f99 100%)"
+                                         (str "linear-gradient(90deg, " (themes/get-chart-color) " 0%, " (themes/get-tertiary-color) " 100%)")
                                          "transparent")
-                            :color (if @edit-mode? "#0a0a0a" "#ff006e")
-                            :border "1px solid #ff006e"
+                            :color (if @edit-mode? "#0a0a0a" (themes/get-chart-color))
+                            :border (str "1px solid " (themes/get-chart-color))
                             :border-radius "0 2px 2px 0"
                             :cursor "pointer"
                             :font-family fonts ;"'JetBrains Mono', monospace"
@@ -424,7 +474,7 @@
                                                     :edit-mode true})))}
             "EDIT"]]
           (when (seq data)
-            [:span {:style {:color "#ff4f99"
+            [:span {:style {:color (themes/get-chart-color)
                            :font-family fonts ;"'JetBrains Mono', monospace"
                            :font-size "10px"
                            :opacity 0.7}}
@@ -436,7 +486,7 @@
            [:div {:key "collapsed-chart"
                   :id (str chart-elem-id-base "-collapsed")
                   :style {:flex 1
-                         :background "rgba(0,0,0,0.3)"
+                         :background (str (themes/get-primary-color) "0d")
                          :borderRadius "4px"
                          :padding "10px"
                          :height (str (or (calculate-chart-height) 300) "px")
@@ -451,7 +501,7 @@
                             :display "flex"
                             :flex-direction "column"}}
                [:div {:style {:flex 1
-                             :border "1px solid rgba(255,0,110,0.3)"
+                             :border (str "1px solid " (themes/get-chart-color) "4d")
                              :border-radius "4px"
                              :overflow "hidden"}}
                 [monaco/edn-editor
@@ -460,7 +510,7 @@
                   :height "100%"}]]  ;; Will use rabbit-theme by default
                [:button {:style {:margin-top "5px"
                                 :padding "5px 10px"
-                                :background "linear-gradient(90deg, #ff006e 0%, #ff4f99 100%)"
+                                :background (str "linear-gradient(90deg, " (themes/get-chart-color) " 0%, " (themes/get-tertiary-color) " 100%)")
                                 :color "#0a0a0a"
                                 :border "none"
                                 :border-radius "2px"
@@ -489,7 +539,7 @@
                ;; Show controls if we have data
                (if (and data (seq data))
                  [:div {:style {:padding "10px"
-                               :background "rgba(0,0,0,0.3)"
+                               :background (str (themes/get-primary-color) "0d")
                                :border-radius "4px"
                                :margin-bottom "10px"}}
                   [chart-type-selector 
@@ -497,7 +547,7 @@
                     :on-change (fn [val]
                                 (reset! chart-type val)
                                 (let [spec (-> @current-config
-                                             (assoc :mark {:type val :color "#ff4f99"})
+                                             (assoc :mark {:type val :color (themes/get-chart-color)})
                                              ;; Add/remove aggregate based on chart type
                                              (cond-> 
                                                (contains? #{"bar" "area"} val)
@@ -555,18 +605,18 @@
                                   (render-vega-chart! (get-chart-elem-id) spec data (calculate-chart-height))))}]]
                  ;; No data yet but connected
                  [:div {:style {:padding "10px"
-                               :background "rgba(0,0,0,0.3)"
+                               :background (str (themes/get-primary-color) "0d")
                                :border-radius "4px"
                                :margin-bottom "10px"
                                :text-align "center"
-                               :color "#ff4f99"
+                               :color (themes/get-chart-color)
                                :font-family "'JetBrains Mono', monospace"
                                :opacity 0.7}}
                   "Waiting for query results..."])
                ;; Chart container 
                [:div {:key "expanded-chart"
                       :id (str chart-elem-id-base "-expanded")
-                      :style {:background "rgba(0,0,0,0.3)"
+                      :style {:background (str (themes/get-primary-color) "0d")
                              :borderRadius "4px"
                              :padding "10px"
                              :height (str (calculate-chart-height) "px")

@@ -10,6 +10,8 @@
 (defonce block-results (reagent/atom {}))
 ;; Hook to be called when queries execute (for time travel refresh)
 (defonce query-execution-hooks (atom {}))
+;; Track the SQL for each block to prevent unnecessary re-execution
+(defonce block-sql-cache (atom {}))
 
 (defn get-block-results
   "Get the current results for a block"
@@ -17,6 +19,11 @@
   (get @block-results (if (keyword? block-id) 
                         block-id 
                         (keyword (cstr/replace (str block-id) ":" ""))))) ;; ensure kw
+
+(defn has-active-subscription?
+  "Check if a block has an active subscription"
+  [block-id]
+  (contains? @block-subscriptions block-id))
 
 (defn register-query-hook!
   "Register a hook to be called when a query executes"
@@ -77,21 +84,34 @@
 (defn execute-block-query!
   "Execute a SQL query for a block with reactive subscription"
   [block-id sql & [params as-of]]
-  ;; Clear old results and show loading
-  (swap! block-results assoc block-id {:loading true})
-  
-  ;; Log the actual SQL being executed
-  (when as-of
-    (js/console.log "[REACTIVE-QUERIES] Time travel query for block" block-id 
-                    "SQL:" sql "AS-OF:" as-of))
-  (when-not as-of
-    (js/console.log "[REACTIVE-QUERIES] Normal query (reactive) for block" block-id "SQL:" sql))
-  
-  ;; IMPORTANT: Always create a new subscription when changing temporal state
-  ;; This ensures that going back to NOW creates a fresh reactive subscription
-  (let [result-atom (subscribe-block-query! block-id sql params as-of)]
-    ;; The watcher will handle updating the results
-    result-atom))
+  ;; ALWAYS check if we have an active subscription with the same query
+  (let [cached-sql (get @block-sql-cache block-id)
+        has-subscription (get @block-subscriptions block-id)]
+    (if (and cached-sql 
+             (= cached-sql [sql params as-of])
+             has-subscription)
+      ;; Same query is already running, skip re-execution COMPLETELY
+      (do
+        (js/console.log "[REACTIVE-QUERIES] ✓ BLOCKED re-execution for block" block-id 
+                        "- already subscribed to this exact query")
+        ;; Return existing subscription
+        has-subscription)
+      ;; New or changed query, execute it
+      (do
+        (js/console.log "[REACTIVE-QUERIES] ✗ Executing query for block" block-id
+                        (if cached-sql 
+                          (str "- query changed from " cached-sql " to " [sql params as-of])
+                          "- first execution"))
+        ;; Update cache
+        (swap! block-sql-cache assoc block-id [sql params as-of])
+        ;; Clear old results and show loading
+        (swap! block-results assoc block-id {:loading true})
+        
+        ;; IMPORTANT: Always create a new subscription when changing temporal state
+        ;; This ensures that going back to NOW creates a fresh reactive subscription
+        (let [result-atom (subscribe-block-query! block-id sql params as-of)]
+          ;; The watcher will handle updating the results
+          result-atom)))))
 
 (defn unsubscribe-block!
   "Unsubscribe a block from its query"
@@ -102,7 +122,9 @@
     ;; Remove from subscriptions
     (swap! block-subscriptions dissoc block-id)
     ;; Clear results
-    (swap! block-results dissoc block-id)))
+    (swap! block-results dissoc block-id)
+    ;; Clear SQL cache
+    (swap! block-sql-cache dissoc block-id)))
 
 (defn unsubscribe-all!
   "Unsubscribe all blocks"

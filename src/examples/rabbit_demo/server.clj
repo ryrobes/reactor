@@ -234,6 +234,11 @@
                :resize-block (fn [db [id size]]
                               (assoc-in db [:canvas :blocks id :size] size))
                
+               :update-canvas-ui (fn [db [ui-settings]]
+                                  (println "UPDATE-CANVAS-UI:" ui-settings)
+                                  ;; Store UI settings separately from canvas to avoid triggering block updates
+                                  (assoc db :ui-settings ui-settings))
+               
                ;; SQL operations
                :execute-query (fn [db [block-id sql]]
                                ;; TODO: Execute SQL and store results
@@ -243,5 +248,8 @@
                :init-rabbit (fn [db _]
                              ;; If db already has canvas data, keep it (loaded from persistence)
                              (if (:canvas db)
-                               db  ;; Keep existing data completely
-                               {:canvas {:blocks {}}}))}))
+                               (if (:ui-settings db)
+                                 db  ;; Keep existing data completely including UI
+                                 (assoc db :ui-settings {:monaco-font-size 12}))  ;; Add default UI if missing
+                               {:canvas {:blocks {}}
+                                :ui-settings {:monaco-font-size 12}}))}))

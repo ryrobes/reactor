@@ -229,6 +229,79 @@
   ;; Always return primary for consistency
   (get-primary-color))
 
+(defn get-execute-color
+  "Get color for EXECUTE buttons - uses pop-2 or secondary"
+  []
+  (or (get-theme-property :pop-2)
+      (get-secondary-color)
+      "#ff8c00"))
+
+(defn get-chart-color
+  "Get color for chart blocks - uses pop-3 or tertiary"
+  []
+  (or (get-theme-property :pop-3)
+      (get-tertiary-color)
+      "#ff4f99"))
+
+(defn get-debug-color
+  "Get color for debug blocks - uses pop-4 or a calculated complementary"
+  []
+  (or (get-theme-property :pop-4)
+      (when-let [tree (get @current-theme :generated-tree)]
+        (:contrast-with-dominant tree))
+      "#9b59b6"))
+
+(defn get-error-color
+  "Get color for errors - uses pop-2 or red-ish variant"
+  []
+  (or (get-theme-property :pop-2)
+      (get-theme-property :error-color)
+      "#ff6b6b"))
+
+(defn get-warning-color
+  "Get color for warnings/highlights - uses pop-2 or gold variant"
+  []
+  (or (get-theme-property :pop-2)
+      (get-secondary-color)
+      "#ffd700"))
+
+(defn get-button-text-color
+  "Get contrasting text color for buttons - uses generated-tree for best visibility"
+  []
+  (or 
+    ;; Try to get from generated-tree for guaranteed contrast
+    (when-let [tree (get @current-theme :generated-tree)]
+      (:darkest tree))
+    ;; Fallback to theme's background color
+    (get-theme-property :editor-background-color)
+    (get-theme-property :base-block-color)
+    ;; Default to dark color
+    "#0a0a0a"))
+
+(defn get-high-contrast-color
+  "Get high contrast color for important UI elements - uses generated-tree"
+  []
+  (or
+    ;; Try generated-tree for best contrast
+    (when-let [tree (get @current-theme :generated-tree)]
+      (or (:most-contrasting tree)
+          (:most-contrasting-light tree)
+          (:brightest tree)))
+    ;; Fallback to primary color
+    (get-primary-color)))
+
+(defn get-data-type-color
+  "Get color for a specific data type - uses generated-tree data-colors if available"
+  [data-type]
+  (or
+    ;; Try generated-tree data-colors first
+    (when-let [tree (get @current-theme :generated-tree)]
+      (get-in tree [:data-colors (name data-type)]))
+    ;; Fallback to theme's data-colors
+    (get-in @current-theme [:data-colors (name data-type)])
+    ;; Default to primary color
+    (get-primary-color)))
+
 (defn get-font-family
   "Get font family for a given context - actually apply the fonts!"
   [context]
@@ -249,6 +322,15 @@
     ;; (js/console.log "[THEMES] Font for" (name context) ":" result "mono-font:" mono-font)
     result))
 
+(defn rgba-to-hex
+  "Convert rgba color to hex, or return as-is if already hex"
+  [color]
+  (cond
+    (nil? color) "#000000"
+    (clojure.string/starts-with? color "#") color
+    (clojure.string/starts-with? color "rgba") "#0a0a0a"  ; Default dark color for rgba
+    :else color))
+
 (defn create-monaco-theme
   "Create a Monaco editor theme from the current theme"
   []
@@ -257,10 +339,11 @@
         secondary (get-secondary-color)
         tertiary (get-tertiary-color)
         generated (get-generated-colors)
-        bg-color (or (get theme :editor-background-color)
-                    (get theme :editor-param-background-color)
-                    (:darkest generated)
-                    "#050510")
+        ;; Monaco requires hex colors
+        bg-color (rgba-to-hex (or (get theme :editor-background-color)
+                                  (get theme :editor-param-background-color)
+                                  (:darkest generated)
+                                  "#050510"))
         text-color (or (get theme :editor-font-color)
                       (get theme :grid-font-color)
                       primary)
@@ -288,7 +371,7 @@
              "editorCursor.foreground" primary
              "editorLineNumber.foreground" (str text-color "66")
              "editorLineNumber.activeForeground" text-color
-             "editor.border" (str primary "33")
+             ;"editor.border" (str primary "33")
              "editorIndentGuide.background" (str text-color "11")
              "editorIndentGuide.activeBackground" (str text-color "33")}}))
 
@@ -311,7 +394,7 @@
       /* Scrollbar styling */
       ::-webkit-scrollbar-track {
         background: rgba(0, 0, 0, 0.5) !important;
-        border: 1px solid " primary "22 !important;
+        /* : 1px solid " primary "22 !important; */
       }
       
       ::-webkit-scrollbar-thumb {
@@ -436,10 +519,10 @@
         background: " primary "55 !important;
       }
       
-      /* Monaco editor border */
+      /* Monaco editor border 
       .monaco-editor {
         border: 1px solid " primary "33 !important;
-      }
+      } */
       
       /* Force font family on all Monaco text content */
       .monaco-editor * {
@@ -541,7 +624,8 @@
     (let [primary (get-primary-color)
           secondary (get-secondary-color)
           tertiary (get-tertiary-color)
-          bg-color (or (get-theme-property :editor-background-color) "#050510")
+          ;; Monaco requires hex colors, not rgba
+          bg-color (rgba-to-hex (or (get-theme-property :editor-background-color) "#050510"))
           text-color (or (get-theme-property :editor-font-color) primary)
           font-family (get-font-family :monospace)
           theme-name "rabbit-dynamic-theme"]
