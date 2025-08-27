@@ -11,7 +11,7 @@
     (doseq [[block-id block] blocks]
       (when (and (= (:type block) "query")
                  (:sql block))
-        (js/console.log "[AUTO-REFRESH] Executing query for block" block-id "SQL:" (:sql block))
+        (js/console.log "[AUTO-REFRESH] Executing query for block" (str block-id) "SQL:" (:sql block))
         (rq/execute-block-query! block-id (:sql block) nil (:as-of block))))))
 
 (defn init-auto-refresh!

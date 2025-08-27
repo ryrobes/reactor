@@ -615,7 +615,7 @@
         (when (and new-source (not= old-source new-source))
           (let [source-block @(r/subscribe [:block new-source])]
             (when-let [sql (:sql source-block)]
-              (js/console.log "[CHART-BLOCK] New source connected, executing query")
+              ;; (js/console.log "[CHART-BLOCK] New source connected, executing query")
               (rq/execute-block-query! new-source sql nil nil))))))
     
     :reagent-render
@@ -635,7 +635,7 @@
             source-results (when source-id (rq/get-block-results source-id))
             ;; Extract the data - this should be the same as what the query block shows
             chart-data (:results source-results)
-            _ (when (and source-id source-results)
+            #_ (when (and source-id source-results)
                 (js/console.log "[CHART-BLOCK]" id "connected to" source-id 
                                ;"source-results:" (clj->js source-results)
                                ;"chart-data:" (clj->js chart-data)

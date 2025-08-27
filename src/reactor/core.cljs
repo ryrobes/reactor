@@ -888,6 +888,13 @@
                          subs
                          subs))))))
 
+(defn strunc [s & [chars]]
+  (let [s (cstr/replace s #"[\r\n]+" "")
+        chars (or chars 100)]
+    (try
+      (if (> (count s) chars) (str (subs (str s) 0 chars) "...") (str s))
+      (catch :default _ s))))
+
 (defn ensure-sql-sse-connection!
   "Ensure we have a single SSE connection for SQL subscriptions"
   []
@@ -911,7 +918,7 @@
                   (when-let [sub-id (:subscription-id data)]
                     (if-let [sub (get @sql-subscriptions sub-id)]
                       (do
-                        (js/console.log "[CLIENT] Received full update for" sub-id)
+                        (js/console.log "🌕 [CLIENT] Received full update for" sub-id ": " (strunc (str (get data :query)) 240))
                         ;; Store checksum for validation
                         (swap! sql-subscriptions assoc-in [sub-id :last-checksum] (:checksum data))
                         ;; Update the result atom with full data
@@ -924,7 +931,7 @@
                                    :metrics (:metrics (:result data))}))
                         ;; (js/console.log "[CLIENT] Full update applied -" (count (:results (:result data))) "results")
                         )
-                      (js/console.warn "[CLIENT] No subscription found for ID:" sub-id)))
+                      (js/console.log "[CLIENT] No subscription found for ID:" sub-id)))
                   
                   ;; Diff update (both row-based and field-based)
                   (or (= (:type data) :diff-update)
@@ -940,7 +947,7 @@
                                      (empty? (:data current-data))))
                           ;; No base data - we need full update instead
                           (do
-                            (js/console.warn "[CLIENT] Received diff but have no base data for" sub-id 
+                            (js/console.log "🌑 [CLIENT] Received diff but have no base data for" sub-id 
                                            "\n  Current data:" (clj->js current-data)
                                            "\n  Diff:" (clj->js (select-keys (:diff data) [:type :added :removed :updated])))
                             ;; For now, create empty base data so diff can be applied
@@ -951,13 +958,13 @@
                               (apply-row-diff! (:result-atom sub) (:diff data) (:checksum data) (:metrics data))))
                           ;; Have base data - apply diff normally
                           (do
-                            (js/console.log "[CLIENT] Received" (:type data) "for" sub-id 
+                            (js/console.log "🌓 [CLIENT] Received" (:type data) "for" sub-id 
                                            "\n  Current data count:" (count (:data current-data))
                                            "\n  Diff type:" (get-in data [:diff :type])
                                            "\n  Compression:" (get-in data [:diff :compression-ratio]))
                             ;; Apply diff to current data (handles both field and row diffs)
                             (apply-row-diff! (:result-atom sub) (:diff data) (:checksum data) (:metrics data)))))
-                      (js/console.warn "[CLIENT] No subscription found for diff ID:" sub-id)))
+                      (js/console.log "[CLIENT] No subscription found for diff ID:" sub-id)))
                   
                   ;; Legacy query-update (backward compatibility)
                   (or (= (:type data) :query-update)
@@ -965,7 +972,7 @@
                   (when-let [sub-id (:subscription-id data)]
                     (if-let [sub (get @sql-subscriptions sub-id)]
                       (do
-                        (js/console.log "[CLIENT] Found subscription (legacy), updating result atom for" sub-id)
+                        (js/console.log "🌙 [CLIENT] Found subscription (legacy), updating result atom for" sub-id)
                         (reset! (:result-atom sub)
                                 (if (:error (:result data))
                                   {:error (:error (:result data)) :loading false :executed-sql (:executed-sql (:result data))}

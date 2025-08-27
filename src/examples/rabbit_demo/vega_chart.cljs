@@ -143,7 +143,7 @@
                                 height (assoc :height height)
                                 ;; Keep width as container for responsiveness
                                 true (assoc :width "container")))]
-         (js/console.log "[VEGA] Final spec for vegaEmbed:" js-spec)
+        ;;  (js/console.log "[VEGA] Final spec for vegaEmbed:" js-spec)
          ;; Use vegaEmbed for interactive charts
          (if (exists? js/vegaEmbed)
            (-> (js/vegaEmbed (str "#" element-id) js-spec
@@ -157,8 +157,8 @@
                                  :tooltip true  ; Enable tooltips
                                  :width "container"  ; Responsive width
                                  :height (if height height "container")}) ; Use calculated height or container
-               (.then (fn [result]
-                        (js/console.log "Vega chart rendered successfully in" element-id)))
+              ;;  (.then (fn [result]
+              ;;           (js/console.log "Vega chart rendered successfully in" element-id)))
                (.catch (fn [error]
                          (js/console.error "Error embedding Vega chart:" error))))
            (js/console.error "vegaEmbed not found. Please include Vega-Lite libraries in HTML")))

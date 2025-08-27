@@ -35,6 +35,13 @@
   [block-id]
   (swap! query-execution-hooks dissoc block-id))
 
+(defn strunc [s & [chars]]
+  (let [s (cstr/replace s #"[\r\n]+" "")
+        chars (or chars 100)]
+    (try
+      (if (> (count s) chars) (str (subs (str s) 0 chars) "...") (str s))
+      (catch :default _ s))))
+
 (defn trigger-query-hooks!
   "Trigger hooks for a block after query execution"
   [block-id sql]
@@ -65,7 +72,7 @@
     (add-watch result-atom (keyword (str "block-" block-id))
                (fn [_ _ _ new-val]
                  (when-not (:loading new-val)
-                   (js/console.log "[REACTIVE-QUERIES] Block" block-id "got update:" (clj->js new-val))
+                   (js/console.log "🌖 [REACTIVE-QUERIES] Block" (str block-id) "got update:" (strunc (str (get new-val :data)) 100))
                    ;; Store results in our separate atom, not in app state
                    (swap! block-results assoc block-id 
                           (if (:error new-val)
@@ -92,13 +99,13 @@
              has-subscription)
       ;; Same query is already running, skip re-execution COMPLETELY
       (do
-        (js/console.log "[REACTIVE-QUERIES] ✓ BLOCKED re-execution for block" block-id 
+        (js/console.log "[REACTIVE-QUERIES] ✓ BLOCKED re-execution for block" (str block-id) 
                         "- already subscribed to this exact query")
         ;; Return existing subscription
         has-subscription)
       ;; New or changed query, execute it
       (do
-        (js/console.log "[REACTIVE-QUERIES] ✗ Executing query for block" block-id
+        (js/console.log "[REACTIVE-QUERIES] ✗ Executing query for block" (str block-id)
                         (if cached-sql 
                           (str "- query changed from " cached-sql " to " [sql params as-of])
                           "- first execution"))
