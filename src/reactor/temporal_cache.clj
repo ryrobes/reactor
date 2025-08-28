@@ -73,13 +73,13 @@
       (let [cached (get @temporal-cache cache-key)]
         (if cached
           (do
-            (log/info "[TEMPORAL-CACHE] ✅ CACHE HIT for key:" 
+            (log/debug "[TEMPORAL-CACHE] ✅ CACHE HIT for key:" 
                       (if (> (count cache-key) 60)
                         (str (subs cache-key 0 60) "...")
                         cache-key))
             cached)
           (do
-            (log/info "[TEMPORAL-CACHE] ❌ CACHE MISS for key:"
+            (log/debug "[TEMPORAL-CACHE] ❌ CACHE MISS for key:"
                       (if (> (count cache-key) 60)
                         (str (subs cache-key 0 60) "...")
                         cache-key))
@@ -91,7 +91,7 @@
 (defn cache-result!
   "Cache a query result if it's a temporal count query"
   [sql result]
-  (log/info "[TEMPORAL-CACHE] Attempting to cache result for query:"
+  (log/debug "[TEMPORAL-CACHE] Attempting to cache result for query:"
              (if (> (count (str sql)) 80)
                (str (subs (str sql) 0 80) "...")
                sql))
@@ -101,7 +101,7 @@
       ;; Save to disk periodically (every 10 new entries)
       (when (zero? (mod (count @temporal-cache) 10))
         (future (save-cache!)))
-      (log/info "[TEMPORAL-CACHE] 📦 CACHED temporal count query. Key:"
+      (log/debug "[TEMPORAL-CACHE] 📦 CACHED temporal count query. Key:"
                 (if (> (count cache-key) 60)
                   (str (subs cache-key 0 60) "...")
                   cache-key)

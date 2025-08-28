@@ -20,7 +20,7 @@
 (defn resolve-templates
   "Recursively resolve all template references in SQL"
   [sql session-state resolved-blocks]
-  (log/info {:message "Resolving SQL templates"
+  (log/debug {:message "Resolving SQL templates"
             :sql sql
             :resolved-count (count resolved-blocks)})
   
@@ -40,25 +40,41 @@
               (throw (ex-info "Circular block reference detected" 
                              {:block-id block-id
                               :resolved-blocks resolved-blocks})))
-            ;; Get the block's SQL
-            (if-let [block-sql (get-block-sql session-state block-id)]
-              (let [_ (log/info {:message "Template resolution: Found parent block SQL"
-                                :block-id block-id
-                                :sql-length (count block-sql)
-                                :sql-preview (if (> (count block-sql) 100)
-                                               (str (subs block-sql 0 100) "...")
-                                               block-sql)})
+            ;; Get the block's SQL - FIRST try cache, then session state
+            ;; Use resolve to avoid circular dependency
+            (let [get-cache-fn (resolve 'reactor.reactive-server/get-block-sql-from-cache)
+                  cache-entry (when get-cache-fn (@get-cache-fn block-id))
+                  cached-sql (:resolved-sql cache-entry)
+                  session-sql (or (get-in session-state [:canvas :blocks (keyword block-id) :sql])
+                                 (get-in session-state [:canvas :blocks block-id :sql]))
+                  fresh-block-sql (or cached-sql session-sql)]
+              (log/debug {:message "Template resolution: Looking up parent block SQL"
+                        :block-id block-id
+                        :from-cache? (boolean cached-sql)
+                        :cache-updated-at (:updated-at cache-entry)
+                        :from-session? (and (not cached-sql) session-sql)})
+              (if fresh-block-sql
+                (let [_ (log/debug {:message "Template resolution: Found parent block SQL"
+                                  :block-id block-id
+                                  :sql-length (count fresh-block-sql)
+                                  :sql-preview (if (> (count fresh-block-sql) 100)
+                                                 (str (subs fresh-block-sql 0 100) "...")
+                                                 fresh-block-sql)
+                                  :source (cond
+                                           cached-sql :cache
+                                           (get-in session-state [:canvas :blocks (keyword block-id) :sql]) :session-keyword
+                                           :else :session-string)})
                     ;; Remove any LIMIT from the referenced SQL
-                    clean-sql (str/replace block-sql #"(?i)\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?" "")
+                    clean-sql (str/replace fresh-block-sql #"(?i)\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?" "")
                     ;; Recursively resolve any templates in the referenced SQL
                     resolved-sql (resolve-templates clean-sql 
                                                    session-state 
                                                    (conj resolved-blocks block-id))
                     ;; Wrap as subquery
                     wrapped-sql (str "(" resolved-sql ")")]
-                (log/info {:message "Resolved template reference"
+                (log/debug {:message "Resolved template reference"
                           :block-id block-id
-                          :original-sql block-sql
+                          :original-sql fresh-block-sql
                           :wrapped-sql wrapped-sql})
                 ;; Replace the template reference with the resolved SQL
                 (str/replace current-sql 
@@ -69,14 +85,14 @@
                           :block-id block-id
                           :available-blocks (keys (:blocks (:canvas session-state)))})
                 ;; Return SQL unchanged if block not found
-                current-sql))))
+                current-sql)))))  ; Close: do, if, let, if (outer)
         sql
         refs))))
 
 (defn find-dependent-blocks
   "Find all blocks that reference a given block ID in their SQL templates"
   [session-state block-id]
-  (log/info {:message "Finding dependent blocks"
+  (log/debug {:message "Finding dependent blocks"
             :block-id block-id})
   (let [blocks (get-in session-state [:canvas :blocks])
         block-id-str (if (keyword? block-id)
@@ -96,7 +112,7 @@
   "Find all active subscriptions that reference a given block ID in their SQL templates.
    This searches through the raw SQL strings of active subscriptions."
   [active-subscriptions block-id]
-  (log/info {:message "Finding dependent subscriptions"
+  (log/debug {:message "Finding dependent subscriptions"
             :block-id block-id
             :total-subscriptions (count active-subscriptions)})
   (let [;; Strip colon if block-id is a keyword, handle both forms
@@ -113,7 +129,7 @@
         (if (and (:query subscription)
                  (re-find pattern (:query subscription)))
           (do
-            (log/info {:message "Found dependent subscription"
+            (log/debug {:message "Found dependent subscription"
                       :sub-id sub-id
                       :block-id block-id-str
                       :sql-snippet (when (:query subscription)

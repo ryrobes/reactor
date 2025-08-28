@@ -40,7 +40,9 @@
 
 ;; ============= Async SQL Logger =============
 
-(defonce log-channel (async/chan 1000))
+;; Use dropping buffer to prevent blocking when channel is full
+;; This prevents cascade failures when logging gets too verbose
+(defonce log-channel (async/chan (async/dropping-buffer 10000)))
 (defonce log-processor (atom nil))
 
 (defn ensure-log-table!
@@ -174,9 +176,9 @@
       ;; Print to terminal
       (println terminal-msg)
       
-      ;; Send to async SQL logger
+      ;; Send to async SQL logger - use offer! to never block
       (when *enable-sql-logging*
-        (async/put! log-channel log-entry))))
+        (async/offer! log-channel log-entry))))
   nil)
 
 ;; ============= Convenience Functions =============

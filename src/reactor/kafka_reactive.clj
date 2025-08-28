@@ -105,9 +105,9 @@
                   
                   ;; Process ready subscriptions
                   (when (seq ready-subs)
-                    (log/info "[DEBUG-DEBOUNCE] Processing" (count ready-subs) "debounced re-executions:" ready-subs)
+                    (log/debug "[DEBUG-DEBOUNCE] Processing" (count ready-subs) "debounced re-executions:" ready-subs)
                     (doseq [sub-id ready-subs]
-                      (log/info "[DEBUG-DEBOUNCE] Executing subscription" sub-id)
+                      (log/debug "[DEBUG-DEBOUNCE] Executing subscription" sub-id)
                       ;; Remove from pending
                       (swap! pending-re-executions dissoc sub-id)
                       ;; Execute the subscription
@@ -572,33 +572,82 @@
   [sub-id]
   (when (:debug-logging @diff-config)
     (log/debug "[RE-EXECUTE] Starting re-execution for subscription" sub-id))
-  (log/info "[KAFKA-REACTIVE] Re-executing subscription" sub-id)
+  (log/debug "[KAFKA-REACTIVE] Re-executing subscription" sub-id)
   (if-let [{:keys [query params callback session-id client-id temporal? inert?]} (get @active-subscriptions sub-id)]
     (try
-      (log/info "[KAFKA-REACTIVE] Found" (if temporal? "TEMPORAL" "REACTIVE") 
-               "subscription" sub-id "for session" session-id 
-               (when (> (count query) 100) 
-                 (str "\n  SQL: " (subs query 0 100) "...")))
+      (log/debug "[KAFKA-REACTIVE] Found" (if temporal? "TEMPORAL" "REACTIVE") 
+                "subscription" sub-id "for session" session-id 
+                (when (> (count query) 100) 
+                  (str "\n  SQL: " (subs query 0 100) "...")))
       (if-let [node @session/default-node]
         (let [;; CRITICAL FIX: Resolve templates at execution time with current session state
               ;; This ensures we always get the latest parent SQL
               resolved-query (if (re-find #"\{\{[^}]+\.sql\}\}" query)
                               (do
-                                (log/info "[KAFKA-REACTIVE] Query contains templates, resolving with current session state...")
+                                (log/debug "[KAFKA-REACTIVE] Query contains templates, resolving..."
+                                         "\n  Subscription ID:" sub-id
+                                         "\n  Session ID:" session-id
+                                         "\n  Is COUNT query?" (re-find #"(?i)SELECT\s+COUNT.*FROM.*subq" query))
                                 (if-let [session-obj (session/get-session session-id)]
                                   (let [session-state (session/get-state session-obj)
-                                        template-result (sql-template/resolve-sql-templates-with-deps query session-state)
+                                        _ (when-not (get-in session-state [:canvas :blocks])
+                                            (log/warn "[KAFKA-REACTIVE] Session state has no canvas blocks!"
+                                                     "\n  Session ID:" session-id))
+                                        ;; Special handling for COUNT queries with temporal clause
+                                        ;; Extract temporal clause from outer query
+                                        temporal-match (re-find #"(FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'[^']+')" query)
+                                        has-temporal? (boolean temporal-match)
+                                        temporal-clause (when temporal-match (first temporal-match))
+                                        ;; Remove temporal clause from outer query if it's a COUNT query
+                                        is-count-query? (re-find #"(?i)SELECT\s+COUNT.*FROM\s*\(" query)
+                                        clean-query (if (and is-count-query? has-temporal?)
+                                                     (str/replace query temporal-clause "")
+                                                     query)
+                                        ;; Resolve templates - pass temporal clause for special handling
+                                        template-result (if (and is-count-query? has-temporal?)
+                                                         ;; For count queries with temporal, manually handle template resolution
+                                                         (let [template-refs (re-seq #"\{\{([^}]+)\.sql\}\}" clean-query)
+                                                               resolved-sql (reduce
+                                                                           (fn [sql [full-match block-id]]
+                                                                             (if-let [block-sql (or (get-in session-state [:canvas :blocks (keyword block-id) :sql])
+                                                                                                  (get-in session-state [:canvas :blocks block-id :sql]))]
+                                                                               ;; Add temporal clause to parent SQL INSIDE parentheses
+                                                                               (let [temporal-sql (str "(" block-sql " " temporal-clause ")")]
+                                                                                 (str/replace sql full-match temporal-sql))
+                                                                               sql))
+                                                                           clean-query
+                                                                           template-refs)]
+                                                           {:sql resolved-sql :dependencies (map second template-refs)})
+                                                         ;; Normal template resolution
+                                                         (sql-template/resolve-sql-templates-with-deps query session-state))
                                         resolved-sql (:sql template-result)]
-                                    (log/info "[KAFKA-REACTIVE] Template resolution complete:"
+                                    (log/debug "[KAFKA-REACTIVE] Template resolution complete:"
                                              "\n  Original SQL:" (if (> (count query) 100)
                                                                   (str (subs query 0 100) "...")
                                                                   query)
                                              "\n  Resolved SQL:" (if (> (count resolved-sql) 100)
                                                                   (str (subs resolved-sql 0 100) "...")
-                                                                  resolved-sql))
+                                                                  resolved-sql)
+                                             "\n  Templates resolved?" (not= query resolved-sql)
+                                             "\n  Temporal handling:" (when (and is-count-query? has-temporal?)
+                                                                       "Moved temporal clause to inner SQL"))
+                                    ;; Update block SQL cache when templates are resolved
+                                    (when-let [update-cache-fn (resolve 'reactor.reactive-server/update-block-sql-cache!)]
+                                      ;; Extract block ID from subscription ID (usually :block-id or "block-id" format)
+                                      (let [block-id-str (cond
+                                                          (keyword? sub-id) (name sub-id)
+                                                          (string? sub-id) sub-id
+                                                          :else (str sub-id))]
+                                        ;; Only update cache if this looks like a block ID (not sql-uuid format)
+                                        (when (and (not (str/starts-with? block-id-str "sql-"))
+                                                  (not (str/starts-with? block-id-str "temporal-")))
+                                          (log/info "[KAFKA-REACTIVE] Updating block SQL cache for:" block-id-str)
+                                          (@update-cache-fn block-id-str query resolved-sql session-id))))
                                     resolved-sql)
                                   (do
-                                    (log/warn "[KAFKA-REACTIVE] No session found for template resolution, using original SQL")
+                                    (log/error "[KAFKA-REACTIVE] ❌ No session found for template resolution!"
+                                              "\n  Session ID:" session-id
+                                              "\n  This will cause count queries to fail")
                                     query)))
                               query)  ;; No templates, use original query
               start-time (System/currentTimeMillis)
@@ -608,7 +657,7 @@
               result (if cached-result
                        ;; Use cached result for temporal count queries
                        (do
-                         (log/info "[KAFKA-REACTIVE] 🎯 CACHE HIT for temporal count query")
+                         (log/debug "[KAFKA-REACTIVE] 🎯 CACHE HIT for temporal count query")
                          ;; Return cached result with server-cache flag
                          (assoc cached-result :server-cache? true))
                        ;; Execute query normally
@@ -1031,12 +1080,12 @@
                                ;; Debug logging to see what's happening
                                (when (and (or has-mutation? (seq all-tables)) 
                                           (not= all-tables  #{"reactor_subscriptions"})) ;; no noisy single sub logs
-                                 (log/info "[KAFKA-DEBUG] Message analysis:"
-                                          "\n  Has mutation:" has-mutation?
-                                          "\n  Is SELECT:" is-select?
-                                          "\n  All tables:" all-tables
-                                          "\n  Filtered tables:" filtered-tables
-                                          "\n  Message size:" (count tx-value)))
+                                 (log/debug "[KAFKA-DEBUG] Message analysis:"
+                                           "\n  Has mutation:" has-mutation?
+                                           "\n  Is SELECT:" is-select?
+                                           "\n  All tables:" all-tables
+                                           "\n  Filtered tables:" filtered-tables
+                                           "\n  Message size:" (count tx-value)))
                                
                                (when is-select?
                                  ;; Don't log SELECT skips - too verbose
@@ -1044,21 +1093,21 @@
                                
                                (when (seq filtered-tables)
                                  (log/info "[KAFKA-MUTATION] Tables affected by mutation:" filtered-tables)
-                                 ;; Log detailed subscription info
-                                 (log/info "[KAFKA-MUTATION] Active subscriptions count:" (count @active-subscriptions))
-                                 (log/info "[KAFKA-MUTATION] Table-to-subs for affected tables:")
+                                 ;; Log detailed subscription info at DEBUG level
+                                 (log/debug "[KAFKA-MUTATION] Active subscriptions count:" (count @active-subscriptions))
+                                 (log/debug "[KAFKA-MUTATION] Table-to-subs for affected tables:")
                                  (doseq [table filtered-tables]
                                    (let [subs-for-table (get @table-to-subs (str/lower-case table))]
-                                     (log/info "  Table" table "has" (count subs-for-table) "subscriptions:" subs-for-table)))
+                                     (log/debug "  Table" table "has" (count subs-for-table) "subscriptions:" subs-for-table)))
                                  
-                                 ;; Log subscription details
+                                 ;; Log subscription details at DEBUG level
                                  (when (pos? (count @active-subscriptions))
-                                   (log/info "[KAFKA-MUTATION] Subscription details:")
+                                   (log/debug "[KAFKA-MUTATION] Subscription details:")
                                    (doseq [[sub-id sub-info] @active-subscriptions]
                                      (when (some #(contains? (set (:tables sub-info)) %) filtered-tables)
-                                       (log/info "  " sub-id "- temporal:" (:temporal? sub-info) 
-                                                "inert:" (:inert? sub-info)
-                                                "tables:" (:tables sub-info)))))
+                                       (log/debug "  " sub-id "- temporal:" (:temporal? sub-info) 
+                                                 "inert:" (:inert? sub-info)
+                                                 "tables:" (:tables sub-info)))))
                                  
                                  ;; Process rules for affected tables
                                  (try
@@ -1070,19 +1119,19 @@
                                  
                                  ;; Handle SQL subscriptions
                                  (let [affected-subs (find-affected-subscriptions filtered-tables)]
-                                   (log/info "[KAFKA-MUTATION] Found" (count affected-subs) "affected subscriptions:" affected-subs)
+                                   (log/debug "[KAFKA-MUTATION] Found" (count affected-subs) "affected subscriptions:" affected-subs)
                                    (when (seq affected-subs)
                                      (log/info "[KAFKA-MUTATION] Triggering" (count affected-subs) "subscriptions for tables:" filtered-tables)
-                                     ;; Log each subscription being triggered
+                                     ;; Log each subscription being triggered at DEBUG level
                                      (doseq [sub-id affected-subs]
                                        (let [sub-info (get @active-subscriptions sub-id)
                                              session-id (:session-id sub-info)
                                              channels (get @sse-channels session-id [])]
-                                         (log/info "[DEBUG-TRIGGER] Requesting re-execution for" sub-id
-                                                  "\n  Session:" session-id
-                                                  "\n  Has channels:" (boolean (seq channels))
-                                                  "\n  Channel count:" (count channels)
-                                                  "\n  Tables:" (:tables sub-info))))
+                                         (log/debug "[DEBUG-TRIGGER] Requesting re-execution for" sub-id
+                                                   "\n  Session:" session-id
+                                                   "\n  Has channels:" (boolean (seq channels))
+                                                   "\n  Channel count:" (count channels)
+                                                   "\n  Tables:" (:tables sub-info))))
                                      ;; Track the reaction
                                      (doseq [table filtered-tables]
                                        (meta/track-reaction! table "mutation" affected-subs))
