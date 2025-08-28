@@ -72,7 +72,8 @@
     (add-watch result-atom (keyword (str "block-" block-id))
                (fn [_ _ _ new-val]
                  (when-not (:loading new-val)
-                   (js/console.log "🌖 [REACTIVE-QUERIES] Block" (str block-id) "got update:" (strunc (str (get new-val :data)) 100))
+                   (js/console.log "🌖 [REACTIVE-QUERIES] Block" (str block-id) 
+                                   "got update:" (strunc (str (get new-val :data)) 100) "for:" (strunc (str sql) 100))
                    ;; Store results in our separate atom, not in app state
                    (swap! block-results assoc block-id 
                           (if (:error new-val)
@@ -91,26 +92,33 @@
 (defn execute-block-query!
   "Execute a SQL query for a block with reactive subscription"
   [block-id sql & [params as-of]]
-  ;; ALWAYS check if we have an active subscription with the same query
-  (let [cached-sql (get @block-sql-cache block-id)
+  ;; Check if SQL contains templates that might have changed
+  (let [has-templates? (and sql (re-find #"\{\{[^}]+\.sql\}\}" sql))
+        cached-sql (get @block-sql-cache block-id)
         has-subscription (get @block-subscriptions block-id)
         would-have-been-blocked? (and cached-sql  (= cached-sql [sql params as-of]) has-subscription)]
+    ;; CRITICAL FIX: Never cache queries with templates since parent SQL might have changed
     (if (and cached-sql
              (= cached-sql [sql params as-of])
-             has-subscription)
-      ;; Same query is already running, skip re-execution COMPLETELY
+             has-subscription
+             (not has-templates?))  ; Only use cache if NO templates!!
+      ;; Same query is already running AND has no templates, safe to reuse
       (do
         (js/console.log "[REACTIVE-QUERIES] ✓ BLOCKED re-execution for block" (str block-id)
-                        "- already subscribed to this exact query")
+                        "- already subscribed to this exact query (no templates)")
         ;; Return existing subscription
         has-subscription)
-      ;; New or changed query, execute it
+      ;; New or changed query, or has templates that might resolve differently
       (do
-        (js/console.log "[REACTIVE-QUERIES] ✗ Executing query for block" (str block-id)
+        (js/console.log "🌖 [REACTIVE-QUERIES] ✗ Executing query for block" (str block-id)
                         (when would-have-been-blocked? "🧦")
+                        (when has-templates? " (has templates - always re-resolve)")
                         (if cached-sql
-                          (str "- query changed from " cached-sql " to " [sql params as-of])
-                          "- first execution"))
+                          (if has-templates?
+                            "- re-executing to resolve templates with potentially updated parent SQL"
+                            (str "- query changed from " cached-sql " to " [sql params as-of]))
+                          "- first execution")
+                        "for:" (strunc (str sql) 100))
         ;; Update cache
         (swap! block-sql-cache assoc block-id [sql params as-of])
         ;; Clear old results and show loading

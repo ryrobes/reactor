@@ -922,15 +922,17 @@
                   (when-let [sub-id (:subscription-id data)]
                     (if-let [sub (get @sql-subscriptions sub-id)]
                       (do
-                        (js/console.log "🌕 [CLIENT]" (when (get data :server-cache?) "📦")  " Received full update for" sub-id ": " (strunc (str (get data :query)) 240))
+                        (when (not (get data :server-cache?)) ;; temp remove cached calls logging
+                          (js/console.log "🌕 [CLIENT]" (when (get data :server-cache?) "📦")  
+                                          " Received full update for" sub-id ": " (strunc (str (get data :query)) 240)))
                         ;; Store checksum for validation
                         (swap! sql-subscriptions assoc-in [sub-id :last-checksum] (:checksum data))
                         ;; Update the result atom with full data
                         (reset! (:result-atom sub)
                                 (if (:error (:result data))
                                   {:error (:error (:result data)) :loading false :executed-sql (:executed-sql (:result data))}
-                                  {:data (:results (:result data)) 
-                                   :loading false 
+                                  {:data (:results (:result data))
+                                   :loading false
                                    :executed-sql (:executed-sql (:result data))
                                    :metrics (:metrics (:result data))}))
                         ;; (js/console.log "[CLIENT] Full update applied -" (count (:results (:result data))) "results")

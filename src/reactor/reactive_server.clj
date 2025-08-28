@@ -383,23 +383,42 @@
                                    (log/info "[REACTIVE-SERVER] Session state for template resolution:" 
                                             {:has-state? (boolean state)
                                              :canvas-blocks (keys (get-in state [:canvas :blocks]))})
-                                   state)))
+                                   ;; CRITICAL FIX: Update session state with current block's SQL if block_id is provided
+                                   ;; This ensures the session has the latest SQL before template resolution
+                                   (if (and block-id original-sql)
+                                     (let [updated-state (-> state
+                                                           (assoc-in [:canvas :blocks (keyword block-id) :sql] original-sql)
+                                                           ;; Also update string version if needed
+                                                           (assoc-in [:canvas :blocks block-id :sql] original-sql))]
+                                       (session/set-state! session updated-state)
+                                       (log/info "[REACTIVE-SERVER] Updated session with block SQL BEFORE query execution:"
+                                                "\n  Block ID:" block-id
+                                                "\n  SQL:" (if (> (count original-sql) 100)
+                                                             (str (subs original-sql 0 100) "...")
+                                                             original-sql))
+                                       ;; Return the updated state for use in this request
+                                       updated-state)
+                                     ;; Return original state if no update needed
+                                     state))))
                 ;; Check for template references
                 has-templates? (re-find #"\{\{[^}]+\.sql\}\}" original-sql)
                 _ (log/info "[REACTIVE-SERVER] Template check:" 
                            {:has-templates? has-templates?
                             :has-session-state? (boolean session-state)
                             :original-sql original-sql})
-                ;; Resolve any template references in the SQL
-                sql (if (and session-state has-templates?)
-                      (do
-                        (log/info "[REACTIVE-SERVER] Resolving SQL templates in query")
-                        (let [resolved (sql-template/resolve-sql-templates original-sql session-state)]
-                          (log/info "[REACTIVE-SERVER] Template resolution result:" 
-                                   {:resolved-sql resolved
-                                    :changed? (not= resolved original-sql)})
-                          resolved))
-                      original-sql)
+                ;; Resolve any template references in the SQL and track dependencies
+                template-result (if (and session-state has-templates?)
+                                   (do
+                                     (log/info "[REACTIVE-SERVER] Resolving SQL templates in query")
+                                     (let [result (sql-template/resolve-sql-templates-with-deps original-sql session-state)]
+                                       (log/info "[REACTIVE-SERVER] Template resolution result:" 
+                                                {:resolved-sql (:sql result)
+                                                 :dependencies (:dependencies result)
+                                                 :changed? (not= (:sql result) original-sql)})
+                                       result))
+                                   {:sql original-sql :dependencies []})
+                sql (:sql template-result)
+                parent-block-ids (:dependencies template-result)
                 ;; Check if this query is for a session table
                 is-session-query? (or (re-find #"(?i)FROM\s+\w*_?sessions" sql)
                                     (re-find #"(?i)INTO\s+\w*_?sessions" sql))
@@ -495,12 +514,21 @@
                                      sql-with-temporal)
                          (when is-temporal-query?
                            (str "\n  Base query for cache: " base-query-for-id)))
+                ;; CRITICAL FIX: Store ORIGINAL SQL with templates, not resolved SQL
+                ;; This ensures templates are re-resolved on each execution with fresh parent SQL
                 (kafka/register-query-subscription! 
-                 sub-id sql-with-temporal params 
+                 sub-id 
+                 (if has-templates? 
+                   (str original-sql  ;; Store template SQL
+                        (when as-of 
+                          (str " FOR SYSTEM_TIME AS OF TIMESTAMP '" as-of "'")))
+                   sql-with-temporal)  ;; Only use resolved SQL if no templates
+                 params 
                  (kafka/create-subscription-callback actual-session-id) 
                  actual-session-id
                  nil  ;; client-id
-                 is-truly-temporal?)  ;; Pass temporal flag - only true for >30s old timestamps
+                 is-truly-temporal?  ;; Pass temporal flag - only true for >30s old timestamps
+                 parent-block-ids)  ;; Pass parent block dependencies
                 
                 ;; Execute immediately to get initial results
                 (kafka/re-execute-subscription sub-id)
@@ -552,15 +580,21 @@
                               (let [_ (log/info "[CASCADE] Starting cascade for block:" clean-cascade-id 
                                               "\n  Depth:" @cascade-depth "/" max-cascade-depth
                                               "\n  Chain size:" (count @cascade-chain)
-                                              "\n  Total active subscriptions:" (count @kafka/active-subscriptions))
-                                    dependent-subs (sql-template/find-dependent-subscriptions @kafka/active-subscriptions clean-cascade-id)
+                                              "\n  Total active subscriptions:" (count @kafka/active-subscriptions)
+                                              "\n  Dependency map entries:" (count @kafka/subscription-dependencies))
+                                    ;; Use dependency tracking instead of searching SQL strings
+                                    dependent-subs (get @kafka/subscription-dependencies clean-cascade-id #{})
+                                    ;; Also check for keyword version of the ID
+                                    keyword-deps (get @kafka/subscription-dependencies (keyword clean-cascade-id) #{})
+                                    ;; Combine both sets
+                                    all-deps (into dependent-subs keyword-deps)
                                     ;; Limit to prevent explosion
-                                    limited-deps (take 5 dependent-subs)]
+                                    limited-deps (take 10 all-deps)]
                                 (if (seq limited-deps)
                                   (do
-                                    (log/info "[CASCADE] Found" (count dependent-subs) "dependent subscriptions for block" clean-cascade-id
-                                             (when (> (count dependent-subs) 5) 
-                                               (str " (limiting to 5)"))
+                                    (log/info "[CASCADE] Found" (count all-deps) "dependent subscriptions for block" clean-cascade-id
+                                             (when (> (count all-deps) 10) 
+                                               (str " (limiting to 10)"))
                                              ":" limited-deps)
                                     ;; Trigger debounced re-execution for each dependent subscription
                                     (doseq [sub-id limited-deps]
@@ -571,13 +605,30 @@
                                   (log/info "[CASCADE] No dependent subscriptions found for block" clean-cascade-id)))
                         
                         ;; Also handle session-state blocks if available
-                        (when session-state
-                          (let [;; Use get-cascade-chain which already handles circular dependencies
-                                dependent-blocks (sql-template/get-cascade-chain session-state block-id)
+                        ;; IMPORTANT: Fetch fresh session state from the store for cascade
+                        ;; This ensures we get the latest state including any updates from above
+                        (when-let [fresh-session (session/get-session actual-session-id)]
+                          (let [;; Get the latest session state from the store
+                                fresh-session-state (session/get-state fresh-session)
+                                _ (log/info "[CASCADE] Fetched fresh session state for cascade:"
+                                           "\n  Block being cascaded:" block-id
+                                           "\n  Has fresh state?" (boolean fresh-session-state)
+                                           "\n  Parent block SQL in fresh state:" 
+                                           (when (and block-id fresh-session-state)
+                                             (let [parent-sql (get-in fresh-session-state [:canvas :blocks (keyword block-id) :sql])]
+                                               (if (> (count (str parent-sql)) 100)
+                                                 (str (subs parent-sql 0 100) "...")
+                                                 parent-sql))))
+                                ;; Use the fresh state which already has the updated SQL from above
+                                updated-session-state fresh-session-state
+                                ;; Use get-cascade-chain which already handles circular dependencies
+                                dependent-blocks (sql-template/get-cascade-chain updated-session-state block-id)
                                 ;; Remove duplicates to prevent multiple executions of same block
                                 unique-deps (distinct dependent-blocks)]
                             (when (seq unique-deps)
-                              (log/info "[CASCADE] Found dependent blocks for" block-id ":" unique-deps)
+                              (log/info "[CASCADE] Found dependent blocks for" block-id ":" unique-deps
+                                       (when (and block-id original-sql)
+                                         "\n  Updated parent SQL in session-state for correct template resolution"))
                               ;; Small delay to ensure parent query is fully processed
                               (Thread/sleep 50)
                             ;; Process all dependent blocks in parallel with deduplication
@@ -586,44 +637,97 @@
                                             (future
                                               (try
                                                 (log/info "[CASCADE] Processing dependent block:" dep-block-id)
-                                                (when-let [dep-block-sql (or (get-in session-state [:canvas :blocks (keyword dep-block-id) :sql])
-                                                                            (get-in session-state [:canvas :blocks dep-block-id :sql]))]
-                                                  ;; Create subscription ID for the dependent block
-                                                  ;; Use keyword format to match actual block subscriptions
-                                                  (let [dep-sub-id (keyword dep-block-id)
-                                                        ;; Check if subscription exists and get its current SQL
-                                                        existing-sub (get @kafka/active-subscriptions dep-sub-id)
-                                                        ;; Resolve templates in the dependent query
-                                                        resolved-dep-sql (sql-template/resolve-sql-templates dep-block-sql session-state)]
+                                                (let [dep-block-sql-kw (get-in updated-session-state [:canvas :blocks (keyword dep-block-id) :sql])
+                                                      dep-block-sql-str (get-in updated-session-state [:canvas :blocks dep-block-id :sql])
+                                                      dep-block-sql (or dep-block-sql-kw dep-block-sql-str)]
+                                                  (if-not dep-block-sql
+                                                    (log/warn "[CASCADE] ⚠️ SKIPPING dependent block - SQL not found in session state!"
+                                                             "\n  Block ID:" dep-block-id
+                                                             "\n  Tried keys:" [(keyword dep-block-id) dep-block-id]
+                                                             "\n  Available blocks in session:" (keys (get-in updated-session-state [:canvas :blocks])))
+                                                    ;; Process the block if SQL was found
+                                                    ;; Find ALL subscriptions for this block, not just by assumed ID
+                                                    ;; Some subscriptions might have been created with different ID formats
+                                                    (let [;; First try the expected subscription ID format
+                                                        expected-sub-id (keyword dep-block-id)
+                                                        ;; Log all subscription IDs for debugging
+                                                        all-sub-ids (keys @kafka/active-subscriptions)
+                                                        _ (log/info "[CASCADE] Looking for subscription for block:" dep-block-id
+                                                                   "\n  Expected ID:" expected-sub-id
+                                                                   "\n  Total active subscriptions:" (count all-sub-ids)
+                                                                   "\n  All subscription IDs:" (take 10 all-sub-ids)
+                                                                   (when (> (count all-sub-ids) 10) 
+                                                                     (str " ... and " (- (count all-sub-ids) 10) " more")))
+                                                        ;; Find all subscriptions that match this block
+                                                        ;; Check both exact ID match and subscriptions that contain the block ID
+                                                        ;; Also categorize subscription types for debugging
+                                                        _ (let [sql-subs (filter #(str/starts-with? (str (key %)) "sql-") @kafka/active-subscriptions)
+                                                                block-subs (filter #(not (str/starts-with? (str (key %)) "sql-")) @kafka/active-subscriptions)]
+                                                            (when (> (count all-sub-ids) 50) ; Only log when there are many subs
+                                                              (log/info "[CASCADE] Subscription breakdown:"
+                                                                       "\n  Random SQL subs (sql-UUID):" (count sql-subs)
+                                                                       "\n  Block/Named subs:" (count block-subs)
+                                                                       "\n  Sample SQL sub IDs:" (take 3 (map first sql-subs)))))
+                                                        matching-subs (filter (fn [[sub-id sub-info]]
+                                                                              (or 
+                                                                               ;; Exact match with keyword version
+                                                                               (= sub-id expected-sub-id)
+                                                                               ;; String version match  
+                                                                               (= sub-id dep-block-id)
+                                                                               ;; Contains block ID in the subscription ID
+                                                                               (and (string? (str sub-id))
+                                                                                    (str/includes? (str sub-id) dep-block-id))))
+                                                                            @kafka/active-subscriptions)
+                                                        _ (log/info "[CASCADE] Found" (count matching-subs) "matching subscription(s) for block" dep-block-id
+                                                                   (when (seq matching-subs)
+                                                                     (str "\n  Matching IDs: " (map first matching-subs))))
+                                                        ;; Get the most recent/relevant subscription
+                                                        existing-sub-entry (first matching-subs)
+                                                        existing-sub (second existing-sub-entry)
+                                                        actual-sub-id (if existing-sub-entry 
+                                                                       (first existing-sub-entry)
+                                                                       expected-sub-id) ; Use expected ID for new subscriptions
+                                                        _ (when existing-sub-entry
+                                                            (log/info "[CASCADE] Using subscription:"
+                                                                     "\n  ID:" actual-sub-id
+                                                                     "\n  Different from expected?" (not= actual-sub-id expected-sub-id)
+                                                                     "\n  Has SQL?" (boolean (:query existing-sub))
+                                                                     "\n  SQL length:" (when (:query existing-sub) (count (:query existing-sub)))))
+                                                          ;; Templates are resolved at execution time now
+                                                          ;; No need to resolve here
+                                                          ]
                                                     
                                                     ;; Only update if SQL has changed or subscription doesn't exist
                                                     (if (and existing-sub 
-                                                             (= (:query existing-sub) resolved-dep-sql))
+                                                             (= (:query existing-sub) dep-block-sql))  ;; Compare template SQL
                                                       (do
-                                                        (log/info "[CASCADE] Subscription already exists with same SQL, requesting debounced re-execution:" dep-sub-id)
-                                                        ;; Use debounced re-execution to prevent channel overflow
-                                                        (swap! kafka/pending-re-executions assoc dep-sub-id (System/currentTimeMillis)))
+                                                        (log/info "[CASCADE] Subscription already exists with same template SQL, requesting re-execution:" actual-sub-id)
+                                                        ;; Just trigger re-execution - templates will be resolved at execution time
+                                                        (swap! kafka/pending-re-executions assoc actual-sub-id (System/currentTimeMillis)))
                                                       (do
                                                         (log/info "[CASCADE] Creating/updating subscription for dependent block:" dep-block-id
-                                                                 "\n  Subscription ID:" dep-sub-id
+                                                                 "\n  Actual subscription ID:" actual-sub-id
                                                                  "\n  SQL changed:" (boolean existing-sub)
-                                                                 "\n  SQL:" (if (> (count resolved-dep-sql) 150)
-                                                                             (str (subs resolved-dep-sql 0 150) "...")
-                                                                             resolved-dep-sql))
+                                                                 "\n  Template SQL:" (if (> (count dep-block-sql) 150)
+                                                                                      (str (subs dep-block-sql 0 150) "...")
+                                                                                      dep-block-sql))
                                                         ;; Unregister existing subscription if it exists
                                                         (when existing-sub
-                                                          (kafka/unregister-query-subscription! dep-sub-id))
-                                                        ;; Register new subscription with updated SQL
-                                                        ;; Use the session from the existing subscription if available
+                                                          (log/info "[CASCADE] Unregistering old subscription:" actual-sub-id)
+                                                          (kafka/unregister-query-subscription! actual-sub-id))
+                                                        ;; Register new subscription with TEMPLATE SQL (not resolved)
                                                         (let [cascade-session-id (or (:session-id existing-sub) actual-session-id)]
+                                                          (log/info "[CASCADE] Registering new subscription with template SQL:" actual-sub-id)
                                                           (kafka/register-query-subscription! 
-                                                           dep-sub-id resolved-dep-sql [] 
+                                                           actual-sub-id dep-block-sql []  ;; Store template SQL
                                                            (kafka/create-subscription-callback cascade-session-id) 
                                                            cascade-session-id
                                                            nil
-                                                           false))
+                                                           false
+                                                           []))
                                                         ;; Use debounced execution for new subscriptions too
-                                                        (swap! kafka/pending-re-executions assoc dep-sub-id (System/currentTimeMillis))))))
+                                                        (swap! kafka/pending-re-executions assoc actual-sub-id (System/currentTimeMillis))))))  ; Close the has-templates let and matching-subs let
+                                                  ) ; Close the if-not and outer let
                                                 (catch Exception e
                                                   (log/error "[CASCADE] Error processing dependent block" dep-block-id ":" (.getMessage e)))))))]
                               ;; Wait for all cascades to complete (with timeout)  

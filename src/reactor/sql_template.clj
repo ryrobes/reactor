@@ -42,7 +42,13 @@
                               :resolved-blocks resolved-blocks})))
             ;; Get the block's SQL
             (if-let [block-sql (get-block-sql session-state block-id)]
-              (let [;; Remove any LIMIT from the referenced SQL
+              (let [_ (log/info {:message "Template resolution: Found parent block SQL"
+                                :block-id block-id
+                                :sql-length (count block-sql)
+                                :sql-preview (if (> (count block-sql) 100)
+                                               (str (subs block-sql 0 100) "...")
+                                               block-sql)})
+                    ;; Remove any LIMIT from the referenced SQL
                     clean-sql (str/replace block-sql #"(?i)\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?" "")
                     ;; Recursively resolve any templates in the referenced SQL
                     resolved-sql (resolve-templates clean-sql 
@@ -156,3 +162,14 @@
                  :sql sql})
       ;; Return original SQL if resolution fails
       sql)))
+
+(defn resolve-sql-templates-with-deps
+  "Resolve SQL template references and return both the resolved SQL and the block dependencies"
+  [sql session-state]
+  (let [refs (extract-template-refs sql)]
+    (if (empty? refs)
+      {:sql sql :dependencies []}
+      (let [resolved (resolve-templates sql session-state #{})
+            ;; Extract just the block IDs without .sql suffix
+            deps (mapv #(str/replace % #"\.sql$" "") refs)]
+        {:sql resolved :dependencies deps}))))

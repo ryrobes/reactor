@@ -11,6 +11,7 @@
             [reactor.session_simple :as session]
             [reactor.structural-diff :as sdiff]
             [reactor.temporal-cache :as tcache]
+            [reactor.sql-template :as sql-template]
             [org.httpkit.server :as http-server]
             [clojure.tools.logging :as log]
             [clojure.string :as str]
@@ -56,6 +57,11 @@
 
 (defonce sse-channels
   ;; Map of session-id -> #{channel}
+  (atom {}))
+
+(defonce subscription-dependencies
+  ;; Map of parent-block-id -> #{subscription-ids that depend on it}
+  ;; This tracks which subscriptions have templates referencing each block
   (atom {}))
 
 ;; ============================================================================
@@ -180,7 +186,7 @@
 
 (defn register-query-subscription!
   "Register a SQL query subscription that will be re-executed on relevant changes."
-  [sub-id sql params callback session-id & [client-id is-temporal-param?]]
+  [sub-id sql params callback session-id & [client-id is-temporal-param? parent-block-ids]]
   (let [tables (extract-tables-from-sql sql)
         ;; Check if this is a temporal query - either has AS OF TIMESTAMP clause OR passed as parameter
         is-temporal? (or is-temporal-param?  ;; Explicitly passed from caller (for as-of queries)
@@ -193,12 +199,17 @@
                   :session-id session-id
                   :client-id client-id
                   :temporal? is-temporal?  ;; Mark temporal queries (for logging/debugging)
-                  :inert? false}]          ;; NO LONGER INERT - all queries participate in reactive cycle
+                  :inert? false             ;; NO LONGER INERT - all queries participate in reactive cycle
+                  :parent-blocks parent-block-ids}]  ;; Track which blocks this subscription depends on
     (swap! active-subscriptions assoc sub-id sub-info)
     ;; Update table index for ALL queries (including temporal)
     ;; This allows temporal queries to also react to changes (and benefit from diffing)
     (doseq [table tables]
       (swap! table-to-subs update (str/lower-case table) (fnil conj #{}) sub-id))
+    ;; Track parent block dependencies
+    (when parent-block-ids
+      (doseq [parent-id parent-block-ids]
+        (swap! subscription-dependencies update parent-id (fnil conj #{}) sub-id)))
     (log/info "Registered" (if is-temporal? "TEMPORAL (reactive)" "REACTIVE") 
              "subscription" sub-id "for tables:" tables
              "- will react to changes")
@@ -225,6 +236,13 @@
                                    (and (vector? %)
                                         (some #{sub-id} %))) 
                               clients))))
+    ;; Clean up parent block dependencies
+    (when-let [parent-blocks (:parent-blocks sub-info)]
+      (doseq [parent-id parent-blocks]
+        (swap! subscription-dependencies update parent-id disj sub-id)
+        ;; Remove empty sets
+        (when (empty? (get @subscription-dependencies parent-id))
+          (swap! subscription-dependencies dissoc parent-id))))
     ;; Track subscription removal
     (meta/track-subscription-removed! sub-id "manual-unregister")
     (log/info "Unregistered query subscription" sub-id)))
@@ -562,9 +580,30 @@
                (when (> (count query) 100) 
                  (str "\n  SQL: " (subs query 0 100) "...")))
       (if-let [node @session/default-node]
-        (let [start-time (System/currentTimeMillis)
+        (let [;; CRITICAL FIX: Resolve templates at execution time with current session state
+              ;; This ensures we always get the latest parent SQL
+              resolved-query (if (re-find #"\{\{[^}]+\.sql\}\}" query)
+                              (do
+                                (log/info "[KAFKA-REACTIVE] Query contains templates, resolving with current session state...")
+                                (if-let [session-obj (session/get-session session-id)]
+                                  (let [session-state (session/get-state session-obj)
+                                        template-result (sql-template/resolve-sql-templates-with-deps query session-state)
+                                        resolved-sql (:sql template-result)]
+                                    (log/info "[KAFKA-REACTIVE] Template resolution complete:"
+                                             "\n  Original SQL:" (if (> (count query) 100)
+                                                                  (str (subs query 0 100) "...")
+                                                                  query)
+                                             "\n  Resolved SQL:" (if (> (count resolved-sql) 100)
+                                                                  (str (subs resolved-sql 0 100) "...")
+                                                                  resolved-sql))
+                                    resolved-sql)
+                                  (do
+                                    (log/warn "[KAFKA-REACTIVE] No session found for template resolution, using original SQL")
+                                    query)))
+                              query)  ;; No templates, use original query
+              start-time (System/currentTimeMillis)
               ;; Check if this is a temporal count query that can be cached
-              cached-result (tcache/get-cached query)
+              cached-result (tcache/get-cached resolved-query)
               ;; For temporal queries, need to use time-travel execution
               result (if cached-result
                        ;; Use cached result for temporal count queries
@@ -575,28 +614,28 @@
                        ;; Execute query normally
                        (if temporal?
                          (let [;; Extract timestamp from the query
-                               timestamp-match (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'([^']+)'" query)
+                               timestamp-match (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'([^']+)'" resolved-query)
                                timestamp (when timestamp-match (second timestamp-match))
                                exec-result (if timestamp
                                            (do
                                              (log/debug "[KAFKA-REACTIVE] Executing temporal query with timestamp:" timestamp)
                                              ;; The query ALREADY contains the temporal clause, so execute directly
                                              ;; Don't use execute-sql-with-time-travel as it would add another clause
-                                             (xts/execute-sql node query params))
+                                             (xts/execute-sql node resolved-query params))
                                            ;; Fallback to regular execution if can't extract timestamp
-                                           (xts/execute-sql node query params))]
+                                           (xts/execute-sql node resolved-query params))]
                            ;; Cache the result if it's a temporal count query
-                           (tcache/cache-result! query exec-result)
+                           (tcache/cache-result! resolved-query exec-result)
                            exec-result)
                          ;; Regular non-temporal execution
                          (if params
-                           (xts/execute-sql node query params)
-                           (xts/execute-sql node query))))
+                           (xts/execute-sql node resolved-query params)
+                           (xts/execute-sql node resolved-query))))
               execution-time (- (System/currentTimeMillis) start-time)
               results (:results result [])
               result-count (count results)
               ;; Calculate data size metrics (cached for temporal queries)
-              cache-key [query params (:timestamp result)]
+              cache-key [resolved-query params (:timestamp result)]
               data-size (if-let [cached-size (and cache-key (get @metrics-cache cache-key))]
                           cached-size
                           (let [size (calculate-result-metrics results)]
