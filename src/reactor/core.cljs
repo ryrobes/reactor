@@ -566,8 +566,12 @@
    (sql-subscribe-with-id! sub-id sql params nil))
   ([sub-id sql params as-of]
    ;; Create subscription with explicit ID
-   (let [result-atom (r/atom {:loading true})]
-     (create-sql-subscription! sql params as-of result-atom sub-id)
+   ;; The sub-id itself is often the block-id for block-based queries
+   (let [result-atom (r/atom {:loading true})
+         ;; Pass the sub-id as block-id if it doesn't contain random UUIDs
+         block-id (when-not (re-find #"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" sub-id)
+                    sub-id)]
+     (create-sql-subscription! sql params as-of result-atom sub-id block-id)
      result-atom)))
 
 (defn sql-exec!
@@ -989,7 +993,7 @@
 
 (defn create-sql-subscription!
   "Create a reactive SQL subscription that updates automatically"
-  [sql params as-of result-atom & [client-id]]
+  [sql params as-of result-atom & [client-id block-id]]
   (let [;; Use client-provided ID or generate one
         sub-id (or client-id (str "sql-" (random-uuid)))
         server-url (:server-url @config)
@@ -1017,7 +1021,8 @@
                               (clj->js (merge {:sql sql
                                               :params params
                                               :subscription-id sub-id}
-                                             (when as-of {:as-of as-of}))))})  ;; Pass sub-id to server
+                                             (when as-of {:as-of as-of})
+                                             (when block-id {:block_id block-id}))))})  ;; Pass sub-id and block-id to server
         (.then #(.json %))
         (.then #(let [result (js->clj % :keywordize-keys true)]
                   ;(js/console.log "[CLIENT] Initial query result for" sub-id "Result:" (clj->js result))

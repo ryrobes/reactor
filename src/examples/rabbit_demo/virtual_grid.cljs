@@ -104,6 +104,18 @@
 
 ;; ============= Drag Handlers =============
 
+(defn prevent-default-dragover 
+  "Global handler to prevent default and allow drop"
+  [e]
+  (.preventDefault e)
+  (when (.-dataTransfer e)
+    (set! (.-dropEffect (.-dataTransfer e)) "copy"))
+  ;; Also update preview position during dragover
+  (when (:dragging? @drag-state)
+    (swap! drag-state assoc :preview
+           {:x (.-clientX e)
+            :y (.-clientY e)})))
+
 (defn start-cell-drag! [row-data col-key cell-value sql event]
   (.preventDefault event)
   (let [filter-sql (str "SELECT * FROM (" sql ") WHERE " (name col-key) " = '" cell-value "'")]
@@ -128,57 +140,101 @@
       (set! (.-src img) "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=")
       (.setDragImage dt img 0 0))))
 
-(defn start-column-drag! [col-key sql results event]
-  (.preventDefault event)
+(defn start-column-drag! [col-key sql source-block-id results event]
+  (js/console.log "start-column-drag! called for column:" (name col-key) "from block:" source-block-id
+                  "type:" (type source-block-id) "keyword?" (keyword? source-block-id))
+  ;; Don't prevent default on dragstart - let the browser handle it
   ;; Get sample values for type detection
   (let [sample-values (take 10 (map col-key results))
         col-type (detect-column-type col-key sample-values)
-        ;; Create handlers that we can reference for removal
+        drag-counter (atom 0)
+        ;; Use mouse move for smooth preview tracking
         handle-mouse-move (fn handle-mouse-move [e]
                            (when (:dragging? @drag-state)
-                             (swap! drag-state assoc :preview
-                                    {:x (.-clientX e)
-                                     :y (.-clientY e)})))
-        handle-mouse-up (fn handle-mouse-up [e]
-                         (when-let [handlers (:handlers @drag-state)]
-                           (js/document.removeEventListener "mousemove" (:move handlers))
-                           (js/document.removeEventListener "mouseup" (:up handlers)))
-                         (swap! drag-state assoc :dragging? false))]
+                             (let [new-x (.-clientX e)
+                                   new-y (.-clientY e)]
+                               ;; Log first movement to verify it's working
+                               (when (= 1 (.-timeStamp e))
+                                 (js/console.log "Mouse moving, updating preview to:" new-x new-y))
+                               (swap! drag-state assoc :preview
+                                      {:x new-x
+                                       :y new-y}))))
+        ;; Track drag events
+        handle-drag (fn handle-drag [e]
+                      (swap! drag-counter inc)
+                      (when (= 1 @drag-counter)
+                        (js/console.log "Drag event is firing")))
+        ;; Clean up listeners on dragend
+        handle-drag-end (fn handle-drag-end [e]
+                         (js/console.log "Global dragend event fired")
+                         (js/document.removeEventListener "mousemove" handle-mouse-move)
+                         (js/document.removeEventListener "drag" handle-drag)
+                         (js/document.removeEventListener "dragend" handle-drag-end)
+                         ;; Only clear state if drop didn't happen (e.g., cancelled)
+                         (js/setTimeout 
+                           (fn []
+                             (when (:dragging? @drag-state)
+                               (js/console.log "No drop occurred, clearing drag state")
+                               (reset! drag-state
+                                       {:dragging? false
+                                        :type nil
+                                        :data nil
+                                        :preview nil
+                                        :handlers nil})))
+                           100))]
     
-    ;; Store handlers in state for cleanup
+    ;; Store handlers and data in state
     (reset! drag-state
             {:dragging? true
              :type :column
              :data {:column col-key
                     :column-type col-type
-                    :source-sql sql}
+                    :source-sql sql
+                    :source-block-id (if (keyword? source-block-id)
+                                       (name source-block-id)
+                                       (str source-block-id))}
              :pending-block {:type :query
                            :sql sql  ;; Will be transformed on drop
                            :column col-key
-                           :column-type col-type}
+                           :column-type col-type
+                           :source-block-id (if (keyword? source-block-id)
+                                             (name source-block-id)
+                                             (str source-block-id))}
              :preview {:x (.-clientX event)
                        :y (.-clientY event)}
              :handlers {:move handle-mouse-move
-                       :up handle-mouse-up}})
+                       :end handle-drag-end}})
     
-    ;; Add global mouse listeners
+    ;; Add listeners - mousemove for preview, drag for tracking, dragend for cleanup
     (js/document.addEventListener "mousemove" handle-mouse-move)
-    (js/document.addEventListener "mouseup" handle-mouse-up))
+    (js/document.addEventListener "drag" handle-drag)
+    (js/document.addEventListener "dragend" handle-drag-end)
+    
+    ;; Add global dragover to ensure drag continues
+    (js/document.addEventListener "dragover" prevent-default-dragover)
+    (js/console.log "Event listeners added"))
   
   (when-let [dt (.-dataTransfer event)]
-    (.setData dt "text/plain" "")
+    ;; Set multiple data formats for compatibility
+    (.setData dt "text/plain" "column-drag")
     (.setData dt "reactor/grid-column" "true")
-    (set! (.-effectAllowed dt) "copy")
+    (set! (.-effectAllowed dt) "all")  ;; Allow all effects
     ;; Hide the native drag image by setting it to a transparent 1x1 image
     (let [img (js/document.createElement "img")]
       (set! (.-src img) "data:image/gif;base64,R0lGODlhAQABAIAAAAUEBAAAACwAAAAAAQABAAACAkQBADs=")
-      (.setDragImage dt img 0 0))))
+      (.setDragImage dt img 0 0))
+    (js/console.log "Drag data set, effectAllowed: all")))
 
 (defn handle-drag-end! [event]
-  ;; Clean up event listeners if they exist
+  ;; Clean up ALL event listeners
   (when-let [handlers (:handlers @drag-state)]
-    (js/document.removeEventListener "mousemove" (:move handlers))
-    (js/document.removeEventListener "mouseup" (:up handlers)))
+    (when (:move handlers)
+      (js/document.removeEventListener "mousemove" (:move handlers)))
+    (when (:end handlers)
+      (js/document.removeEventListener "dragend" (:end handlers))))
+  
+  ;; Also remove the global dragover listener
+  (js/document.removeEventListener "dragover" prevent-default-dragover)
   
   (reset! drag-state
           {:dragging? false
@@ -190,7 +246,11 @@
 (defn get-pending-block
   "Returns the pending block from the current drag state if any"
   []
-  (:pending-block @drag-state))
+  (let [state @drag-state
+        pending (:pending-block state)]
+    (js/console.log "Getting pending block. Drag state keys:" (clj->js (keys state)))
+    (js/console.log "Pending block:" (clj->js pending))
+    pending))
 
 (defn create-block-from-drag!
   "Creates a block from the current drag state at the given position"
@@ -205,18 +265,27 @@
         ;; For column drags, call the transform API
         (let [column (get-in state [:data :column])
               column-type (get-in state [:data :column-type])
-              source-sql (get-in state [:data :source-sql])]
-          (js/console.log "Calling transform API for column:" (name column) "type:" (name column-type))
-          (-> (js/fetch "/api/sql-transform"
-                       #js {:method "POST"
-                            :headers #js {"Content-Type" "application/json"}
-                            :body (js/JSON.stringify
-                                    #js {:type "group-by"
-                                         :source_sql source-sql
-                                         :column_name (name column)
-                                         :column_type (name column-type)})})
-              (.then #(.json %))
+              source-sql (get-in state [:data :source-sql])
+              source-block-id (get-in state [:data :source-block-id])]
+          (js/console.log "Calling transform API for column:" (name column) "type:" (name column-type) 
+                         "from block:" source-block-id "is-string?" (string? source-block-id))
+          (let [api-url (str js/window.location.protocol "//" js/window.location.hostname ":5000/api/sql-transform")
+                request-body #js {:type "group-by"
+                                  :source_sql source-sql
+                                  :source_block_id source-block-id
+                                  :column_name (name column)
+                                  :column_type (name column-type)}]
+            (js/console.log "API URL:" api-url)
+            (js/console.log "Request body:" request-body)
+            (-> (js/fetch api-url
+                         #js {:method "POST"
+                              :headers #js {"Content-Type" "application/json"}
+                              :body (js/JSON.stringify request-body)})
+              (.then (fn [resp] 
+                       (js/console.log "API response status:" (.-status resp))
+                       (.json resp)))
               (.then (fn [response]
+                       (js/console.log "API response data:" response)
                        (let [transformed-sql (.-sql ^js response)
                              block-data {:id (str (random-uuid))
                                        :type :query
@@ -240,7 +309,7 @@
                                        :size {:width 400 :height 300}
                                        :title (str (name column) " - fallback")}]
                          (when on-complete
-                           (on-complete block-data))))))
+                           (on-complete block-data)))))))
           nil)  ;; Return nil since we're handling async
         ;; For cell drags or other types, create immediately
         (merge {:id (str (random-uuid))
@@ -365,7 +434,7 @@
 
 ;; ============= Header Component =============
 
-(defn grid-header [{:keys [columns width on-column-drag sql row-count results]}]
+(defn grid-header [{:keys [columns width on-column-drag sql block-id row-count results]}]
   (let [;; Add row number header
         columns-with-row-num (vec (cons "#" columns))
         row-num-width 60
@@ -410,8 +479,14 @@
                           :transition "all 0.2s"}
                   :draggable (not is-row-num?)
                   :on-drag-start (when (not is-row-num?)
-                                  #(start-column-drag! (nth columns actual-col-idx) sql results %))
-                  :on-drag-end (when (not is-row-num?) handle-drag-end!)
+                                  (fn [e]
+                                    ;; Don't stop propagation - let it bubble
+                                    (start-column-drag! (nth columns actual-col-idx) sql block-id results e)))
+                  ;; Don't handle drag-end here - let the drop or global dragend handle it
+                  :on-drag-end (when (not is-row-num?) 
+                                (fn [e] 
+                                  (.stopPropagation e)
+                                  (js/console.log "Header drag-end - not clearing state yet")))
                   :on-mouse-enter (when (not is-row-num?)
                                    #(set! (.. % -currentTarget -style -background) 
                                          (str (themes/get-primary-color) "1A")))
@@ -482,6 +557,7 @@
                      :width width
                      :on-column-drag on-column-drag
                      :sql sql
+                     :block-id block-id
                      :row-count row-count
                      :results results-vec}]
        
@@ -502,28 +578,32 @@
 ;; ============= Drag Preview Overlay =============
 
 (defn drag-preview []
-  (when-let [state @drag-state]
+  (let [state @drag-state]
     (when (:dragging? state)
-      [:div {:style {:position "fixed"
-                     :left (+ 10 (get-in state [:preview :x] 0))
-                     :top (+ 10 (get-in state [:preview :y] 0))
-                     :padding "8px 12px"
-                     :background (str "linear-gradient(135deg, " 
-                                    (themes/get-primary-color) " 0%, " 
-                                    (themes/get-secondary-color) " 100%)")
-                     :color "#0a0a0a"
-                     :border-radius "4px"
-                     :font-family (themes/get-font-family :monospace)
-                     :font-size "11px"
-                     :font-weight "bold"
-                     :pointer-events "none"
-                     :z-index 10000
-                     :box-shadow "0 4px 20px rgba(0,0,0,0.5)"
-                     :transition "left 0.05s, top 0.05s"}}
-       (case (:type state)
-         :cell (str "Cell: " (get-in state [:data :value]))
-         :column (let [col-type (get-in state [:data :column-type])]
-                   (str "Column: " (name (get-in state [:data :column]))
-                        " (" (name col-type) ")"))
-         :row "Row Data"
-         "Dragging...")])))
+      (let [x (get-in state [:preview :x] 100)
+            y (get-in state [:preview :y] 100)]
+        ;; Log occasionally to debug
+        (when (= 0 (mod (.now js/Date) 1000))
+          (js/console.log "Drag preview rendering at:" x y))
+        [:div {:style {:position "fixed"
+                       :left (str (+ 10 x) "px")
+                       :top (str (+ 10 y) "px")
+                       :padding "8px 12px"
+                       :background (str "linear-gradient(135deg, " 
+                                      (themes/get-primary-color) " 0%, " 
+                                      (themes/get-secondary-color) " 100%)")
+                       :color "#ffffff"
+                       :border-radius "4px"
+                       :font-family (themes/get-font-family :monospace)
+                       :font-size "12px"
+                       :font-weight "bold"
+                       :pointer-events "none"
+                       :z-index 999999
+                       :box-shadow "0 4px 20px rgba(0,0,0,0.8)"}}
+         (case (:type state)
+           :cell (str "Cell: " (get-in state [:data :value]))
+           :column (let [col-type (get-in state [:data :column-type])]
+                     (str "Column: " (name (get-in state [:data :column]))
+                          " (" (name col-type) ")"))
+           :row "Row Data"
+           "Dragging...")]))))

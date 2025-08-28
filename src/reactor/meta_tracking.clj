@@ -9,8 +9,10 @@
            [java.time Instant]))
 
 ;; Async channel for non-blocking meta-data writes
-(defonce meta-channel (chan 1000))
+;; Use sliding buffer to drop oldest events when full instead of blocking
+(defonce meta-channel (chan (async/sliding-buffer 5000)))
 (defonce tracking-enabled? (atom true))
+(defonce dropped-events (atom 0))
 
 ;; Forward declarations
 (declare process-subscription!)
@@ -47,37 +49,40 @@
   (log/debug :meta (str "track-subscription-created! called for " sub-id " enabled? " @tracking-enabled?))
   (when @tracking-enabled?
     (log/debug :meta (str "Putting subscription event on channel for " sub-id))
-    (put! meta-channel
-          {:type :subscription
-           :action :created
-           :sub-id sub-id
-           :session-id session-id
-           :query query
-           :tables tables
-           :timestamp (current-timestamp)})))
+    (when-not (async/offer! meta-channel
+                            {:type :subscription
+                             :action :created
+                             :sub-id sub-id
+                             :session-id session-id
+                             :query query
+                             :tables tables
+                             :timestamp (current-timestamp)})
+      (swap! dropped-events inc))))
 
 (defn track-subscription-updated!
   "Async track when a subscription receives an update"
   [sub-id execution-time-ms result-count]
   (when @tracking-enabled?
-    (put! meta-channel
-                {:type :subscription
-                 :action :updated
-                 :sub-id sub-id
-                 :execution-time-ms execution-time-ms
-                 :result-count result-count
-                 :timestamp (current-timestamp)})))
+    (when-not (async/offer! meta-channel
+                            {:type :subscription
+                             :action :updated
+                             :sub-id sub-id
+                             :execution-time-ms execution-time-ms
+                             :result-count result-count
+                             :timestamp (current-timestamp)})
+      (swap! dropped-events inc))))
 
 (defn track-subscription-removed!
   "Async track when a subscription is removed"
   [sub-id reason]
   (when @tracking-enabled?
-    (put! meta-channel
-                {:type :subscription
-                 :action :removed
-                 :sub-id sub-id
-                 :reason reason
-                 :timestamp (current-timestamp)})))
+    (when-not (async/offer! meta-channel
+                            {:type :subscription
+                             :action :removed
+                             :sub-id sub-id
+                             :reason reason
+                             :timestamp (current-timestamp)})
+      (swap! dropped-events inc))))
 
 ;; ========== Event Tracking ==========
 
@@ -85,13 +90,14 @@
   "Async track an event with category"
   [category event-type payload session-id]
   (when @tracking-enabled?
-    (put! meta-channel
-                {:type :event
-                 :category category
-                 :event-type event-type
-                 :payload payload
-                 :session-id session-id
-                 :timestamp (current-timestamp)})))
+    (when-not (async/offer! meta-channel
+                            {:type :event
+                             :category category
+                             :event-type event-type
+                             :payload payload
+                             :session-id session-id
+                             :timestamp (current-timestamp)})
+      (swap! dropped-events inc))))
 
 ;; ========== Reaction Tracking ==========
 
@@ -99,12 +105,13 @@
   "Async track when a table change triggers reactions"
   [table-name change-type affected-subs]
   (when @tracking-enabled?
-    (put! meta-channel
-                {:type :reaction
-                 :table-name table-name
-                 :change-type change-type
-                 :affected-subscriptions affected-subs
-                 :timestamp (current-timestamp)})))
+    (when-not (async/offer! meta-channel
+                            {:type :reaction
+                             :table-name table-name
+                             :change-type change-type
+                             :affected-subscriptions affected-subs
+                             :timestamp (current-timestamp)})
+      (swap! dropped-events inc))))
 
 ;; ========== Performance Tracking ==========
 
@@ -112,13 +119,14 @@
   "Async track query execution performance"
   [query execution-time-ms result-count]
   (when @tracking-enabled?
-    (put! meta-channel
-                {:type :performance
-                 :metric-type :query
-                 :query query
-                 :execution-time-ms execution-time-ms
-                 :result-count result-count
-                 :timestamp (current-timestamp)})))
+    (when-not (async/offer! meta-channel
+                            {:type :performance
+                             :metric-type :query
+                             :query query
+                             :execution-time-ms execution-time-ms
+                             :result-count result-count
+                             :timestamp (current-timestamp)})
+      (swap! dropped-events inc))))
 
 ;; ========== Internal processors ==========
 

@@ -37,8 +37,11 @@
 
 (defn create-group-by-query
   "Create a GROUP BY query for a column from a source query"
-  [{:keys [source-sql column-name column-type]}]
-  (let [wrapped-sql (wrap-as-subquery source-sql "source_data")
+  [{:keys [source-sql source-block-id column-name column-type]}]
+  (let [;; If we have a source block ID, use template reference, otherwise embed SQL
+        wrapped-sql (if source-block-id
+                      (str "({{" source-block-id ".sql}}) AS source_data")
+                      (wrap-as-subquery source-sql "source_data"))
         col-type (or column-type (get-column-type column-name))
         col-str (name column-name)]
     (case col-type
@@ -53,13 +56,14 @@
            "FROM " wrapped-sql)
       
       :date
-      ;; For date columns, group by date parts
+      ;; For date columns, treat as regular dimension (XTDB doesn't support DATE_TRUNC)
       (str "SELECT "
-           "DATE_TRUNC('day', " col-str ") AS day, "
+           col-str ", "
            "COUNT(*) AS count "
            "FROM " wrapped-sql " "
-           "GROUP BY DATE_TRUNC('day', " col-str ") "
-           "ORDER BY day")
+           "GROUP BY " col-str " "
+           "ORDER BY " col-str " DESC "
+           "LIMIT 20")
       
       ;; Default: dimension (text/categorical)
       (str "SELECT "
@@ -82,10 +86,11 @@
 
 (defn transform-sql
   "Main entry point for SQL transformations"
-  [{:keys [type source-sql column-name cell-value column-type] :as params}]
+  [{:keys [type source-sql source-block-id column-name cell-value column-type] :as params}]
   (log/info {:message "Transforming SQL"
             :type type
             :column column-name
+            :source-block-id source-block-id
             :has-source-sql? (boolean source-sql)})
   
   (case type

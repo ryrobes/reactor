@@ -2093,35 +2093,49 @@
         :on-mouse-leave (fn []
                          (stop-drag!)
                          (stop-resize!))
+        :on-drag-enter (fn [e]
+                        (.preventDefault e)
+                        (js/console.log "Drag entered canvas")
+                        (set! (.-dropEffect (.-dataTransfer e)) "copy"))
+        :on-drag-leave (fn [e]
+                        (js/console.log "Drag left canvas"))
         :on-drag-over (fn [e]
                        (.preventDefault e)  ; Allow drop
-                       (set! (.-dropEffect (.-dataTransfer e)) "copy"))
+                       (.stopPropagation e) ; Stop event bubbling
+                       (set! (.-dropEffect (.-dataTransfer e)) "copy")
+                       ;; Log occasionally to avoid spam
+                       (when (= 0 (mod (.-timeStamp e) 100))
+                         (js/console.log "Drag over canvas")))
         :on-drop (fn [e]
                   (.preventDefault e)
                   (js/console.log "DROP event fired")
-                  ;; Check if this is a grid drag
-                  (when (or (.getData (.-dataTransfer e) "reactor/grid-cell")
-                           (.getData (.-dataTransfer e) "reactor/grid-column"))
-                    (js/console.log "Grid drag detected")
-                    (let [canvas-rect (.getBoundingClientRect (.-currentTarget e))
-                          drop-x (- (.-clientX e) (.-left canvas-rect))
-                          drop-y (- (.-clientY e) (.-top canvas-rect))]
-                      (js/console.log "Drop position:" drop-x drop-y)
-                      ;; Call with callback for async handling
-                      (if-let [sync-block (vgrid/create-block-from-drag! 
-                                            drop-x drop-y
-                                            (fn [new-block]
-                                              (js/console.log "Async block created:" new-block)
-                                              (when new-block
-                                                (r/dispatch! [:add-block new-block])
-                                                (vgrid/handle-drag-end! e))))]
-                        ;; If synchronous block returned, handle it
-                        (do
-                          (js/console.log "Sync block created:" sync-block)
-                          (r/dispatch! [:add-block sync-block])
-                          (vgrid/handle-drag-end! e))
-                        ;; For async, don't clear drag state yet - callback will do it
-                        (js/console.log "Waiting for async block creation...")))))}
+                  (let [dt (.-dataTransfer e)
+                        text-data (.getData dt "text/plain")
+                        has-cell? (= (.getData dt "reactor/grid-cell") "true")
+                        has-column? (= (.getData dt "reactor/grid-column") "true")]
+                    (js/console.log "Data transfer - text:" text-data "cell:" has-cell? "column:" has-column?)
+                    ;; Check if this is a grid drag (check text/plain as fallback)
+                    (when (or has-cell? has-column? (= text-data "column-drag"))
+                      (js/console.log "Grid drag detected")
+                      (let [canvas-rect (.getBoundingClientRect (.-currentTarget e))
+                            drop-x (- (.-clientX e) (.-left canvas-rect))
+                            drop-y (- (.-clientY e) (.-top canvas-rect))]
+                        (js/console.log "Drop position:" drop-x drop-y)
+                        ;; Call with callback for async handling
+                        (if-let [sync-block (vgrid/create-block-from-drag! 
+                                              drop-x drop-y
+                                              (fn [new-block]
+                                                (js/console.log "Async block created:" new-block)
+                                                (when new-block
+                                                  (r/dispatch! [:add-block new-block])
+                                                  (vgrid/handle-drag-end! e))))]
+                          ;; If synchronous block returned, handle it
+                          (do
+                            (js/console.log "Sync block created:" sync-block)
+                            (r/dispatch! [:add-block sync-block])
+                            (vgrid/handle-drag-end! e))
+                          ;; For async, don't clear drag state yet - callback will do it
+                          (js/console.log "Waiting for async block creation..."))))))}
        ;; Grid overlay effect
        [:div {:style {:position "absolute"
                      :width "100%"
@@ -3047,16 +3061,21 @@
 (defn ^:export init! []
   ;; Set app name for snapshot tracking
   (set! js/window.REACTOR_APP_NAME "rabbit")
-  (r/init! {:server-url "http://localhost:5000"})
-  ;; Initialize theming system
-  (themes/init!)
-  ;; Initialize drag-and-drop handlers for the toolbar
-  (dtoolbar/init-drag-handlers!)
-  ;; Hijack console by default to send to tap>
-  (console-tap/hijack-console!)
-  ;; Initialize with default session or get from query params
+  ;; Get session ID from query params FIRST
   (let [params (js/URLSearchParams. js/window.location.search)
         session-id (or (.get params "session") "default")]
+    ;; Initialize reactor with proper session ID
+    (r/init! {:server-url "http://localhost:5000"
+              :session-id session-id})
+    ;; Ensure SSE connection is established early for SQL subscriptions
+    (r/ensure-sql-sse-connection!)
+    ;; Initialize theming system
+    (themes/init!)
+    ;; Initialize drag-and-drop handlers for the toolbar
+    (dtoolbar/init-drag-handlers!)
+    ;; Hijack console by default to send to tap>
+    (console-tap/hijack-console!)
+    ;; Set current session and switch to it
     (reset! current-session session-id)
     (r/switch-session! session-id))
   ;; Auto-refresh queries for blocks loaded from persistence

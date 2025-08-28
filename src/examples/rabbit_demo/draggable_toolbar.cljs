@@ -58,20 +58,29 @@
   "Stop dragging and create block at drop position"
   [event]
   (when @drag-pill-state
-    (let [canvas-rect (.. (.getElementById js/document "canvas") getBoundingClientRect)
-          drop-x (- (.-clientX event) (.-left canvas-rect))
-          drop-y (- (.-clientY event) (.-top canvas-rect) 60) ;; Subtract toolbar height
-          ;; The type stored in drag-pill-state can be either:
-          ;; - A keyword (from toolbar pills)
-          ;; - A map with :type, :sql, :table (from table dropdown)
-          pill-info (:type @drag-pill-state)
-          pill-type (if (map? pill-info)
-                      (:type pill-info)  ;; Extract :type from the map
-                      pill-info)         ;; Use the keyword directly
-          custom-sql (when (map? pill-info)
-                       (:sql pill-info))
-          blocks @(r/subscribe [:blocks])
-          new-z-index (+ 1 (get-highest-z-index blocks))
+    (let [canvas-el (.getElementById js/document "canvas")]
+      (when canvas-el
+        (let [canvas-rect (.getBoundingClientRect canvas-el)
+              mouse-x (.-clientX event)
+              mouse-y (.-clientY event)
+              ;; Check if mouse is within canvas bounds
+              in-canvas? (and (>= mouse-x (.-left canvas-rect))
+                            (<= mouse-x (.-right canvas-rect))
+                            (>= mouse-y (.-top canvas-rect))
+                            (<= mouse-y (.-bottom canvas-rect)))
+              drop-x (- mouse-x (.-left canvas-rect))
+              drop-y (- mouse-y (.-top canvas-rect))
+              ;; The type stored in drag-pill-state can be either:
+              ;; - A keyword (from toolbar pills)
+              ;; - A map with :type, :sql, :table (from table dropdown)
+              pill-info (:type @drag-pill-state)
+              pill-type (if (map? pill-info)
+                          (:type pill-info)  ;; Extract :type from the map
+                          pill-info)         ;; Use the keyword directly
+              custom-sql (when (map? pill-info)
+                           (:sql pill-info))
+              blocks @(r/subscribe [:blocks])
+              new-z-index (+ 1 (get-highest-z-index blocks))
           
           ;; Create block data based on type
           block-data (case pill-type
@@ -128,15 +137,17 @@
                               :z-index new-z-index}
                       
                       nil)]  ;; Default case returns nil
-      
-      ;; Only create block if dropped on canvas
-      (when (and block-data
-                 (>= drop-x 0)
-                 (>= drop-y 0))
-        (js/console.log "Creating block from pill drop:" (clj->js block-data))
-        (r/dispatch! [:add-block block-data])))
+          
+          ;; Only create block if dropped on canvas
+          (when (and block-data in-canvas?)
+            (js/console.log "Creating block from pill drop at:" drop-x drop-y (clj->js block-data))
+            (r/dispatch! [:add-block block-data]))
+          
+          ;; Log if not in canvas for debugging
+          (when (and block-data (not in-canvas?))
+            (js/console.log "Pill dropped outside canvas bounds")))))
     
-    ;; Clean up drag state
+    ;; Always clean up drag state when mouse is released
     (reset! drag-pill-state nil)
     (reset! drag-preview nil)
     (.preventDefault event)))
@@ -608,14 +619,20 @@
 (defn init-drag-handlers!
   "Initialize global drag event handlers"
   []
+  ;; Remove any existing handlers first to avoid duplicates
+  (.removeEventListener js/document "mousemove" handle-pill-drag!)
+  (.removeEventListener js/document "mouseup" stop-pill-drag!)
+  
   ;; Handle global mouse move
   (.addEventListener js/document "mousemove" handle-pill-drag!)
   
-  ;; Handle global mouse up
-  (.addEventListener js/document "mouseup" stop-pill-drag!)
+  ;; Handle global mouse up - capture phase to ensure we get it
+  (.addEventListener js/document "mouseup" stop-pill-drag! true)
   
   ;; Prevent default drag behavior
   (.addEventListener js/document "dragstart" 
                      (fn [e] 
                        (when @drag-pill-state
-                         (.preventDefault e)))))
+                         (.preventDefault e))))
+  
+  (js/console.log "Drag handlers initialized for toolbar pills"))

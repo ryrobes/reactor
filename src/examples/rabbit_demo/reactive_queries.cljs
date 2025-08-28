@@ -95,7 +95,7 @@
   (let [cached-sql (get @block-sql-cache block-id)
         has-subscription (get @block-subscriptions block-id)
         would-have-been-blocked? (and cached-sql  (= cached-sql [sql params as-of]) has-subscription)]
-    (if (and cached-sql false ;; temp
+    (if (and cached-sql
              (= cached-sql [sql params as-of])
              has-subscription)
       ;; Same query is already running, skip re-execution COMPLETELY

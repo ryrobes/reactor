@@ -1145,7 +1145,18 @@
             (log/error e "[KAFKA-REACTIVE] Error sending to SSE channel - channel might be closed")
             ;; Clean up dead channel
             (unregister-sse-channel! session-id channel)))))
-    (log/warn "[KAFKA-REACTIVE] No SSE channels found for session" session-id "- client may not be connected")))
+    (do
+      (log/warn "[KAFKA-REACTIVE] No SSE channels found for session" session-id "- client may not be connected"
+               "\n  Available sessions with channels:" (keys @sse-channels)
+               "\n  Total channels:" (reduce + (map count (vals @sse-channels))))
+      ;; If this is a block subscription (starts with :), try finding the actual session
+      (when (and data (:subscription-id data) (keyword? (:subscription-id data)))
+        (log/info "[KAFKA-REACTIVE] Attempting to find alternative session for block subscription" (:subscription-id data))
+        ;; Try to find ANY active session that might be interested
+        (doseq [[alt-session-id channels] @sse-channels
+                :when (seq channels)]
+          (log/info "[KAFKA-REACTIVE] Sending block update to alternative session" alt-session-id)
+          (push-to-session alt-session-id data))))))
 
 (defn create-subscription-callback
   "Create a callback that pushes query results via SSE."

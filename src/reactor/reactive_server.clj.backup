@@ -369,16 +369,9 @@
                 params (:params body)
                 as-of (:as-of body)
                 block-id (:block_id body) ; The block ID of the query being executed
-                ;; Extract session from query params if provided (client sends ?session=xxx)
-                query-params (when-let [query-string (:query-string req)]
-                               (into {} (map #(clojure.string/split % #"=") 
-                                           (clojure.string/split query-string #"&"))))
-                actual-session-id (or (get query-params "session") session-id)
-                _ (when (not= actual-session-id session-id)
-                    (log/info "[REACTIVE-SERVER] Using session from query params:" actual-session-id "instead of default:" session-id))
-                ;; Get session state for template resolution  
-                session-state (when actual-session-id
-                               (when-let [session (session/get-session actual-session-id)]
+                ;; Get session state for template resolution
+                session-state (when session-id
+                               (when-let [session (session/get-session session-id)]
                                  (let [state (session/get-state session)]
                                    (log/info "[REACTIVE-SERVER] Session state for template resolution:" 
                                             {:has-state? (boolean state)
@@ -497,15 +490,15 @@
                            (str "\n  Base query for cache: " base-query-for-id)))
                 (kafka/register-query-subscription! 
                  sub-id sql-with-temporal params 
-                 (kafka/create-subscription-callback actual-session-id) 
-                 actual-session-id
+                 (kafka/create-subscription-callback session-id) 
+                 session-id
                  nil  ;; client-id
                  is-truly-temporal?)  ;; Pass temporal flag - only true for >30s old timestamps
                 
                 ;; Execute immediately to get initial results
                 (kafka/re-execute-subscription sub-id)
-                (log/info "[REACTIVE-SERVER] Using subscription" sub-id "for session" actual-session-id)
-                (log/info "[REACTIVE-SERVER] Active SSE channels for session:" (count (get @kafka/sse-channels actual-session-id [])))
+                (log/info "[REACTIVE-SERVER] Using subscription" sub-id "for session" session-id)
+                (log/info "[REACTIVE-SERVER] Active SSE channels for session:" (count (get @kafka/sse-channels session-id [])))
                 ;; Return initial results WITH the subscription ID
                 (let [node @session/default-node
                       ;; For temporal queries, we've already added the clause and executed via subscription
@@ -589,8 +582,7 @@
                                                 (when-let [dep-block-sql (or (get-in session-state [:canvas :blocks (keyword dep-block-id) :sql])
                                                                             (get-in session-state [:canvas :blocks dep-block-id :sql]))]
                                                   ;; Create subscription ID for the dependent block
-                                                  ;; Use keyword format to match actual block subscriptions
-                                                  (let [dep-sub-id (keyword dep-block-id)
+                                                  (let [dep-sub-id (str "block-" dep-block-id "-" session-id)
                                                         ;; Check if subscription exists and get its current SQL
                                                         existing-sub (get @kafka/active-subscriptions dep-sub-id)
                                                         ;; Resolve templates in the dependent query
@@ -614,14 +606,12 @@
                                                         (when existing-sub
                                                           (kafka/unregister-query-subscription! dep-sub-id))
                                                         ;; Register new subscription with updated SQL
-                                                        ;; Use the session from the existing subscription if available
-                                                        (let [cascade-session-id (or (:session-id existing-sub) actual-session-id)]
-                                                          (kafka/register-query-subscription! 
-                                                           dep-sub-id resolved-dep-sql [] 
-                                                           (kafka/create-subscription-callback cascade-session-id) 
-                                                           cascade-session-id
-                                                           nil
-                                                           false))
+                                                        (kafka/register-query-subscription! 
+                                                         dep-sub-id resolved-dep-sql [] 
+                                                         (kafka/create-subscription-callback session-id) 
+                                                         session-id
+                                                         nil
+                                                         false)
                                                         ;; Use debounced execution for new subscriptions too
                                                         (swap! kafka/pending-re-executions assoc dep-sub-id (System/currentTimeMillis))))))
                                                 (catch Exception e
@@ -641,7 +631,7 @@
                   {:status 200
                    :headers {"Content-Type" "application/json"
                             "Access-Control-Allow-Origin" "*"}
-                   :body (json/generate-string result-with-sub)})))))) 
+                   :body (json/generate-string result-with-sub)}))))
           
           ;; Override SQL exec to trigger reactive updates
           "/api/sql-exec"
@@ -914,7 +904,7 @@
              :body (json/generate-string {:error "Method not allowed"})})
           
           ;; Fall back to base handler
-          (base-handler req)))))))))
+          (base-handler req))))))
 
 (defn start-reactive!
   "Start a reactive Reactor server with Kafka integration."
