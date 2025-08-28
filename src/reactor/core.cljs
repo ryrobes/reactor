@@ -252,7 +252,7 @@
 (defn dispatch!
   "Dispatch an event - automatically handles server communication"
   [event]
-  (js/console.log "[CLIENT] dispatch! called with event:" (clj->js event))
+  (js/console.log "[CLIENT] dispatch! called with event:" (str event))
   (-> (js/fetch (str (:server-url @config) "/api/dispatch?session=" (:session-id @config))
                 #js {:method "POST"
                      :headers #js {"Content-Type" "application/json"}

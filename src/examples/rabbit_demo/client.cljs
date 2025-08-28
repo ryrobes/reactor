@@ -19,7 +19,9 @@
             [examples.rabbit-demo.rule-flow-block :as rule-flow-block]
             [examples.rabbit-demo.iframe-block :as iframe-block]
             [examples.rabbit-demo.template-resolver :as resolver]
-            [examples.rabbit-demo.themes :as themes]))
+            [examples.rabbit-demo.themes :as themes]
+            [examples.rabbit-demo.draggable-toolbar :as dtoolbar]
+            [examples.rabbit-demo.virtual-grid :as vgrid]))
 
 ;; ============= Subscriptions =============
 
@@ -41,7 +43,13 @@
     (get db :ui-settings {:monaco-font-size 12})))
 
 ;; Simple client-side atom for UI settings - will be synced with server
-(defonce ui-settings (reagent/atom {:monaco-font-size 12}))
+;; Initialize with saved value from localStorage if available
+(defonce ui-settings 
+  (reagent/atom 
+    (let [saved-size (js/localStorage.getItem "rabbit-monaco-font-size")]
+      {:monaco-font-size (if saved-size 
+                           (js/parseInt saved-size 10) 
+                           12)})))
 
 ;; Watch UI settings changes from server and sync to local atom
 (defonce ui-settings-watcher
@@ -283,7 +291,7 @@
                         (str "1px solid " (themes/get-primary-color)))
                :border-radius "4px"
                :padding "10px"
-               :z-index 10
+               :z-index (or (:z-index block) 10)
                :box-shadow (if @connection-mode
                             "0 0 30px rgba(255,0,110,0.5), inset 0 0 20px rgba(255,0,110,0.1)"
                             (str "0 0 20px " (themes/get-primary-color) "4C, inset 0 0 20px " (themes/get-primary-color) "0D"))
@@ -390,6 +398,7 @@
                            (let [new-size (max 8 (dec font-size))
                                  new-ui (assoc @ui-settings :monaco-font-size new-size)]
                              (swap! ui-settings assoc :monaco-font-size new-size)
+                             (js/localStorage.setItem "rabbit-monaco-font-size" (str new-size))
                              (r/dispatch! [:update-canvas-ui new-ui])))}
         "−"]
        [:span {:style {:padding "0 4px"
@@ -410,6 +419,7 @@
                            (let [new-size (min 24 (inc font-size))
                                  new-ui (assoc @ui-settings :monaco-font-size new-size)]
                              (swap! ui-settings assoc :monaco-font-size new-size)
+                             (js/localStorage.setItem "rabbit-monaco-font-size" (str new-size))
                              (r/dispatch! [:update-canvas-ui new-ui])))}
         "+"]]]
      ;; SQL Editor with Execute button to the right
@@ -419,38 +429,38 @@
       ;; Editor column
       [:div {:style {:flex 1}}
        ;; Always render the container to prevent layout shift
-       [:div {:style {:background (if (and executed-sql (not= executed-sql sql))
-                                    (str (themes/get-primary-color) "1A")
-                                    "transparent")
-                      :border (if (and executed-sql (not= executed-sql sql))
-                               (str "1px solid " (themes/get-primary-color) "4C")
-                               "1px solid transparent")
-                      :border-radius "4px 4px 0 0"
-                      :padding "4px 8px"
-                      :font-size "10px"
-                      :font-family (themes/get-font-family :monospace)
-                      :color (themes/get-primary-color)
-                      :display "flex"
-                      :align-items "center"
-                      :gap "5px"
-                      :cursor (if (and executed-sql (not= executed-sql sql)) "pointer" "default")
-                      :transition "all 0.2s"
-                      :min-height "24px"  ;; Ensure consistent height
-                      :visibility (if (and executed-sql (not= executed-sql sql)) "visible" "hidden")}
-              :on-mouse-over (when (and executed-sql (not= executed-sql sql))
-                              #(set! (.. % -target -style -background) (str (themes/get-primary-color) "33")))
-              :on-mouse-out (when (and executed-sql (not= executed-sql sql))
-                             #(set! (.. % -target -style -background) (str (themes/get-primary-color) "1A")))
-              :on-click (when (and executed-sql (not= executed-sql sql))
-                         (fn [e]
-                           (.stopPropagation e)
-                           ;; Reset to NOW - re-execute query without time travel
-                           (let [current-sql @local-sql]
-                             (rq/execute-block-query! id current-sql nil nil)
-                             ;; Reset time travel slider to NOW position
-                             (tt/reset-time-travel! id current-sql))))}
-        [:span "⏰"]
-        [:span "TIME TRAVEL MODE - Click to return to NOW"]]
+      ;;  [:div {:style {:background (if (and executed-sql (not= executed-sql sql))
+      ;;                               (str (themes/get-primary-color) "1A")
+      ;;                               "transparent")
+      ;;                 :border (if (and executed-sql (not= executed-sql sql))
+      ;;                          (str "1px solid " (themes/get-primary-color) "4C")
+      ;;                          "1px solid transparent")
+      ;;                 :border-radius "4px 4px 0 0"
+      ;;                 :padding "4px 8px"
+      ;;                 :font-size "10px"
+      ;;                 :font-family (themes/get-font-family :monospace)
+      ;;                 :color (themes/get-primary-color)
+      ;;                 :display "flex"
+      ;;                 :align-items "center"
+      ;;                 :gap "5px"
+      ;;                 :cursor (if (and executed-sql (not= executed-sql sql)) "pointer" "default")
+      ;;                 :transition "all 0.2s"
+      ;;                 :min-height "24px"  ;; Ensure consistent height
+      ;;                 :visibility (if (and executed-sql (not= executed-sql sql)) "visible" "hidden")}
+      ;;         :on-mouse-over (when (and executed-sql (not= executed-sql sql))
+      ;;                         #(set! (.. % -target -style -background) (str (themes/get-primary-color) "33")))
+      ;;         :on-mouse-out (when (and executed-sql (not= executed-sql sql))
+      ;;                        #(set! (.. % -target -style -background) (str (themes/get-primary-color) "1A")))
+      ;;         :on-click (when (and executed-sql (not= executed-sql sql))
+      ;;                    (fn [e]
+      ;;                      (.stopPropagation e)
+      ;;                      ;; Reset to NOW - re-execute query without time travel
+      ;;                      (let [current-sql @local-sql]
+      ;;                        (rq/execute-block-query! id current-sql nil nil)
+      ;;                        ;; Reset time travel slider to NOW position
+      ;;                        (tt/reset-time-travel! id current-sql))))}
+      ;;   [:span "⏰"]
+      ;;   [:span "TIME TRAVEL MODE - Click to return to NOW?"]]
        [:div {:style {:border (if (and executed-sql (not= executed-sql sql))
                                (str "1px solid " (themes/get-primary-color) "80")
                                (str "1px solid " (themes/get-primary-color) "4C"))
@@ -464,8 +474,10 @@
          {:value (or executed-sql @local-sql "SELECT * FROM sales")
           :on-change #(reset! local-sql %)  ;; Only update local state while typing
           :height "100px"
+          :width "100%"  ;; Explicitly set width
           :theme "vs-dark"
           :font-size font-size
+          :editor-key (str "monaco-query-" id "-" (:width actual-size) "-" font-size)  ;; Include font-size in key
           :options (when executed-sql
                      {:readOnly false  ;; Keep editable but show visual indicator
                       :lineDecorationsWidth 10
@@ -559,52 +571,49 @@
              (if (number? single-value)
                (format-number single-value)
                (str single-value))]]
-           ;; Render as table for multiple rows/columns
+           ;; Render as virtual grid for multiple rows/columns
            [:div.results
             {:style {:flex 1
                      :margin-top "10px"
                      :min-height 0  ;; Important for flex children to shrink properly
-                     :overflow "auto"
-                     :background "rgba(0,0,0,0.03)"
-                     :border (str "1px solid " (themes/get-primary-color) "33")
-                     :padding "5px"
                      :display "flex"
                      :flex-direction "column"}}
-            [:table {:style {:width "100%" 
-                            :font-size "11px"
-                            :table-layout "fixed"}}
-             [:thead {:style {:position "sticky"
-                             :top 0
-                             :background "rgba(26,26,46,0.95)"
-                             :z-index 1}}
-              [:tr
-               (doall
-                (for [col (keys (first results))]
-                  ^{:key col}
-                  [:th {:style {:text-align "left"
-                                :padding "4px"
-                                :color (themes/get-primary-color)
-                                :border-bottom (str "1px solid " (themes/get-primary-color) "33")
-                                :font-family (themes/get-font-family :monospace)
-                                :text-transform "uppercase"
-                                :font-size "10px"}} (name col)]))]]
-             [:tbody
-              (doall
-               (for [row results]
-                 ^{:key (or (:ID row) (:id row) (:xt/id row) (str (hash row)))}
-                 [:tr
-                  (doall
-                   (for [col (keys (first results))]
-                     ^{:key col}
-                     [:td {:style {:padding "4px"
-                                   :color (themes/get-secondary-color)
-                                   :font-family (themes/get-font-family :monospace)
-                                   :font-size "10px"
-                                   :overflow "hidden"
-                                   :text-overflow "ellipsis"
-                                   :white-space "nowrap"}} (str (get row col))]))]))]]])))]))})))
+            [vgrid/virtual-grid
+             {:results results
+              :width (- (:width actual-size) 20)  ; Account for padding
+              :height (- (:height actual-size)      ; Total block height
+                        200                          ; Approximate header/controls height
+                        (if error 80 0))            ; Error message height if present
+              :block-id id
+              :sql sql  ; Pass the current SQL for generating sub-queries
+              :on-cell-drag (fn [row col value event]
+                             ;; Create a filter block when dragging a cell
+                             (let [filter-sql (str "SELECT * FROM (" sql ") WHERE " (name col) " = '" value "'")
+                                   new-block {:id (str (random-uuid))
+                                            :type :query
+                                            :position {:x (+ (:x actual-pos) 50) 
+                                                      :y (+ (:y actual-pos) 50)}
+                                            :size {:width 400 :height 300}
+                                            :sql filter-sql}]
+                               (js/console.log "Creating filter block from cell drag" (clj->js new-block))
+                               ;; We'll dispatch this when drag ends on canvas
+                               ))
+              :on-column-drag (fn [col event]
+                               ;; Create a GROUP BY block when dragging a column
+                               (let [group-sql (str "SELECT " (name col) ", COUNT(*) as count FROM (" sql ") GROUP BY " (name col))
+                                     new-block {:id (str (random-uuid))
+                                               :type :query
+                                               :position {:x (+ (:x actual-pos) 50) 
+                                                         :y (+ (:y actual-pos) 50)}
+                                               :size {:width 400 :height 300}
+                                               :sql group-sql}]
+                                 (js/console.log "Creating group by block from column drag" (clj->js new-block))
+                                 ;; We'll dispatch this when drag ends on canvas
+                                 ))
+              :on-cell-click (fn [row col value]
+                             (js/console.log "Cell clicked:" (str col) "=" value))}]])))]))})))
 
-(defn chart-block [{:keys [id position size source-id chart-config]}]
+(defn chart-block [{:keys [id position size source-id chart-config z-index] :as block}]
   (reagent/create-class
    {:component-did-update
     (fn [this [_ old-props]]
@@ -648,7 +657,7 @@
                :width (:width actual-size)
                :height (:height actual-size)
                :padding "10px"
-               :z-index 10
+               :z-index (or (:z-index block) 10)
                :display "flex"
                :flex-direction "column"}
               :chart-block)
@@ -751,7 +760,10 @@
       
       :reagent-render
       (fn [{:keys [id position size sql error result] :as block}]
-        (let [;; Use local position only while dragging, otherwise use state position
+        (let [;; Get UI settings - deref the atom directly for reactivity
+              ui-settings-val @ui-settings
+              font-size (or (:monaco-font-size ui-settings-val) 12)
+              ;; Use local position only while dragging, otherwise use state position
               is-dragging? (= id (:block-id @drag-state))
               is-resizing? (= id (:block-id @resize-state))
               actual-pos (if (or is-dragging? (get @local-positions id))
@@ -767,11 +779,11 @@
                     :width (:width actual-size)
                     :height (:height actual-size)
                     :background "linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)"
-                    :border "1px solid #ffb700"
+                    :border (str "1px solid " (themes/get-secondary-color))
                     :border-radius "4px"
                     :padding "10px"
-                    :z-index 10
-                    :box-shadow "0 0 20px rgba(255,183,0,0.3), inset 0 0 20px rgba(255,183,0,0.05)"
+                    :z-index (or (:z-index block) 10)
+                    :box-shadow (str "0 0 20px " (themes/get-secondary-color) "4C, inset 0 0 20px " (themes/get-secondary-color) "0D")
                     :display "flex"
                     :flex-direction "column"}
             :draggable false}
@@ -783,7 +795,7 @@
                      :width "15px"
                      :height "15px"
                      :cursor "nwse-resize"
-                     :background "linear-gradient(135deg, transparent 50%, #ffb700 50%)"
+                     :background (str "linear-gradient(135deg, transparent 50%, " (themes/get-secondary-color) " 50%)")
                      :opacity 0.5}
              :on-mouse-down #(start-resize! id %)}]
            [:div.block-header
@@ -791,11 +803,11 @@
                      :justify-content "space-between"
                      :margin-bottom "10px"
                      :padding-bottom "5px"
-                     :border-bottom "1px solid rgba(255,183,0,0.2)"
+                     :border-bottom (str "1px solid " (themes/get-secondary-color) "33")
                      :cursor "move"}
              :on-mouse-down #(start-drag! id %)}
             [:span {:style {:font-weight "bold" 
-                            :color "#ffb700"
+                            :color (themes/get-secondary-color)
                             :font-family (themes/get-font-family :monospace)
                             :text-transform "uppercase"
                             :font-size "11px"
@@ -804,65 +816,96 @@
                                     (r/dispatch! [:delete-block id]))
                       :style {:background "none"
                               :border "none"
-                              :color "#ffb700"
+                              :color (themes/get-secondary-color)
                               :cursor "pointer"
                               :font-size "20px"
                               :line-height "20px"}} "×"]]
-           ;; SQL Editor - now using local state
-           [:div {:style {:margin "10px 0"
-                          :border "1px solid rgba(255,183,0,0.3)"
+           ;; SQL Editor - now using local state, expands to fill space
+           [:div {:style {:flex 1
+                          :display "flex"
+                          :flex-direction "column"
+                          :margin "10px 0"
+                          :border (str "1px solid " (themes/get-secondary-color) "4C")
                           :border-radius "4px"
                           :overflow "hidden"}}
             [monaco/sql-editor
              {:value @local-sql
               :on-change #(reset! local-sql %)  ; Only update local state on typing
-              :height "120px"
-              :theme "vs-dark"}]]
-           [:button
-            {:style {:width "100%"
-                     :margin-top "5px"
-                     :padding "5px 10px"
-                     :background "linear-gradient(90deg, #ffb700 0%, #ff8c00 100%)"
-                     :color "#0a0a0a"
-                     :border "none"
-                     :border-radius "2px"
-                     :cursor "pointer"
-                     :font-weight "bold"
-                     :text-transform "uppercase"
-                     :font-size "11px"
-                     :letter-spacing "1px"}
-             :on-click (fn []
-                        ;; Sync local SQL to global state on execute
-                        (let [current-sql @local-sql]
-                          (r/dispatch! [:update-block id {:sql current-sql}])
-                          (-> (r/sql-exec! current-sql)
-                              (.then (fn [response]
-                                      (if (:error response)
-                                        (r/dispatch! [:update-block id {:error (:error response) :result nil}])
-                                        (r/dispatch! [:update-block id {:result (:result response) :error nil}])))))))}
-            "Execute"]
-           ;; Error display
-           (when error
-             [:div {:style {:margin-top "10px"
-                           :padding "10px"
-                           :background "rgba(255,0,0,0.1)"
-                           :border "1px solid rgba(255,0,0,0.3)"
-                           :border-radius "4px"
-                           :color "#ff6b6b"
-                           :font-family (themes/get-font-family :monospace)
-                           :font-size "11px"}}
-              error])
-           ;; Success result display
-           (when result
-             [:div {:style {:margin-top "10px"
-                           :padding "10px"
-                           :background "rgba(255,183,0,0.1)"
-                           :border "1px solid rgba(255,183,0,0.3)"
-                           :border-radius "4px"
-                           :color "#ffb700"
-                           :font-family (themes/get-font-family :monospace)
-                           :font-size "11px"}}
-              (str "Success: " result)])]))})))  ; Close reagent-render and create-class
+              :height "100%"  ; Fill available space
+              :width "100%"   ; Explicitly set width
+              :theme "vs-dark"
+              :font-size font-size  ; Pass font-size from ui-settings
+              :editor-key (str "monaco-exec-" id "-" (:width actual-size) "-" font-size)}]]  ;; Include font-size in key
+           ;; Bottom controls - Execute button and output in columns
+           [:div {:style {:display "flex"
+                          :gap "10px"
+                          :margin-top "10px"
+                          :min-height "40px"}}
+            ;; Output panel (left side)
+            [:div {:style {:flex 1
+                           :display "flex"
+                           :align-items "center"}}
+             (cond
+               ;; Error display
+               error
+               [:div {:style {:padding "8px"
+                             :background "rgba(255,0,0,0.1)"
+                             :border "1px solid rgba(255,0,0,0.3)"
+                             :border-radius "4px"
+                             :color "#ff6b6b"
+                             :font-family (themes/get-font-family :monospace)
+                             :font-size "10px"
+                             :width "100%"}}
+                error]
+               
+               ;; Success result display
+               result
+               [:div {:style {:padding "8px"
+                             :background (str (themes/get-primary-color) "1A")
+                             :border (str "1px solid " (themes/get-primary-color) "4C")
+                             :border-radius "4px"
+                             :color (themes/get-primary-color)
+                             :font-family (themes/get-font-family :monospace)
+                             :font-size "10px"
+                             :width "100%"}}
+                (str "Success: " result)]
+               
+               ;; Default empty state
+               :else
+               [:div {:style {:padding "8px"
+                             :color (str (themes/get-primary-color) "66")
+                             :font-family (themes/get-font-family :monospace)
+                             :font-size "10px"}}
+                "Ready to execute..."])]
+            ;; Execute button (right side)
+            [:button
+             {:style {:padding "8px 20px"
+                      :background (str "linear-gradient(0deg, " (themes/get-primary-color) " 0%, " (themes/get-secondary-color) " 100%)")
+                      :color "#0a0a0a"
+                      :border "none"
+                      :border-radius "4px"
+                      :cursor "pointer"
+                      :font-weight "bold"
+                      :text-transform "uppercase"
+                      :font-size "11px"
+                      :letter-spacing "1px"
+                      :white-space "nowrap"
+                      :box-shadow (str "0 2px 10px " (themes/get-primary-color) "33")
+                      :transition "all 0.3s"}
+              :on-mouse-over #(set! (.. % -currentTarget -style -boxShadow) 
+                                   (str "0 4px 20px " (themes/get-primary-color) "66"))
+              :on-mouse-out #(set! (.. % -currentTarget -style -boxShadow) 
+                                  (str "0 2px 10px " (themes/get-primary-color) "33"))
+              :on-click (fn []
+                         ;; Sync local SQL to global state on execute
+                         (let [current-sql @local-sql]
+                           (r/dispatch! [:update-block id {:sql current-sql}])
+                           (-> (r/sql-exec! current-sql)
+                               (.then (fn [response]
+                                       (if (:error response)
+                                         (r/dispatch! [:update-block id {:error (:error response) :result nil}])
+                                         (r/dispatch! [:update-block id {:result (:result response) :error nil}])))))))}
+             "EXECUTE"]]]))})))  ; Close reagent-render and create-class
 
 (defn debug-block [{:keys [id position size debug-mode] :as block}]
   (let [;; Local state for the debug block
@@ -933,7 +976,7 @@
                     :border "1px solid #9b59b6"
                     :border-radius "4px"
                     :padding "10px"
-                    :z-index 10
+                    :z-index (or (:z-index block) 10)
                     :box-shadow "0 0 20px rgba(155,89,182,0.3), inset 0 0 20px rgba(155,89,182,0.05)"
                     :display "flex"
                     :flex-direction "column"}
@@ -1139,7 +1182,7 @@
                :width (:width actual-size)
                :height (:height actual-size)
                :padding "10px"
-               :z-index 10
+               :z-index (or (:z-index block) 10)
                :display "flex"
                :flex-direction "column"}
               :edn-block)
@@ -1839,9 +1882,9 @@
                            :height (:height actual-size)
                            :background "linear-gradient(135deg, #1a1a2e 0%, #2a1a3e 100%)"
                            :border "1px solid #8a2be2"
-                           :border-radius "4px"
+                           :border-radius "2px"
                            :box-shadow "0 4px 20px rgba(138,43,226,0.3)"
-                           :z-index 10
+                           :z-index (or (:z-index block) 10)
                            :display "flex"
                            :flex-direction "column"
                            :transition (when-not (or is-dragging? is-resizing?)
@@ -1903,7 +1946,7 @@
                        :border "1px solid #ff4f99"
                        :border-radius "4px"
                        :box-shadow "0 4px 20px rgba(255,79,153,0.3)"
-                       :z-index 10
+                       :z-index (or (:z-index block) 10)
                        :display "flex"
                        :flex-direction "column"
                        :transition (when-not (or is-dragging? is-resizing?)
@@ -1973,7 +2016,7 @@
                              :border (str "1px solid " (themes/get-primary-color))
                              :border-radius "4px"
                              :box-shadow (str "0 4px 20px " (themes/get-primary-color) "4C")
-                             :z-index 10
+                             :z-index (or (:z-index block) 10)
                              :display "flex"
                              :flex-direction "column"
                              :transition (when-not (or is-dragging? is-resizing?)
@@ -2049,7 +2092,36 @@
                       (stop-resize!))
         :on-mouse-leave (fn []
                          (stop-drag!)
-                         (stop-resize!))}
+                         (stop-resize!))
+        :on-drag-over (fn [e]
+                       (.preventDefault e)  ; Allow drop
+                       (set! (.-dropEffect (.-dataTransfer e)) "copy"))
+        :on-drop (fn [e]
+                  (.preventDefault e)
+                  (js/console.log "DROP event fired")
+                  ;; Check if this is a grid drag
+                  (when (or (.getData (.-dataTransfer e) "reactor/grid-cell")
+                           (.getData (.-dataTransfer e) "reactor/grid-column"))
+                    (js/console.log "Grid drag detected")
+                    (let [canvas-rect (.getBoundingClientRect (.-currentTarget e))
+                          drop-x (- (.-clientX e) (.-left canvas-rect))
+                          drop-y (- (.-clientY e) (.-top canvas-rect))]
+                      (js/console.log "Drop position:" drop-x drop-y)
+                      ;; Call with callback for async handling
+                      (if-let [sync-block (vgrid/create-block-from-drag! 
+                                            drop-x drop-y
+                                            (fn [new-block]
+                                              (js/console.log "Async block created:" new-block)
+                                              (when new-block
+                                                (r/dispatch! [:add-block new-block])
+                                                (vgrid/handle-drag-end! e))))]
+                        ;; If synchronous block returned, handle it
+                        (do
+                          (js/console.log "Sync block created:" sync-block)
+                          (r/dispatch! [:add-block sync-block])
+                          (vgrid/handle-drag-end! e))
+                        ;; For async, don't clear drag state yet - callback will do it
+                        (js/console.log "Waiting for async block creation...")))))}
        ;; Grid overlay effect
        [:div {:style {:position "absolute"
                      :width "100%"
@@ -2236,19 +2308,19 @@
       :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) (str (themes/get-primary-color) "1A"))
       :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
       :on-click (fn []
-                 (swap! table-dropdown-open not)
-                 ;; Fetch tables when opening dropdown (after toggle, so check the new value)
-                 (when @table-dropdown-open
-                   (-> (js/fetch "http://localhost:5000/api/tables")
-                       (.then #(.json %))
-                       (.then (fn [data]
-                               (let [tables-data (js->clj data :keywordize-keys true)
-                                     ;; Separate reactor tables from regular public tables
-                                     reactor-tables (filter #(str/starts-with? % "reactor_") (:public tables-data))
-                                     other-tables (remove #(str/starts-with? % "reactor_") (:public tables-data))]
-                                 (reset! table-list {:public other-tables
-                                                    :reactor reactor-tables
-                                                    :system (get tables-data :system [])})))))))}
+                 ;; Check if we're about to open the dropdown
+                 (let [will-open (not @table-dropdown-open)]
+                   (swap! table-dropdown-open not)
+                   ;; Fetch tables when opening dropdown
+                   (when will-open
+                     (-> (js/fetch "http://localhost:5000/api/tables")
+                         (.then #(.json %))
+                         (.then (fn [data]
+                                 (let [tables-data (js->clj data :keywordize-keys true)]
+                                   ;; Server already separates public, reactor, and system tables
+                                   (reset! table-list {:public (get tables-data :public [])
+                                                      :reactor (get tables-data :reactor [])
+                                                      :system (get tables-data :system [])}))))))))}
      "+ TABLE"
      [:span {:style {:font-size "10px"}} "▼"]]
     ;; Dropdown menu
@@ -2281,10 +2353,21 @@
                          :color (themes/get-secondary-color)
                          :font-family (themes/get-font-family :monospace)
                          :font-size "11px"
-                         :cursor "pointer"
-                         :transition "all 0.2s"}
+                         :cursor "grab"
+                         :transition "all 0.2s"
+                         :user-select "none"}
+                 :draggable true
                  :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) (str (themes/get-primary-color) "1A"))
                  :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+                 :on-drag-start (fn [e]
+                                  (.setData (.-dataTransfer e) "text/plain" "")
+                                  (dtoolbar/start-pill-drag! {:type :query
+                                                               :sql (str "SELECT * FROM " table " LIMIT 10")
+                                                               :table table} e))
+                 :on-drag (fn [e] (dtoolbar/handle-pill-drag! e))
+                 :on-drag-end (fn [e]
+                                (dtoolbar/stop-pill-drag! e)
+                                (reset! table-dropdown-open false))
                  :on-click (fn []
                              (reset! table-dropdown-open false)
                              (let [block-data {:id (str (random-uuid))
@@ -2313,10 +2396,21 @@
                             :color "#d8b4fe"
                             :font-family (themes/get-font-family :monospace)
                             :font-size "11px"
-                            :cursor "pointer"
-                            :transition "all 0.2s"}
+                            :cursor "grab"
+                            :transition "all 0.2s"
+                            :user-select "none"}
+                    :draggable true
                     :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(155,89,182,0.1)")
                     :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+                    :on-drag-start (fn [e]
+                                     (.setData (.-dataTransfer e) "text/plain" "")
+                                     (dtoolbar/start-pill-drag! {:type :query
+                                                                  :sql (str "SELECT * FROM " table " LIMIT 10")
+                                                                  :table table} e))
+                    :on-drag (fn [e] (dtoolbar/handle-pill-drag! e))
+                    :on-drag-end (fn [e]
+                                   (dtoolbar/stop-pill-drag! e)
+                                   (reset! table-dropdown-open false))
                     :on-click (fn []
                                 (reset! table-dropdown-open false)
                                 (let [block-data {:id (str (random-uuid))
@@ -2345,10 +2439,21 @@
                             :color "#ff4f99"
                             :font-family (themes/get-font-family :monospace)
                             :font-size "11px"
-                            :cursor "pointer"
-                            :transition "all 0.2s"}
+                            :cursor "grab"
+                            :transition "all 0.2s"
+                            :user-select "none"}
+                    :draggable true
                     :on-mouse-over #(set! (.-style.background ^js (.-currentTarget ^js %)) "rgba(255,0,110,0.1)")
                     :on-mouse-out #(set! (.-style.background ^js (.-currentTarget ^js %)) "transparent")
+                    :on-drag-start (fn [e]
+                                     (.setData (.-dataTransfer e) "text/plain" "")
+                                     (dtoolbar/start-pill-drag! {:type :query
+                                                                  :sql (str "SELECT * FROM " table " LIMIT 10")
+                                                                  :table table} e))
+                    :on-drag (fn [e] (dtoolbar/handle-pill-drag! e))
+                    :on-drag-end (fn [e]
+                                   (dtoolbar/stop-pill-drag! e)
+                                   (reset! table-dropdown-open false))
                     :on-click (fn []
                                 (reset! table-dropdown-open false)
                                 (let [block-data {:id (str (random-uuid))
@@ -2923,8 +3028,15 @@
             :font-family "sans-serif"
             :background "#0a0a0a"
             :overflow "hidden"}}
-   [toolbar]
-   [canvas]
+   ;; Use the new draggable toolbar
+   [dtoolbar/draggable-toolbar]
+   ;; Add the drag preview overlay
+   [dtoolbar/drag-preview-overlay]
+   ;; Add virtual grid drag preview
+   [vgrid/drag-preview]
+   ;; Canvas with ID for drop detection
+   [:div#canvas {:style {:flex 1 :position "relative"}}
+    [canvas]]
    [timeline-controls]])
 
 ;; ============= Initialize =============
@@ -2938,6 +3050,8 @@
   (r/init! {:server-url "http://localhost:5000"})
   ;; Initialize theming system
   (themes/init!)
+  ;; Initialize drag-and-drop handlers for the toolbar
+  (dtoolbar/init-drag-handlers!)
   ;; Hijack console by default to send to tap>
   (console-tap/hijack-console!)
   ;; Initialize with default session or get from query params

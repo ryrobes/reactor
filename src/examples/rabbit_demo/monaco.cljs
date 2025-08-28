@@ -56,12 +56,12 @@
                      ;; (js/console.log "Rabbit theme initialized")
                      )))))))
 
-(defn sql-editor [{:keys [value on-change height width theme read-only? font-size]}]
+(defn sql-editor [{:keys [value on-change height width theme read-only? font-size editor-key]}]
   (let [font-family (themes/get-font-family :monospace)
         #_ (js/console.log "Monaco SQL editor rendering with font-size:" font-size)
-        ;; Don't include font-size in key - only theme changes should force remount
-        theme-key (str "monaco-" (hash @themes/current-theme))]
-    ^{:key theme-key} ; Force re-mount only when theme changes
+        ;; Use provided editor-key if available, otherwise use theme-based key
+        component-key (or editor-key (str "monaco-" (hash @themes/current-theme)))]
+    ^{:key component-key} ; Force re-mount when key changes
     [:> MonacoEditor
      {:height (or height "100px")
       :width (or width "100%")

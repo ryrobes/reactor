@@ -7,6 +7,7 @@
             [reactor.xtdb-store :as xts]
             [reactor.meta-tracking :as meta]
             [reactor.time-travel-sql :as time-travel]
+            [reactor.sql-transform :as sql-transform]
             [reactor.rabbitize :as rabbitize]
             [org.httpkit.server :as http]
             [cheshire.core :as json]
@@ -495,6 +496,32 @@
                :headers {"Content-Type" "application/json"
                         "Access-Control-Allow-Origin" "*"}
                :body (json/generate-string {:error "No XTDB node available"})}))
+          
+          ;; SQL Transform endpoint for creating derived queries
+          "/api/sql-transform"
+          (let [body (json/parse-string (slurp (:body req)) true)
+                transform-type (keyword (:type body))
+                source-sql (:source_sql body)
+                column-name (:column_name body)
+                cell-value (:cell_value body)
+                column-type (when (:column_type body) (keyword (:column_type body)))]
+            (log/info "[SQL-TRANSFORM] Request:" {:type transform-type 
+                                                  :column column-name
+                                                  :has-sql? (boolean source-sql)})
+            (if-let [transformed-sql (sql-transform/transform-sql
+                                       {:type transform-type
+                                        :source-sql source-sql
+                                        :column-name column-name
+                                        :cell-value cell-value
+                                        :column-type column-type})]
+              {:status 200
+               :headers {"Content-Type" "application/json"
+                        "Access-Control-Allow-Origin" "*"}
+               :body (json/generate-string {:sql transformed-sql})}
+              {:status 400
+               :headers {"Content-Type" "application/json"
+                        "Access-Control-Allow-Origin" "*"}
+               :body (json/generate-string {:error "Failed to transform SQL"})}))
           
           ;; Test endpoint to manually create subscription
           "/api/test-subscription"
