@@ -57,7 +57,7 @@
   (let [tables (get-tables-from-sql sql)
         ;; Extract WHERE clause from the original SQL to filter timestamps
         where-clause (parser/extract-where-clause sql)
-        _ (when where-clause
+        #_ (when where-clause
             (log/info "[TIME-TRAVEL] Using WHERE clause for timestamp filtering:" where-clause))
         ;; Get more timestamps from each table to ensure we capture recent changes
         ;; Request 2x the limit from each table to handle multiple tables

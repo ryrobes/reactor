@@ -3052,9 +3052,11 @@
    ;; Canvas with ID for drop detection
    [:div#canvas {:style {:flex 1 :position "relative"}}
     [canvas]]
+   [cache-debug/cache-debug-panel]
    [timeline-controls]
    ;; Add cache debug panel
-   [cache-debug/cache-debug-panel]])
+   
+   ])
 
 ;; ============= Initialize =============
 

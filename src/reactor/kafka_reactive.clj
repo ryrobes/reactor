@@ -12,6 +12,7 @@
             [reactor.structural-diff :as sdiff]
             [reactor.temporal-cache :as tcache]
             [reactor.sql-template :as sql-template]
+            [reactor.sql-resolver :as resolver]
             [org.httpkit.server :as http-server]
             [clojure.tools.logging :as log]
             [clojure.string :as str]
@@ -345,6 +346,7 @@
           full-base (if (empty? clean-remainder)
                      clean-base
                      (str clean-base " " clean-remainder))]
+      ;(println "*********" full-base )
       {:base-query full-base
        :temporal-param timestamp
        :is-temporal true})
@@ -581,14 +583,15 @@
                 (when (> (count query) 100) 
                   (str "\n  SQL: " (subs query 0 100) "...")))
       (if-let [node @session/default-node]
-        (let [;; CRITICAL FIX: Resolve templates at execution time with current session state
-              ;; This ensures we always get the latest parent SQL
-              resolved-query (if (re-find #"\{\{[^}]+\.sql\}\}" query)
+        (let [;; Use centralized resolver for consistent template resolution
+              resolution-result (resolver/resolve-sql query session-id)
+              resolved-query (:resolved-sql resolution-result)
+              old-resolved-query (if false ; disabled old logic
                               (do
-                                (log/debug "[KAFKA-REACTIVE] Query contains templates, resolving..."
-                                         "\n  Subscription ID:" sub-id
-                                         "\n  Session ID:" session-id
-                                         "\n  Is COUNT query?" (re-find #"(?i)SELECT\s+COUNT.*FROM.*subq" query))
+                                (println (str "[KAFKA-REACTIVE] Query contains templates, resolving..."
+                                              "\n  Subscription ID:" sub-id
+                                              "\n  Session ID:" session-id
+                                              "\n  Is COUNT query?" (re-find #"(?i)SELECT\s+COUNT.*FROM.*subq" query)))
                                 (if-let [session-obj (session/get-session session-id)]
                                   (let [session-state (session/get-state session-obj)
                                         _ (when-not (get-in session-state [:canvas :blocks])
@@ -622,7 +625,7 @@
                                                          ;; Normal template resolution
                                                          (sql-template/resolve-sql-templates-with-deps query session-state))
                                         resolved-sql (:sql template-result)]
-                                    (log/debug "[KAFKA-REACTIVE] Template resolution complete:"
+                                    (println "[KAFKA-REACTIVE] Template resolution complete:"
                                              "\n  Original SQL:" (if (> (count query) 100)
                                                                   (str (subs query 0 100) "...")
                                                                   query)
@@ -642,7 +645,7 @@
                                         ;; Only update cache if this looks like a block ID (not sql-uuid format)
                                         (when (and (not (str/starts-with? block-id-str "sql-"))
                                                   (not (str/starts-with? block-id-str "temporal-")))
-                                          (log/info "[KAFKA-REACTIVE] Updating block SQL cache for:" block-id-str)
+                                          (println "[KAFKA-REACTIVE] Updating block SQL cache for:" block-id-str)
                                           (@update-cache-fn block-id-str query resolved-sql session-id))))
                                     resolved-sql)
                                   (do
@@ -650,9 +653,15 @@
                                               "\n  Session ID:" session-id
                                               "\n  This will cause count queries to fail")
                                     query)))
-                              query)  ;; No templates, use original query
+                              query)  ;; No templates, use original query - end of old logic
+              _ (when (:has-templates? resolution-result)
+                  (log/info "[KAFKA-REACTIVE] Resolved templates for subscription" sub-id
+                           "\n  Dependencies:" (:dependencies resolution-result)
+                           "\n  Original length:" (count query)
+                           "\n  Resolved length:" (count resolved-query)))
               start-time (System/currentTimeMillis)
               ;; Check if this is a temporal count query that can be cached
+              ;; Use resolved query for consistent cache keys
               cached-result (tcache/get-cached resolved-query)
               ;; For temporal queries, need to use time-travel execution
               result (if cached-result
@@ -714,13 +723,13 @@
                             "\n  Subscription ID:" subscription-id
                             "\n  Client ID:" client-id))
 
-              ;; Diff mode logic - use normalized base query for temporal queries
-              ;; This ensures temporal queries at different times can diff against each other
-              ;; For temporal queries, DON'T include timestamp in cache key - we want to diff across time!
+              ;; CRITICAL FIX: Include timestamp in cache key for temporal queries
+              ;; Each temporal query at a different timestamp needs its own cache entry
+              ;; Otherwise queries at different times would share results (wrong!)
               normalized-params (or params [])
               client-cache-key (if is-temporal
-                                 ;; For temporal: use base query WITHOUT timestamp to enable cross-time diffing
-                                 [session-id base-query normalized-params]
+                                 ;; For temporal: MUST include timestamp in cache key
+                                 [session-id base-query normalized-params temporal-param]
                                  ;; For regular: use full query with params
                                  [session-id query normalized-params])
               cached-data (get @client-result-cache client-cache-key)
@@ -903,9 +912,17 @@
                       "\n  Structure fields:" (count (:fields new-structure))
                       (when is-temporal (str "\n  Timestamp: " temporal-param))
                       "\n  Cache size before:" (count @client-result-cache)
-                      "\n  Existing cache entries:" (map (fn [[k v]] 
-                                                          (str "\n    " k " -> " (count (:results v)) " results"))
-                                                        (take 5 @client-result-cache))))
+                      "\n  Existing cache entries:" 
+                      (map (fn [[k v]] 
+                            (let [;; Check if this cache entry is temporal (has 4 elements with timestamp at end)
+                                  entry-is-temporal? (and (vector? k) 
+                                                         (= 4 (count k))
+                                                         (string? (last k))
+                                                         ;; Match various timestamp formats (ISO 8601, with or without time/timezone)
+                                                         (re-find #"^\d{4}-\d{2}-\d{2}" (str (last k))))]
+                              (str "\n    " (if entry-is-temporal? "[TEMPORAL] " "[REGULAR]  ")
+                                   k " -> " (count (:results v)) " results")))
+                          (take 5 @client-result-cache))))
           (swap! client-result-cache assoc client-cache-key
                 {:results results
                  :structure new-structure

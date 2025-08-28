@@ -9,6 +9,7 @@
             [reactor.time-travel-sql :as time-travel]
             [reactor.sql-transform :as sql-transform]
             [reactor.sql-template :as sql-template]
+            [reactor.sql-resolver :as resolver]
             [reactor.rabbitize :as rabbitize]
             [org.httpkit.server :as http]
             [cheshire.core :as json]
@@ -453,25 +454,17 @@
                                        updated-state)
                                      ;; Return original state if no update needed
                                      state))))
-                ;; Check for template references
-                has-templates? (re-find #"\{\{[^}]+\.sql\}\}" original-sql)
-                _ (log/info "[REACTIVE-SERVER] Template check:" 
-                           {:has-templates? has-templates?
-                            :has-session-state? (boolean session-state)
-                            :original-sql original-sql})
-                ;; Resolve any template references in the SQL and track dependencies
-                template-result (if (and session-state has-templates?)
-                                   (do
-                                     (log/info "[REACTIVE-SERVER] Resolving SQL templates in query")
-                                     (let [result (sql-template/resolve-sql-templates-with-deps original-sql session-state)]
-                                       (log/info "[REACTIVE-SERVER] Template resolution result:" 
-                                                {:resolved-sql (:sql result)
-                                                 :dependencies (:dependencies result)
-                                                 :changed? (not= (:sql result) original-sql)})
-                                       result))
-                                   {:sql original-sql :dependencies []})
-                sql (:sql template-result)
-                parent-block-ids (:dependencies template-result)
+                ;; Use centralized resolver for template resolution
+                resolution-result (resolver/resolve-sql original-sql actual-session-id session-state)
+                sql (:resolved-sql resolution-result)
+                has-templates? (:has-templates? resolution-result)
+                parent-block-ids (:dependencies resolution-result)
+                _ (when has-templates?
+                    (log/info "[REACTIVE-SERVER] Resolved templates:"
+                             {:original-sql original-sql
+                              :resolved-sql sql
+                              :dependencies parent-block-ids
+                              :changed? (not= sql original-sql)}))
                 ;; Update block SQL cache with both raw and resolved SQL
                 _ (when block-id
                     (go (update-block-sql-cache! block-id original-sql sql actual-session-id)))
@@ -544,7 +537,9 @@
                                          nil)
                     ;; Always use client-provided ID when available
                     client-id (or (:subscription-id body) generated-client-id)
-                    sub-id (or client-id (str "sub-" (java.util.UUID/randomUUID)))
+                    ;; Generate subscription ID based on RESOLVED SQL for consistency
+                    generated-sub-id (resolver/generate-subscription-id sql actual-session-id client-id)
+                    sub-id (or client-id generated-sub-id)
                     
                     ;; Check if this subscription already exists
                     existing-sub (get @kafka/active-subscriptions sub-id)]
@@ -866,10 +861,10 @@
                 column-name (:column_name body)
                 cell-value (:cell_value body)
                 column-type (when (:column_type body) (keyword (:column_type body)))]
-            (log/info "[SQL-TRANSFORM] Request:" {:type transform-type 
+            (println (str "[SQL-TRANSFORM] Request:" {:type transform-type 
                                                   :column column-name
                                                   :source-block-id source-block-id
-                                                  :has-sql? (boolean source-sql)})
+                                                  :has-sql? (boolean source-sql)}))
             (if-let [transformed-sql (sql-transform/transform-sql
                                        {:type transform-type
                                         :source-sql source-sql
