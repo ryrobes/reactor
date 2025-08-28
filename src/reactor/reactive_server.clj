@@ -38,27 +38,29 @@
                :updated-at (System/currentTimeMillis)
                :session-id session-id}]
     (swap! block-sql-cache assoc block-id entry)
-    (log/debug "[BLOCK-SQL-CACHE] 🔄 Updated cache for block:" block-id
-              "\n  Previous raw SQL:" (when old-entry
-                                       (if (> (count (:raw-sql old-entry)) 50)
-                                         (str (subs (:raw-sql old-entry) 0 50) "...")
-                                         (:raw-sql old-entry)))
-              "\n  New raw SQL:" (if (> (count raw-sql) 50)
-                                  (str (subs raw-sql 0 50) "...")
-                                  raw-sql)
-              "\n  Raw SQL changed?" (not= (:raw-sql old-entry) raw-sql)
-              "\n  Previous resolved SQL:" (when old-entry
-                                           (if (> (count (:resolved-sql old-entry)) 50)
-                                             (str (subs (:resolved-sql old-entry) 0 50) "...")
-                                             (:resolved-sql old-entry)))
-              "\n  New resolved SQL:" (when (not= raw-sql resolved-sql)
-                                      (if (> (count resolved-sql) 50)
-                                        (str (subs resolved-sql 0 50) "...")
-                                        resolved-sql))
-              "\n  Resolved SQL changed?" (not= (:resolved-sql old-entry) resolved-sql)
-              "\n  Session:" session-id
-              "\n  Time since last update:" (when old-entry
-                                             (str (- (System/currentTimeMillis) (:updated-at old-entry)) "ms")))))
+    ;; Verbose cache logging disabled for performance
+    #_(log/debug "[BLOCK-SQL-CACHE] 🔄 Updated cache for block:" block-id
+                "\n  Previous raw SQL:" (when old-entry
+                                         (if (> (count (:raw-sql old-entry)) 50)
+                                           (str (subs (:raw-sql old-entry) 0 50) "...")
+                                           (:raw-sql old-entry)))
+                "\n  New raw SQL:" (if (> (count raw-sql) 50)
+                                    (str (subs raw-sql 0 50) "...")
+                                    raw-sql)
+                "\n  Raw SQL changed?" (not= (:raw-sql old-entry) raw-sql)
+                "\n  Previous resolved SQL:" (when old-entry
+                                             (if (> (count (:resolved-sql old-entry)) 50)
+                                               (str (subs (:resolved-sql old-entry) 0 50) "...")
+                                               (:resolved-sql old-entry)))
+                "\n  New resolved SQL:" (when (not= raw-sql resolved-sql)
+                                        (if (> (count resolved-sql) 50)
+                                          (str (subs resolved-sql 0 50) "...")
+                                          resolved-sql))
+                "\n  Resolved SQL changed?" (not= (:resolved-sql old-entry) resolved-sql)
+                "\n  Session:" session-id
+                "\n  Time since last update:" (when old-entry
+                                               (str (- (System/currentTimeMillis) (:updated-at old-entry)) "ms")))
+                                               ))
 
 (defn get-block-sql-from-cache
   "Get the latest SQL for a block from the cache"

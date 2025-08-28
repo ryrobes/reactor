@@ -64,49 +64,53 @@
 (defn get-cached
   "Get a cached result if it exists"
   [sql]
-  (log/debug "[TEMPORAL-CACHE] Checking cache for query:" 
-             (if (> (count (str sql)) 80) 
-               (str (subs (str sql) 0 80) "...")
-               sql))
+  ;; Commented out high-frequency cache checking logs
+  #_(log/debug "[TEMPORAL-CACHE] Checking cache for query:" 
+               (if (> (count (str sql)) 80) 
+                 (str (subs (str sql) 0 80) "...")
+                 sql))
   (if (is-temporal-count-query? sql)
     (when-let [cache-key (extract-cache-key sql)]
       (let [cached (get @temporal-cache cache-key)]
         (if cached
           (do
-            (log/debug "[TEMPORAL-CACHE] ✅ CACHE HIT for key:" 
-                      (if (> (count cache-key) 60)
-                        (str (subs cache-key 0 60) "...")
-                        cache-key))
+            ;; Cache hit logging disabled for performance
+            #_(log/debug "[TEMPORAL-CACHE] ✅ CACHE HIT for key:" 
+                        (if (> (count cache-key) 60)
+                          (str (subs cache-key 0 60) "...")
+                          cache-key))
             cached)
           (do
-            (log/debug "[TEMPORAL-CACHE] ❌ CACHE MISS for key:"
-                      (if (> (count cache-key) 60)
-                        (str (subs cache-key 0 60) "...")
-                        cache-key))
+            ;; Cache miss logging disabled for performance
+            #_(log/debug "[TEMPORAL-CACHE] ❌ CACHE MISS for key:"
+                        (if (> (count cache-key) 60)
+                          (str (subs cache-key 0 60) "...")
+                          cache-key))
             nil))))
     (do
-      (log/debug "[TEMPORAL-CACHE] Not a temporal count query, skipping cache")
+      ;; Skip logging for non-temporal queries
+      #_(log/debug "[TEMPORAL-CACHE] Not a temporal count query, skipping cache")
       nil)))
 
 (defn cache-result!
   "Cache a query result if it's a temporal count query"
   [sql result]
-  (log/debug "[TEMPORAL-CACHE] Attempting to cache result for query:"
-             (if (> (count (str sql)) 80)
-               (str (subs (str sql) 0 80) "...")
-               sql))
+  ;; Commented out cache attempt logging
+  #_(log/debug "[TEMPORAL-CACHE] Attempting to cache result for query:"
+               (if (> (count (str sql)) 80)
+                 (str (subs (str sql) 0 80) "...")
+                 sql))
   (if (is-temporal-count-query? sql)
     (let [cache-key (extract-cache-key sql)]
       (swap! temporal-cache assoc cache-key result)
       ;; Save to disk periodically (every 10 new entries)
       (when (zero? (mod (count @temporal-cache) 10))
         (future (save-cache!)))
-      (log/debug "[TEMPORAL-CACHE] 📦 CACHED temporal count query. Key:"
-                (if (> (count cache-key) 60)
-                  (str (subs cache-key 0 60) "...")
-                  cache-key)
-                "Total cached:" (count @temporal-cache)))
-    (log/debug "[TEMPORAL-CACHE] Not a temporal count query, not caching"))
+      ;; Only log cache additions occasionally
+      (when (zero? (mod (count @temporal-cache) 100))  ; Every 100th cache entry
+        (log/info "[TEMPORAL-CACHE] Cache size:" (count @temporal-cache))))
+    ;; Skip logging for non-temporal queries
+    #_(log/debug "[TEMPORAL-CACHE] Not a temporal count query, not caching"))
   result)
 
 (defn clear-cache!

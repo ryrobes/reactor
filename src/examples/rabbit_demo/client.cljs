@@ -21,7 +21,8 @@
             [examples.rabbit-demo.template-resolver :as resolver]
             [examples.rabbit-demo.themes :as themes]
             [examples.rabbit-demo.draggable-toolbar :as dtoolbar]
-            [examples.rabbit-demo.virtual-grid :as vgrid]))
+            [examples.rabbit-demo.virtual-grid :as vgrid]
+            [examples.rabbit-demo.cache-debug-panel :as cache-debug]))
 
 ;; ============= Subscriptions =============
 
@@ -3051,7 +3052,9 @@
    ;; Canvas with ID for drop detection
    [:div#canvas {:style {:flex 1 :position "relative"}}
     [canvas]]
-   [timeline-controls]])
+   [timeline-controls]
+   ;; Add cache debug panel
+   [cache-debug/cache-debug-panel]])
 
 ;; ============= Initialize =============
 
@@ -3080,6 +3083,9 @@
     (r/switch-session! session-id))
   ;; Auto-refresh queries for blocks loaded from persistence
   (auto-refresh/init-auto-refresh!)
+  ;; Initialize cache debug panel if element exists
+  (when-let [debug-container (.getElementById js/document "cache-debug-panel")]
+    (cache-debug/init-debug-panel!))
   ;; Wait for state to load, then check if we need to initialize
   (js/setTimeout
     (fn []

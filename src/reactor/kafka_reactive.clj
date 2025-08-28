@@ -143,8 +143,9 @@
       (when (or (nil? existing)
                 (> (- now existing) (* 2 @debounce-delay-ms))) ; Re-request if very old
         (swap! pending-re-executions assoc sub-id now)
-        (log/debug "Debounced re-execution requested for" sub-id
-                  (when (:temporal? sub-info) "(temporal)"))))))
+        ;; Debounce request logging disabled for performance
+        #_(log/debug "Debounced re-execution requested for" sub-id
+                    (when (:temporal? sub-info) "(temporal)"))))))
 
 (defn set-debounce-delay!
   "Set the debounce delay in milliseconds.
@@ -1080,12 +1081,13 @@
                                ;; Debug logging to see what's happening
                                (when (and (or has-mutation? (seq all-tables)) 
                                           (not= all-tables  #{"reactor_subscriptions"})) ;; no noisy single sub logs
-                                 (log/debug "[KAFKA-DEBUG] Message analysis:"
-                                           "\n  Has mutation:" has-mutation?
-                                           "\n  Is SELECT:" is-select?
-                                           "\n  All tables:" all-tables
-                                           "\n  Filtered tables:" filtered-tables
-                                           "\n  Message size:" (count tx-value)))
+                                 ;; Commented out high-frequency debug logging
+                                 #_(log/debug "[KAFKA-DEBUG] Message analysis:"
+                                             "\n  Has mutation:" has-mutation?
+                                             "\n  Is SELECT:" is-select?
+                                             "\n  All tables:" all-tables
+                                             "\n  Filtered tables:" filtered-tables
+                                             "\n  Message size:" (count tx-value)))
                                
                                (when is-select?
                                  ;; Don't log SELECT skips - too verbose
@@ -1094,20 +1096,22 @@
                                (when (seq filtered-tables)
                                  (log/info "[KAFKA-MUTATION] Tables affected by mutation:" filtered-tables)
                                  ;; Log detailed subscription info at DEBUG level
-                                 (log/debug "[KAFKA-MUTATION] Active subscriptions count:" (count @active-subscriptions))
-                                 (log/debug "[KAFKA-MUTATION] Table-to-subs for affected tables:")
-                                 (doseq [table filtered-tables]
-                                   (let [subs-for-table (get @table-to-subs (str/lower-case table))]
-                                     (log/debug "  Table" table "has" (count subs-for-table) "subscriptions:" subs-for-table)))
+                                 ;; Commented out verbose subscription logging
+                                 #_(log/debug "[KAFKA-MUTATION] Active subscriptions count:" (count @active-subscriptions))
+                                 #_(log/debug "[KAFKA-MUTATION] Table-to-subs for affected tables:")
+                                 #_(doseq [table filtered-tables]
+                                     (let [subs-for-table (get @table-to-subs (str/lower-case table))]
+                                       (log/debug "  Table" table "has" (count subs-for-table) "subscriptions:" subs-for-table)))
                                  
                                  ;; Log subscription details at DEBUG level
                                  (when (pos? (count @active-subscriptions))
-                                   (log/debug "[KAFKA-MUTATION] Subscription details:")
-                                   (doseq [[sub-id sub-info] @active-subscriptions]
-                                     (when (some #(contains? (set (:tables sub-info)) %) filtered-tables)
-                                       (log/debug "  " sub-id "- temporal:" (:temporal? sub-info) 
-                                                 "inert:" (:inert? sub-info)
-                                                 "tables:" (:tables sub-info)))))
+                                   ;; Commented out detailed subscription logging
+                                   #_(log/debug "[KAFKA-MUTATION] Subscription details:")
+                                   #_(doseq [[sub-id sub-info] @active-subscriptions]
+                                       (when (some #(contains? (set (:tables sub-info)) %) filtered-tables)
+                                         (log/debug "  " sub-id "- temporal:" (:temporal? sub-info) 
+                                                   "inert:" (:inert? sub-info)
+                                                   "tables:" (:tables sub-info)))))
                                  
                                  ;; Process rules for affected tables
                                  (try
@@ -1119,7 +1123,9 @@
                                  
                                  ;; Handle SQL subscriptions
                                  (let [affected-subs (find-affected-subscriptions filtered-tables)]
-                                   (log/debug "[KAFKA-MUTATION] Found" (count affected-subs) "affected subscriptions:" affected-subs)
+                                   ;; Only log if there are affected subscriptions
+                                   (when (seq affected-subs)
+                                     (log/debug "[KAFKA-MUTATION] Found" (count affected-subs) "affected subscriptions:"))
                                    (when (seq affected-subs)
                                      (log/info "[KAFKA-MUTATION] Triggering" (count affected-subs) "subscriptions for tables:" filtered-tables)
                                      ;; Log each subscription being triggered at DEBUG level
@@ -1127,11 +1133,12 @@
                                        (let [sub-info (get @active-subscriptions sub-id)
                                              session-id (:session-id sub-info)
                                              channels (get @sse-channels session-id [])]
-                                         (log/debug "[DEBUG-TRIGGER] Requesting re-execution for" sub-id
-                                                   "\n  Session:" session-id
-                                                   "\n  Has channels:" (boolean (seq channels))
-                                                   "\n  Channel count:" (count channels)
-                                                   "\n  Tables:" (:tables sub-info))))
+                                         ;; Commented out per-subscription trigger logging  
+                                         #_(log/debug "[DEBUG-TRIGGER] Requesting re-execution for" sub-id
+                                                     "\n  Session:" session-id
+                                                     "\n  Has channels:" (boolean (seq channels))
+                                                     "\n  Channel count:" (count channels)
+                                                     "\n  Tables:" (:tables sub-info))))
                                      ;; Track the reaction
                                      (doseq [table filtered-tables]
                                        (meta/track-reaction! table "mutation" affected-subs))

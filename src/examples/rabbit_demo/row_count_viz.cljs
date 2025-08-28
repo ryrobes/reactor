@@ -3,6 +3,7 @@
   (:require [reagent.core :as reagent]
             [reactor.core :as r]
             [examples.rabbit-demo.themes :as themes]
+            [examples.rabbit-demo.temporal-cache-utils :as cache-utils]
             [clojure.string :as str]))
 
 ;; ============= Row Count Cache =============
@@ -18,6 +19,15 @@
 (defonce data-size-cache
   ;; {query-hash -> {timestamp -> size}}
   (reagent/atom {}))
+
+;; ============= Local Storage Cache Integration =============
+;; Using the temporal-cache-utils for robust local storage management
+
+(defn log-cache-stats!
+  "Log cache statistics for debugging"
+  []
+  (let [stats (cache-utils/get-cache-stats)]
+    (js/console.log "[TEMPORAL-CACHE] Local storage stats:" (clj->js stats))))
 
 (defn query-hash
   "Create a stable hash for a query to use as cache key"
@@ -48,37 +58,51 @@
   "Calculate and cache row count for a query at a specific time"
   [sql timestamp callback]
   (let [cache-key [(query-hash sql) timestamp]]
-    ;; Check if already cached
-    (if-let [cached (get-cached-count sql timestamp)]
-      (callback cached)
-      ;; Check if calculation already in flight
-      (when-not (contains? @pending-calculations cache-key)
-        (swap! pending-calculations conj cache-key)
-        ;; Build count query with time travel
-        (let [count-sql (str "SELECT COUNT(*) as cnt FROM (" sql ") as subq")
-              as-of-val (when timestamp 
-                         (.toISOString (js/Date. timestamp)))]
-          ;; Execute the count query
-          (-> (r/sql-query! count-sql nil as-of-val)
-              (.then (fn [response]
-                       (let [;; Handle various response formats and empty results
-                             count (or (get-in response [:results 0 :cnt])
-                                      (get-in response [:results 0 :CNT])
-                                      (get-in response [:results 0 "cnt"])
-                                      (get-in response [:results 0 "CNT"])
-                                      0)]  ; Default to 0 if no count found
-                         ;; Cache the result
-                         (cache-count! sql timestamp count)
-                         ;; Clear pending flag
-                         (swap! pending-calculations disj cache-key)
-                         ;; Invoke callback
-                         (callback count))))
-              (.catch (fn [error]
-                        (js/console.warn "Error calculating row count for timestamp" timestamp ":" error)
-                        ;; Cache 0 for failed queries so we don't retry
-                        (cache-count! sql timestamp 0)
-                        (swap! pending-calculations disj cache-key)
-                        (callback 0)))))))))
+    ;; First check local storage using our robust cache utils
+    (if-let [local-cached (cache-utils/get-cached-temporal-count sql timestamp)]
+      (do
+        ;; Found in local storage, use it and update memory cache
+        (js/console.debug "[TEMPORAL-CACHE] Local storage HIT for" timestamp)
+        (cache-count! sql timestamp local-cached)
+        (callback local-cached))
+      ;; Not in local storage, check memory cache
+      (if-let [cached (get-cached-count sql timestamp)]
+        (do
+          ;; Found in memory, also save to local storage
+          (cache-utils/set-cached-temporal-count! sql timestamp cached)
+          (callback cached))
+        ;; Check if calculation already in flight
+        (when-not (contains? @pending-calculations cache-key)
+          (swap! pending-calculations conj cache-key)
+          ;; Build count query with time travel
+          (let [count-sql (str "SELECT COUNT(*) as cnt FROM (" sql ") as subq")
+                as-of-val (when timestamp 
+                           (.toISOString (js/Date. timestamp)))]
+            ;; Execute the count query
+            (-> (r/sql-query! count-sql nil as-of-val)
+                (.then (fn [response]
+                         (let [;; Handle various response formats and empty results
+                               count (or (get-in response [:results 0 :cnt])
+                                        (get-in response [:results 0 :CNT])
+                                        (get-in response [:results 0 "cnt"])
+                                        (get-in response [:results 0 "CNT"])
+                                        0)]  ; Default to 0 if no count found
+                           ;; Cache the result in memory
+                           (cache-count! sql timestamp count)
+                           ;; Also cache in local storage for future sessions
+                           (cache-utils/set-cached-temporal-count! sql timestamp count)
+                           (js/console.debug "[TEMPORAL-CACHE] Cached new count to local storage" timestamp count)
+                           ;; Clear pending flag
+                           (swap! pending-calculations disj cache-key)
+                           ;; Invoke callback
+                           (callback count))))
+                (.catch (fn [error]
+                          (js/console.warn "Error calculating row count for timestamp" timestamp ":" error)
+                          ;; Cache 0 for failed queries so we don't retry
+                          (cache-count! sql timestamp 0)
+                          (cache-utils/set-cached-temporal-count! sql timestamp 0)
+                          (swap! pending-calculations disj cache-key)
+                          (callback 0))))))))))
 
 (defn calculate-data-size!
   "Calculate and cache data size for a query at a specific time (from metrics)"
@@ -251,6 +275,9 @@
      {:component-did-mount
       (fn []
         (when (and sql (seq timestamps))
+          ;; Periodically log cache stats for debugging
+          (when (zero? (rand-int 200))  ; 0.5% chance
+            (log-cache-stats!))
           (reset! loading? true)
           (if (= mode :data-size)
             ;; Fetch data sizes
