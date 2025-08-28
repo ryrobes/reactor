@@ -10,6 +10,7 @@
             [reactor.meta-tracking :as meta]
             [reactor.session_simple :as session]
             [reactor.structural-diff :as sdiff]
+            [reactor.temporal-cache :as tcache]
             [org.httpkit.server :as http-server]
             [clojure.tools.logging :as log]
             [clojure.string :as str]
@@ -182,10 +183,9 @@
   [sub-id sql params callback session-id & [client-id is-temporal-param?]]
   (let [tables (extract-tables-from-sql sql)
         ;; Check if this is a temporal query - either has AS OF TIMESTAMP clause OR passed as parameter
-        ;; is-temporal? (or is-temporal-param?  ;; Explicitly passed from caller (for as-of queries)
-        ;;                 (and (string? sql)
-        ;;                      (re-find #"(?i)FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP" sql)))
-        is-temporal? false 
+        is-temporal? (or is-temporal-param?  ;; Explicitly passed from caller (for as-of queries)
+                        (and (string? sql)
+                             (re-find #"(?i)FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP" sql))) 
         sub-info {:query sql
                   :params params
                   :tables tables
@@ -563,23 +563,35 @@
                  (str "\n  SQL: " (subs query 0 100) "...")))
       (if-let [node @session/default-node]
         (let [start-time (System/currentTimeMillis)
+              ;; Check if this is a temporal count query that can be cached
+              cached-result (tcache/get-cached query)
               ;; For temporal queries, need to use time-travel execution
-              result (if temporal?
-                       (let [;; Extract timestamp from the query
-                             timestamp-match (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'([^']+)'" query)
-                             timestamp (when timestamp-match (second timestamp-match))]
-                         (if timestamp
-                           (do
-                             (log/debug "[KAFKA-REACTIVE] Executing temporal query with timestamp:" timestamp)
-                             ;; The query ALREADY contains the temporal clause, so execute directly
-                             ;; Don't use execute-sql-with-time-travel as it would add another clause
-                             (xts/execute-sql node query params))
-                           ;; Fallback to regular execution if can't extract timestamp
-                           (xts/execute-sql node query params)))
-                       ;; Regular non-temporal execution
-                       (if params
-                         (xts/execute-sql node query params)
-                         (xts/execute-sql node query)))
+              result (if cached-result
+                       ;; Use cached result for temporal count queries
+                       (do
+                         (log/info "[KAFKA-REACTIVE] 🎯 CACHE HIT for temporal count query")
+                         ;; Return cached result with server-cache flag
+                         (assoc cached-result :server-cache? true))
+                       ;; Execute query normally
+                       (if temporal?
+                         (let [;; Extract timestamp from the query
+                               timestamp-match (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'([^']+)'" query)
+                               timestamp (when timestamp-match (second timestamp-match))
+                               exec-result (if timestamp
+                                           (do
+                                             (log/debug "[KAFKA-REACTIVE] Executing temporal query with timestamp:" timestamp)
+                                             ;; The query ALREADY contains the temporal clause, so execute directly
+                                             ;; Don't use execute-sql-with-time-travel as it would add another clause
+                                             (xts/execute-sql node query params))
+                                           ;; Fallback to regular execution if can't extract timestamp
+                                           (xts/execute-sql node query params))]
+                           ;; Cache the result if it's a temporal count query
+                           (tcache/cache-result! query exec-result)
+                           exec-result)
+                         ;; Regular non-temporal execution
+                         (if params
+                           (xts/execute-sql node query params)
+                           (xts/execute-sql node query))))
               execution-time (- (System/currentTimeMillis) start-time)
               results (:results result [])
               result-count (count results)
@@ -760,6 +772,7 @@
                                    :field-diff-update
                                    :diff-update)
                            :diff diff-result
+                           :server-cache? (:server-cache? result false)
                            :checksum (hash results)
                            :metrics (:metrics result-with-metrics)})
                         ;; Send full results
@@ -790,6 +803,7 @@
                            :query query
                            :type :full-update
                            :result result-with-metrics
+                           :server-cache? (:server-cache? result false)
                            :checksum (hash results)}))]
           
           ;; Update cache for next diff

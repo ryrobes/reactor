@@ -918,7 +918,7 @@
                   (when-let [sub-id (:subscription-id data)]
                     (if-let [sub (get @sql-subscriptions sub-id)]
                       (do
-                        (js/console.log "🌕 [CLIENT] Received full update for" sub-id ": " (strunc (str (get data :query)) 240))
+                        (js/console.log "🌕 [CLIENT]" (when (get data :server-cache?) "📦")  " Received full update for" sub-id ": " (strunc (str (get data :query)) 240))
                         ;; Store checksum for validation
                         (swap! sql-subscriptions assoc-in [sub-id :last-checksum] (:checksum data))
                         ;; Update the result atom with full data
@@ -947,9 +947,9 @@
                                      (empty? (:data current-data))))
                           ;; No base data - we need full update instead
                           (do
-                            (js/console.log "🌑 [CLIENT] Received diff but have no base data for" sub-id 
-                                           "\n  Current data:" (clj->js current-data)
-                                           "\n  Diff:" (clj->js (select-keys (:diff data) [:type :added :removed :updated])))
+                            (js/console.log "🌑 [CLIENT] Received diff but have no base data for" (str )
+                                           "\n  Current data:" (str current-data)
+                                           "\n  Diff:" (str (select-keys (:diff data) [:type :added :removed :updated])))
                             ;; For now, create empty base data so diff can be applied
                             ;; This handles the case where the diff contains all the data we need
                             (when (seq (get-in data [:diff :added]))
@@ -958,10 +958,10 @@
                               (apply-row-diff! (:result-atom sub) (:diff data) (:checksum data) (:metrics data))))
                           ;; Have base data - apply diff normally
                           (do
-                            (js/console.log "🌓 [CLIENT] Received" (:type data) "for" sub-id 
+                            (js/console.log "🌓 [CLIENT] Received" (:type data) "for" (str sub-id) 
                                            "\n  Current data count:" (count (:data current-data))
-                                           "\n  Diff type:" (get-in data [:diff :type])
-                                           "\n  Compression:" (get-in data [:diff :compression-ratio]))
+                                           "\n  Diff type:" (str (get-in data [:diff :type]))
+                                           "\n  Compression:" (str (get-in data [:diff :compression-ratio])))
                             ;; Apply diff to current data (handles both field and row diffs)
                             (apply-row-diff! (:result-atom sub) (:diff data) (:checksum data) (:metrics data)))))
                       (js/console.log "[CLIENT] No subscription found for diff ID:" sub-id)))

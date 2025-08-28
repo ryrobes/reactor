@@ -93,27 +93,29 @@
   [block-id sql & [params as-of]]
   ;; ALWAYS check if we have an active subscription with the same query
   (let [cached-sql (get @block-sql-cache block-id)
-        has-subscription (get @block-subscriptions block-id)]
-    (if (and cached-sql 
+        has-subscription (get @block-subscriptions block-id)
+        would-have-been-blocked? (and cached-sql  (= cached-sql [sql params as-of]) has-subscription)]
+    (if (and cached-sql false ;; temp
              (= cached-sql [sql params as-of])
              has-subscription)
       ;; Same query is already running, skip re-execution COMPLETELY
       (do
-        (js/console.log "[REACTIVE-QUERIES] ✓ BLOCKED re-execution for block" (str block-id) 
+        (js/console.log "[REACTIVE-QUERIES] ✓ BLOCKED re-execution for block" (str block-id)
                         "- already subscribed to this exact query")
         ;; Return existing subscription
         has-subscription)
       ;; New or changed query, execute it
       (do
         (js/console.log "[REACTIVE-QUERIES] ✗ Executing query for block" (str block-id)
-                        (if cached-sql 
+                        (when would-have-been-blocked? "🧦")
+                        (if cached-sql
                           (str "- query changed from " cached-sql " to " [sql params as-of])
                           "- first execution"))
         ;; Update cache
         (swap! block-sql-cache assoc block-id [sql params as-of])
         ;; Clear old results and show loading
         (swap! block-results assoc block-id {:loading true})
-        
+
         ;; IMPORTANT: Always create a new subscription when changing temporal state
         ;; This ensures that going back to NOW creates a fresh reactive subscription
         (let [result-atom (subscribe-block-query! block-id sql params as-of)]
