@@ -12,6 +12,7 @@
             [reactor.structural-diff :as sdiff]
             [reactor.temporal-cache :as tcache]
             [reactor.sql-template :as sql-template]
+            [reactor.sql-template-temporal :as template-temporal]
             [reactor.sql-resolver :as resolver]
             [org.httpkit.server :as http-server]
             [clojure.tools.logging :as log]
@@ -193,7 +194,9 @@
         ;; Check if this is a temporal query - either has AS OF TIMESTAMP clause OR passed as parameter
         is-temporal? (or is-temporal-param?  ;; Explicitly passed from caller (for as-of queries)
                         (and (string? sql)
-                             (re-find #"(?i)FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP" sql))) 
+                             ;(re-find #"(?i)FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP" sql)
+                             (str/includes? sql "FOR SYSTEM_TIME AS OF TIMESTAMP")
+                             )) 
         sub-info {:query sql
                   :params params
                   :tables tables
@@ -338,7 +341,7 @@
   "Extract base query and timestamp from temporal queries for better caching"
   [query]
   ;; Handle both single-line and multi-line queries with flexible whitespace
-  (if-let [match (re-find #"(?is)^(.*?)\s*\n?FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'([^']+)'\s*\n?(.*)$" query)]
+  (if-let [match nil] ;(re-find #"(?is)^(.*?)\s*\n?FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'([^']+)'\s*\n?(.*)$" query)]
     (let [[_ base-query timestamp remainder] match
           ;; Clean up the base query and remainder
           clean-base (str/trim base-query)
@@ -570,6 +573,8 @@
                          5 ;; period in minutes
                          java.util.concurrent.TimeUnit/MINUTES)))
 
+(defn stp [s] (str/replace (str s) #"[\r\n]+" ""))
+
 (defn re-execute-subscription
   "Re-execute a subscription's query and invoke its callback with results."
   [sub-id]
@@ -583,86 +588,149 @@
                 (when (> (count query) 100) 
                   (str "\n  SQL: " (subs query 0 100) "...")))
       (if-let [node @session/default-node]
-        (let [;; Use centralized resolver for consistent template resolution
-              resolution-result (resolver/resolve-sql query session-id)
-              resolved-query (:resolved-sql resolution-result)
-              old-resolved-query (if false ; disabled old logic
-                              (do
-                                (println (str "[KAFKA-REACTIVE] Query contains templates, resolving..."
-                                              "\n  Subscription ID:" sub-id
-                                              "\n  Session ID:" session-id
-                                              "\n  Is COUNT query?" (re-find #"(?i)SELECT\s+COUNT.*FROM.*subq" query)))
-                                (if-let [session-obj (session/get-session session-id)]
-                                  (let [session-state (session/get-state session-obj)
-                                        _ (when-not (get-in session-state [:canvas :blocks])
-                                            (log/warn "[KAFKA-REACTIVE] Session state has no canvas blocks!"
-                                                     "\n  Session ID:" session-id))
-                                        ;; Special handling for COUNT queries with temporal clause
-                                        ;; Extract temporal clause from outer query
-                                        temporal-match (re-find #"(FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'[^']+')" query)
-                                        has-temporal? (boolean temporal-match)
-                                        temporal-clause (when temporal-match (first temporal-match))
-                                        ;; Remove temporal clause from outer query if it's a COUNT query
-                                        is-count-query? (re-find #"(?i)SELECT\s+COUNT.*FROM\s*\(" query)
-                                        clean-query (if (and is-count-query? has-temporal?)
-                                                     (str/replace query temporal-clause "")
-                                                     query)
-                                        ;; Resolve templates - pass temporal clause for special handling
-                                        template-result (if (and is-count-query? has-temporal?)
-                                                         ;; For count queries with temporal, manually handle template resolution
-                                                         (let [template-refs (re-seq #"\{\{([^}]+)\.sql\}\}" clean-query)
-                                                               resolved-sql (reduce
-                                                                           (fn [sql [full-match block-id]]
-                                                                             (if-let [block-sql (or (get-in session-state [:canvas :blocks (keyword block-id) :sql])
-                                                                                                  (get-in session-state [:canvas :blocks block-id :sql]))]
-                                                                               ;; Add temporal clause to parent SQL INSIDE parentheses
-                                                                               (let [temporal-sql (str "(" block-sql " " temporal-clause ")")]
-                                                                                 (str/replace sql full-match temporal-sql))
-                                                                               sql))
-                                                                           clean-query
-                                                                           template-refs)]
-                                                           {:sql resolved-sql :dependencies (map second template-refs)})
-                                                         ;; Normal template resolution
-                                                         (sql-template/resolve-sql-templates-with-deps query session-state))
-                                        resolved-sql (:sql template-result)]
-                                    (println "[KAFKA-REACTIVE] Template resolution complete:"
-                                             "\n  Original SQL:" (if (> (count query) 100)
-                                                                  (str (subs query 0 100) "...")
-                                                                  query)
-                                             "\n  Resolved SQL:" (if (> (count resolved-sql) 100)
-                                                                  (str (subs resolved-sql 0 100) "...")
-                                                                  resolved-sql)
-                                             "\n  Templates resolved?" (not= query resolved-sql)
-                                             "\n  Temporal handling:" (when (and is-count-query? has-temporal?)
-                                                                       "Moved temporal clause to inner SQL"))
-                                    ;; Update block SQL cache when templates are resolved
-                                    (when-let [update-cache-fn (resolve 'reactor.reactive-server/update-block-sql-cache!)]
-                                      ;; Extract block ID from subscription ID (usually :block-id or "block-id" format)
-                                      (let [block-id-str (cond
-                                                          (keyword? sub-id) (name sub-id)
-                                                          (string? sub-id) sub-id
-                                                          :else (str sub-id))]
-                                        ;; Only update cache if this looks like a block ID (not sql-uuid format)
-                                        (when (and (not (str/starts-with? block-id-str "sql-"))
-                                                  (not (str/starts-with? block-id-str "temporal-")))
-                                          (println "[KAFKA-REACTIVE] Updating block SQL cache for:" block-id-str)
-                                          (@update-cache-fn block-id-str query resolved-sql session-id))))
-                                    resolved-sql)
-                                  (do
-                                    (log/error "[KAFKA-REACTIVE] ❌ No session found for template resolution!"
-                                              "\n  Session ID:" session-id
-                                              "\n  This will cause count queries to fail")
-                                    query)))
-                              query)  ;; No templates, use original query - end of old logic
+        (let [;; Check if this is a temporal COUNT query with templates
+              is-temporal-count? (and ;(re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF" query)
+                                       ;(re-find #"(?i)SELECT\s+COUNT.*as\s+cnt\s+FROM" query)
+                                  (str/starts-with? "SELECT COUNT(*) as cnt FROM (" query))
+              ;; is-temporal-count? false
+              ;has-templates? (re-find #"\{\{[^}]+\.sql\}\}" query)
+              has-templates? (str/includes? query "{{")
+
+              _ (when (and is-temporal-count? has-templates?)
+                  (log/info "[TEMPORAL-COUNT-TEMPLATE] Processing templated temporal count query"
+                            "\n  Original query:" query
+                            "\n  Has templates:" has-templates?
+                            "\n  Session ID:" session-id
+                            "\n  Subscription ID:" sub-id))
+
+              ;; Check if query has temporal clause that needs special handling
+              has-temporal-clause? (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'([^']+)'" query)
+              temporal-timestamp (when has-temporal-clause? (second has-temporal-clause?))
+
+              ;; No special COUNT wrapper handling - let normal resolution handle it
+
+              resolution-result (cond
+                                  ;; Templated queries with temporal - use temporal-aware resolution
+                                  (and (resolver/has-templates? query) temporal-timestamp)
+                                  (let [session-state (when session-id
+                                                        (when-let [session-obj (session/get-session session-id)]
+                                                          (session/get-state session-obj)))
+                                        ;; Strip any existing temporal clause from query first
+                                        clean-query (str/replace query #"\s*FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'[^']+'" "")
+                                        ;; Resolve templates with temporal support
+                                        resolved-result (template-temporal/resolve-sql-templates-with-deps-and-temporal
+                                                         clean-query
+                                                         session-state
+                                                         temporal-timestamp)
+                                        resolved-sql (:sql resolved-result)]
+                                    (log/info "[KAFKA-REACTIVE] Resolved templated temporal query"
+                                              "\n  Has templates:" (resolver/has-templates? query)
+                                              "\n  Temporal timestamp:" temporal-timestamp)
+                                    {:resolved-sql resolved-sql
+                                     :original-sql query
+                                     :has-templates? true
+                                     :dependencies (:dependencies resolved-result)})
+
+                                  ;; Regular queries - use standard resolution
+                                  :else (resolver/resolve-sql query session-id))
+
+              ;old-resolved-query (:resolved-sql resolution-result)
+
+
+
+              resolved-query (if has-templates? ;;true ;false ; disabled old logic
+                               (do
+                                 (println (str "[KAFKA-REACTIVE] Query contains templates, resolving..."
+                                               "\n  Subscription ID:" sub-id
+                                               "\n  Session ID:" session-id
+                                               "\n  Is COUNT query?" (re-find #"(?i)SELECT\s+COUNT.*FROM.*subq" query)))
+                                 (if-let [session-obj (session/get-session session-id)]
+                                   (let [session-state (session/get-state session-obj)
+                                         _ (when-not (get-in session-state [:canvas :blocks])
+                                             (log/warn "[KAFKA-REACTIVE] Session state has no canvas blocks!"
+                                                       "\n  Session ID:" session-id))
+                                         ;; Special handling for COUNT queries with temporal clause
+                                         ;; Extract temporal clause from outer query
+                                         temporal-match (re-find #"(FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'[^']+')" query)
+                                         has-temporal? (boolean temporal-match)
+                                         temporal-clause (when temporal-match (first temporal-match))
+                                         ;; Remove temporal clause from outer query if it's a COUNT query
+                                         is-count-query? (re-find #"(?i)SELECT\s+COUNT.*FROM\s*\(" query)
+                                         clean-query (if false ;(and is-count-query? has-temporal?)
+                                                       (str/replace query temporal-clause "")
+                                                       query)
+                                         ;; Resolve templates - pass temporal clause for special handling
+                                         template-result (if (and is-count-query? has-temporal?)
+                                                           ;; For count queries with temporal, manually handle template resolution
+                                                           (let [template-refs (re-seq #"\{\{([^}]+)\.sql\}\}" clean-query)
+                                                                 resolved-sql (reduce
+                                                                               (fn [sql [full-match block-id]]
+                                                                                 (if-let [block-sql (or (get-in session-state [:canvas :blocks (keyword block-id) :sql])
+                                                                                                        (get-in session-state [:canvas :blocks block-id :sql]))]
+                                                                                   ;; Add temporal clause to parent SQL INSIDE parentheses
+                                                                                   (let [temporal-sql (str "(" block-sql " " temporal-clause ")")]
+                                                                                     (str/replace sql full-match temporal-sql))
+                                                                                   sql))
+                                                                               clean-query
+                                                                               template-refs)]
+                                                             {:sql resolved-sql :dependencies (map second template-refs)})
+                                                           ;; Normal template resolution
+                                                           (sql-template/resolve-sql-templates-with-deps query session-state))
+                                         resolved-sql (:sql template-result)]
+                                     (log/debug "[KAFKA-REACTIVE] Template resolution complete"
+                                                "\n  Templates resolved?" (not= query resolved-sql))
+                                     ;; Update block SQL cache when templates are resolved
+                                     (when-let [update-cache-fn (resolve 'reactor.reactive-server/update-block-sql-cache!)]
+                                       ;; Extract block ID from subscription ID (usually :block-id or "block-id" format)
+                                       (let [block-id-str (cond
+                                                            (keyword? sub-id) (name sub-id)
+                                                            (string? sub-id) sub-id
+                                                            :else (str sub-id))]
+                                         ;; Only update cache if this looks like a block ID (not sql-uuid format)
+                                         (when (and (not (str/starts-with? block-id-str "sql-"))
+                                                    (not (str/starts-with? block-id-str "temporal-")))
+                                           (log/debug "[KAFKA-REACTIVE] Updating block SQL cache for:" block-id-str)
+                                           (@update-cache-fn block-id-str query resolved-sql session-id))))
+                                     resolved-sql)
+                                   (do
+                                     (log/error "[KAFKA-REACTIVE] ❌ No session found for template resolution!"
+                                                "\n  Session ID:" session-id
+                                                "\n  This will cause count queries to fail")
+                                     query)))
+                               query)  ;; No templates, use original query - end of old logic
+
+              _ (when (and is-temporal-count? has-templates?)
+                  (log/info "[TEMPORAL-COUNT-TEMPLATE] After resolution"
+                            "\n  Resolved query:" resolved-query
+                            "\n  Templates were resolved:" (not= query resolved-query)
+                            "\n  Still has temporal clause:" (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF" resolved-query)))
+
+              _ (spit "temporal-sql.log" (str "-------\n"
+                                              (stp resolved-query) "\n"
+                                              ;(stp (resolver/resolve-sql query session-id)) "\n"
+                                              ;(stp resolution-result) "\n"
+                                              (stp (get resolution-result :resolved-sql))
+                                              "\n" "-------\n")
+                      :append true)
+
               _ (when (:has-templates? resolution-result)
                   (log/info "[KAFKA-REACTIVE] Resolved templates for subscription" sub-id
-                           "\n  Dependencies:" (:dependencies resolution-result)
-                           "\n  Original length:" (count query)
-                           "\n  Resolved length:" (count resolved-query)))
+                            "\n  Dependencies:" (:dependencies resolution-result)
+                            "\n  Original length:" (count query)
+                            "\n  Resolved length:" (count resolved-query)))
               start-time (System/currentTimeMillis)
               ;; Check if this is a temporal count query that can be cached
               ;; Use resolved query for consistent cache keys
-              cached-result (tcache/get-cached resolved-query)
+              cached-result nil ;(tcache/get-cached resolved-query)
+              ;; ^^ TEMP DISABLE CACHING FOR TESTING
+
+              _ (when (and is-temporal-count? (not cached-result))
+                  (log/info "[TEMPORAL-COUNT-TEMPLATE] Cache miss, will execute"
+                            "\n  Query to execute:" resolved-query
+                            "\n  Is temporal query:" temporal?))
+
+              ;; Debug logging removed
+
               ;; For temporal queries, need to use time-travel execution
               result (if cached-result
                        ;; Use cached result for temporal count queries
@@ -676,13 +744,13 @@
                                timestamp-match (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF\s+TIMESTAMP\s+'([^']+)'" resolved-query)
                                timestamp (when timestamp-match (second timestamp-match))
                                exec-result (if timestamp
-                                           (do
-                                             (log/debug "[KAFKA-REACTIVE] Executing temporal query with timestamp:" timestamp)
-                                             ;; The query ALREADY contains the temporal clause, so execute directly
-                                             ;; Don't use execute-sql-with-time-travel as it would add another clause
-                                             (xts/execute-sql node resolved-query params))
-                                           ;; Fallback to regular execution if can't extract timestamp
-                                           (xts/execute-sql node resolved-query params))]
+                                             (do
+                                               (log/debug "[KAFKA-REACTIVE] Executing temporal query with timestamp:" timestamp)
+                                               ;; The query ALREADY contains the temporal clause, so execute directly
+                                               ;; Don't use execute-sql-with-time-travel as it would add another clause
+                                               (xts/execute-sql node resolved-query params))
+                                             ;; Fallback to regular execution if can't extract timestamp
+                                             (xts/execute-sql node resolved-query params))]
                            ;; Cache the result if it's a temporal count query
                            (tcache/cache-result! resolved-query exec-result)
                            exec-result)
@@ -713,8 +781,8 @@
               {:keys [base-query temporal-param is-temporal]} (normalize-temporal-query query)
 
               ;; Debug: Log what type of query we're processing
-              _ (when (and (:debug-logging @diff-config) 
-                          (str/includes? query "FOR SYSTEM_TIME"))
+              _ (when (and (:debug-logging @diff-config)
+                           (str/includes? query "FOR SYSTEM_TIME"))
                   (log/info "[TEMPORAL-NORMALIZE-DEBUG] Processing temporal query"
                             "\n  Full query:" query
                             "\n  Normalized - Is temporal?" is-temporal
@@ -903,7 +971,7 @@
                            :result result-with-metrics
                            :server-cache? (:server-cache? result false)
                            :checksum (hash results)}))]
-          
+
           ;; Update cache for next diff
           (when (:debug-logging @diff-config)
             (log/info "[CACHE-UPDATE] Storing" (count results) "results"
@@ -912,42 +980,42 @@
                       "\n  Structure fields:" (count (:fields new-structure))
                       (when is-temporal (str "\n  Timestamp: " temporal-param))
                       "\n  Cache size before:" (count @client-result-cache)
-                      "\n  Existing cache entries:" 
-                      (map (fn [[k v]] 
-                            (let [;; Check if this cache entry is temporal (has 4 elements with timestamp at end)
-                                  entry-is-temporal? (and (vector? k) 
-                                                         (= 4 (count k))
-                                                         (string? (last k))
-                                                         ;; Match various timestamp formats (ISO 8601, with or without time/timezone)
-                                                         (re-find #"^\d{4}-\d{2}-\d{2}" (str (last k))))]
-                              (str "\n    " (if entry-is-temporal? "[TEMPORAL] " "[REGULAR]  ")
-                                   k " -> " (count (:results v)) " results")))
-                          (take 5 @client-result-cache))))
+                      "\n  Existing cache entries:"
+                      (map (fn [[k v]]
+                             (let [;; Check if this cache entry is temporal (has 4 elements with timestamp at end)
+                                   entry-is-temporal? (and (vector? k)
+                                                           (= 4 (count k))
+                                                           (string? (last k))
+                                                           ;; Match various timestamp formats (ISO 8601, with or without time/timezone)
+                                                           (re-find #"^\d{4}-\d{2}-\d{2}" (str (last k))))]
+                               (str "\n    " (if entry-is-temporal? "[TEMPORAL] " "[REGULAR]  ")
+                                    k " -> " (count (:results v)) " results")))
+                           (take 5 @client-result-cache))))
           (swap! client-result-cache assoc client-cache-key
-                {:results results
-                 :structure new-structure
-                 :checksum (hash results)
-                 :timestamp (System/currentTimeMillis)
-                 ;; Store the actual params used
-                 :params normalized-params
-                 :temporal-timestamp (when is-temporal temporal-param)
-                 :query (if is-temporal base-query query)
-                 :last-diff-type (cond
-                                  (= (:type message) :field-diff-update) :field-diff
-                                  (= (:type message) :diff-update) :row-diff
-                                  :else :full)})
+                 {:results results
+                  :structure new-structure
+                  :checksum (hash results)
+                  :timestamp (System/currentTimeMillis)
+                  ;; Store the actual params used
+                  :params normalized-params
+                  :temporal-timestamp (when is-temporal temporal-param)
+                  :query (if is-temporal base-query query)
+                  :last-diff-type (cond
+                                    (= (:type message) :field-diff-update) :field-diff
+                                    (= (:type message) :diff-update) :row-diff
+                                    :else :full)})
           (when (:debug-logging @diff-config)
             (log/info "[CACHE-UPDATE] Cache size after:" (count @client-result-cache)))
-          
+
           ;; Track subscription update
           (meta/track-subscription-updated! sub-id execution-time result-count)
           ;; Track query performance
           (meta/track-query-performance! query execution-time result-count)
-          
+
           ;; Send the message
           (log/info "[KAFKA-REACTIVE] Calling callback with message type:" (:type message)
-                   "\n  Subscription:" subscription-id
-                   "\n  Session:" session-id)
+                    "\n  Subscription:" subscription-id
+                    "\n  Session:" session-id)
           (callback message))
         (log/warn "[KAFKA-REACTIVE] No XTDB node available for re-execution"))
       (catch Exception e

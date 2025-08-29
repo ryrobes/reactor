@@ -20,7 +20,7 @@
     ;; 2. Must contain FOR SYSTEM_TIME AS OF TIMESTAMP
     ;; 3. Must end with ) AS SUBQ
     (let [normalized-sql (-> sql str/trim str/upper-case)]
-      (and 
+      (and false ;; TEMP DISABLE CACHING FOR TESTING
         ;; Starts with SELECT COUNT(*) AS CNT FROM (
         (str/starts-with? normalized-sql "SELECT COUNT(*) AS CNT FROM (")
         ;; Contains temporal clause
@@ -102,6 +102,7 @@
                  sql))
   (if (is-temporal-count-query? sql)
     (let [cache-key (extract-cache-key sql)]
+      ;(println "🐺 *******temporal-count-query******* \n" sql)
       (swap! temporal-cache assoc cache-key result)
       ;; Save to disk periodically (every 10 new entries)
       (when (zero? (mod (count @temporal-cache) 10))

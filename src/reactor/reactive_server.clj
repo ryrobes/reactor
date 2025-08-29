@@ -524,7 +524,7 @@
                                         sql-for-temporal)
                     ;; For temporal queries, generate consistent ID based on base query
                     ;; This ensures temporal queries at different times can share cache
-                    is-temporal-query? (and (string? sql-with-temporal) 
+                    is-temporal-query? (and (string? sql-with-temporal)  false ;; disabled 
                                            (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF" sql-with-temporal))
                     base-query-for-id (if is-temporal-query?
                                         ;; Extract base query without temporal clause for consistent ID
@@ -568,17 +568,14 @@
                                      sql-with-temporal)
                          (when is-temporal-query?
                            (str "\n  Base query for cache: " base-query-for-id)))
-                ;; CRITICAL FIX: Store ORIGINAL SQL with templates, not resolved SQL
-                ;; This ensures templates are re-resolved on each execution with fresh parent SQL
-                ;; For template queries with temporal clause, we need to add the clause properly
+                ;; CRITICAL FIX: For templated queries, store original WITHOUT temporal clause
+                ;; Temporal clause will be added AFTER template resolution during execution
+                ;; This ensures correct placement of temporal clause on innermost queries
                 (let [sql-to-store (if has-templates?
-                                    ;; For template queries, add temporal clause to original SQL properly
-                                    (if (and as-of (not (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF" original-sql)))
-                                      (let [parser-ns (require 'reactor.sql-parser)
-                                            add-clause-fn (ns-resolve 'reactor.sql-parser 'add-as-of-clause)]
-                                        (add-clause-fn original-sql as-of))
-                                      original-sql)
-                                    ;; For non-template queries, use the already processed SQL
+                                    ;; For template queries, store original WITHOUT temporal clause
+                                    ;; Temporal clause will be added after resolution in kafka_reactive
+                                    original-sql
+                                    ;; For non-template queries, use the already processed SQL with temporal
                                     sql-with-temporal)]
                   (log/info "[REACTIVE-SERVER] Storing subscription SQL:"
                            "\n  Has templates?" has-templates?

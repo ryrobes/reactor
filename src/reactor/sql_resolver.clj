@@ -92,7 +92,8 @@
 
 (defn resolve-with-temporal
   "Resolve SQL templates and add temporal clause if needed.
-   Used when both template resolution and temporal clauses are required."
+   Used when both template resolution and temporal clauses are required.
+   CRITICAL: Templates are resolved FIRST, then temporal clause is added."
   [sql session-id as-of]
   (let [{:keys [resolved-sql]} (resolve-sql sql session-id)]
     (if (and as-of (not (re-find #"FOR\s+SYSTEM_TIME\s+AS\s+OF" resolved-sql)))
@@ -100,7 +101,11 @@
       (let [parser-ns (require 'reactor.sql-parser)
             add-clause-fn (ns-resolve 'reactor.sql-parser 'add-as-of-clause)]
         (if add-clause-fn
-          (add-clause-fn resolved-sql as-of)
+          (do
+            (log/info "[SQL-RESOLVER] Adding temporal clause AFTER template resolution"
+                     "\n  Resolved SQL:" resolved-sql
+                     "\n  Timestamp:" as-of)
+            (add-clause-fn resolved-sql as-of))
           resolved-sql))
       resolved-sql)))
 
