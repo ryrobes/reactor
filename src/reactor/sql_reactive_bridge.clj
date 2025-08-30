@@ -37,8 +37,8 @@
   [execute-fn]
   (fn [node sql & params]
     (let [result (apply execute-fn node sql params)]
-      ;; If successful, notify about table changes
-      (when-not (:error result)
+      ;; DISABLED: Reaction triggering is now handled by sql_pipeline.clj
+      #_(when-not (:error result)
         (when-let [table (extract-table-from-sql sql)]
           ;; Trigger reactive updates asynchronously
           (future
@@ -52,8 +52,9 @@
   [node sql params]
   ;; Execute the mutation
   (let [result (session/execute-sql-mutation node sql params)]
-    ;; Since XTDB 2.0 doesn't send SQL mutations to Kafka, manually trigger updates
-    (when-not (:error result)
+    ;; DISABLED: Reaction triggering is now handled by sql_pipeline.clj
+    ;; The pipeline's trigger-reactive-updates stage handles this centrally
+    #_(when-not (:error result)
       ;; Extract table names from the SQL
       (let [sql-lower (.toLowerCase sql)
             insert-table (when (str/starts-with? sql-lower "insert")

@@ -16,9 +16,10 @@
 (defn get-block-results
   "Get the current results for a block"
   [block-id]
-  (get @block-results (if (keyword? block-id) 
-                        block-id 
-                        (keyword (cstr/replace (str block-id) ":" ""))))) ;; ensure kw
+  (get @block-results (cond
+                        (keyword? block-id) block-id
+                        (string? block-id) (keyword block-id)
+                        :else (keyword (str block-id))))) ;; safely convert to keyword
 
 (defn has-active-subscription?
   "Check if a block has an active subscription"
@@ -64,7 +65,11 @@
   
   ;; Create new subscription - use block-id as the stable subscription ID
   ;; This ensures the server can track subscriptions properly
-  (let [result-atom (r/sql-subscribe-with-id! (str block-id) sql params as-of)]
+  ;; Convert block-id to string safely: keywords use 'name', everything else uses 'str'
+  (let [sub-id (if (keyword? block-id) 
+                 (name block-id)    ; :abc123 -> "abc123" (removes colon)
+                 (str block-id))    ; "abc123" -> "abc123", UUID -> "uuid-string", etc.
+        result-atom (r/sql-subscribe-with-id! sub-id sql params as-of)]
     ;; Store the subscription
     (swap! block-subscriptions assoc block-id result-atom)
     

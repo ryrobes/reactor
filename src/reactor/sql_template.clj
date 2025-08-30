@@ -21,73 +21,74 @@
   "Recursively resolve all template references in SQL"
   [sql session-state resolved-blocks]
   (log/debug {:message "Resolving SQL templates"
-            :sql sql
-            :resolved-count (count resolved-blocks)})
-  
+              :sql sql
+              :resolved-count (count resolved-blocks)})
+
   (let [refs (extract-template-refs sql)]
     (if (empty? refs)
       ;; No more templates to resolve
       sql
       ;; Resolve each reference
       (reduce
-        (fn [current-sql block-id]
-          ;; Check for circular references
-          (if (contains? resolved-blocks block-id)
-            (do
-              (log/warn {:message "Circular reference detected"
+       (fn [current-sql block-id]
+         ;; Check for circular references
+         (if (contains? resolved-blocks block-id)
+           (do
+             (log/warn {:message "Circular reference detected"
                         :block-id block-id
                         :resolved-blocks resolved-blocks})
-              (throw (ex-info "Circular block reference detected" 
+             (throw (ex-info "Circular block reference detected"
                              {:block-id block-id
                               :resolved-blocks resolved-blocks})))
-            ;; Get the block's SQL - FIRST try cache, then session state
-            ;; Use resolve to avoid circular dependency
-            (let [get-cache-fn (resolve 'reactor.reactive-server/get-block-sql-from-cache)
-                  cache-entry (when get-cache-fn (@get-cache-fn block-id))
-                  cached-sql (:resolved-sql cache-entry)
-                  session-sql (or (get-in session-state [:canvas :blocks (keyword block-id) :sql])
+           ;; Get the block's SQL - FIRST try cache, then session state
+           ;; Use resolve to avoid circular dependency
+           (let [get-cache-fn (resolve 'reactor.reactive-server/get-block-sql-from-cache)
+                 cache-entry (when get-cache-fn (@get-cache-fn block-id))
+                 cached-sql (:resolved-sql cache-entry)
+                 session-sql (or (get-in session-state [:canvas :blocks (keyword block-id) :sql])
                                  (get-in session-state [:canvas :blocks block-id :sql]))
-                  fresh-block-sql (or cached-sql session-sql)]
-              (log/debug {:message "Template resolution: Looking up parent block SQL"
-                        :block-id block-id
-                        :from-cache? (boolean cached-sql)
-                        :cache-updated-at (:updated-at cache-entry)
-                        :from-session? (and (not cached-sql) session-sql)})
-              (if fresh-block-sql
-                (let [_ (log/debug {:message "Template resolution: Found parent block SQL"
-                                  :block-id block-id
-                                  :sql-length (count fresh-block-sql)
-                                  :sql-preview (if (> (count fresh-block-sql) 100)
-                                                 (str (subs fresh-block-sql 0 100) "...")
-                                                 fresh-block-sql)
-                                  :source (cond
-                                           cached-sql :cache
-                                           (get-in session-state [:canvas :blocks (keyword block-id) :sql]) :session-keyword
-                                           :else :session-string)})
-                    ;; Remove any LIMIT from the referenced SQL
-                    clean-sql (str/replace fresh-block-sql #"(?i)\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?" "")
-                    ;; Recursively resolve any templates in the referenced SQL
-                    resolved-sql (resolve-templates clean-sql 
-                                                   session-state 
-                                                   (conj resolved-blocks block-id))
-                    ;; Wrap as subquery
-                    wrapped-sql (str "(" resolved-sql ")")]
-                (log/debug {:message "Resolved template reference"
-                          :block-id block-id
-                          :original-sql fresh-block-sql
-                          :wrapped-sql wrapped-sql})
-                ;; Replace the template reference with the resolved SQL
-                (str/replace current-sql 
-                           (str "{{" block-id ".sql}}")
-                           wrapped-sql))
-              (do
-                (log/warn {:message "Block not found for template reference"
-                          :block-id block-id
-                          :available-blocks (keys (:blocks (:canvas session-state)))})
-                ;; Return SQL unchanged if block not found
-                current-sql)))))  ; Close: do, if, let, if (outer)
-        sql
-        refs))))
+                 fresh-block-sql (or cached-sql session-sql)
+                 ]
+             (log/debug {:message "Template resolution: Looking up parent block SQL"
+                         :block-id block-id
+                         :from-cache? (boolean cached-sql)
+                         :cache-updated-at (:updated-at cache-entry)
+                         :from-session? (and (not cached-sql) session-sql)})
+             (if fresh-block-sql
+               (let [_ (log/debug {:message "Template resolution: Found parent block SQL"
+                                   :block-id block-id
+                                   :sql-length (count fresh-block-sql)
+                                   :sql-preview (if (> (count fresh-block-sql) 100)
+                                                  (str (subs fresh-block-sql 0 100) "...")
+                                                  fresh-block-sql)
+                                   :source (cond
+                                             cached-sql :cache
+                                             (get-in session-state [:canvas :blocks (keyword block-id) :sql]) :session-keyword
+                                             :else :session-string)})
+                     ;; Remove any LIMIT from the referenced SQL
+                     clean-sql (str/replace fresh-block-sql #"(?i)\s+LIMIT\s+\d+(\s+OFFSET\s+\d+)?" "")
+                     ;; Recursively resolve any templates in the referenced SQL
+                     resolved-sql (resolve-templates clean-sql
+                                                     session-state
+                                                     (conj resolved-blocks block-id))
+                     ;; Wrap as subquery
+                     wrapped-sql (str "(" resolved-sql ")")]
+                 (log/debug {:message "Resolved template reference"
+                             :block-id block-id
+                             :original-sql fresh-block-sql
+                             :wrapped-sql wrapped-sql})
+                 ;; Replace the template reference with the resolved SQL
+                 (str/replace current-sql
+                              (str "{{" block-id ".sql}}")
+                              wrapped-sql))
+               (do
+                 (log/warn {:message "Block not found for template reference"
+                            :block-id block-id
+                            :available-blocks (keys (:blocks (:canvas session-state)))})
+                 ;; Return SQL unchanged if block not found
+                 current-sql)))))  ; Close: do, if, let, if (outer)
+       sql
+       refs))))
 
 (defn find-dependent-blocks
   "Find all blocks that reference a given block ID in their SQL templates"

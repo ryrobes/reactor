@@ -141,7 +141,7 @@
                         (swap! pending-calculations disj cache-key)
                         (callback 0)))))))))
 
-(defn calculate-missing-counts!
+(defn calculate-missing-counts!_disabled
   "Calculate row counts only for timestamps not already cached"
   [sql timestamps on-complete]
   (let [;; Check which timestamps are already cached
@@ -164,6 +164,10 @@
             (swap! completed inc)
             (when (= @completed total)
               (on-complete @results))))))))
+
+(defn calculate-missing-counts!
+  "STUBBED FOR TESTING"
+  [sql timestamps on-complete] nil) ;; no side effects
 
 (defn calculate-missing-sizes!
   "Calculate data sizes only for timestamps not already cached"

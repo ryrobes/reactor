@@ -23,4 +23,12 @@ todo_out
 todo-out
 .claude-debug
 .directory
+resources/public/js/compiled
+resources/public/js/rabbit.js
+resources/public/js/magic.js
+resources/public/js/main.js
+resources/public/js/todo.js
+resources/public/js/todo-enhanced.js
+test-*.sh
+*.tmp
 
