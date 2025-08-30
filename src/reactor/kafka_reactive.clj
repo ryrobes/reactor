@@ -2,18 +2,18 @@
   "Kafka-based real-time reactivity for XTDB transaction logs.
    Monitors XTDB transactions and triggers re-execution of subscribed queries."
   (:require [jackdaw.client :as jc]
-            [jackdaw.client.log :as jcl]
-            [taoensso.nippy :as nippy]
+            ;[jackdaw.client.log :as jcl]
+            ;[taoensso.nippy :as nippy]
             [io.aviso.ansi :as ansi]
             [cheshire.core]
-            [reactor.xtdb-store :as xts]
+            ;[reactor.xtdb-store :as xts]
             [reactor.meta-tracking :as meta]
             [reactor.session_simple :as session]
             [reactor.structural-diff :as sdiff]
-            [reactor.temporal-cache :as tcache]
-            [reactor.sql-template :as sql-template]
-            [reactor.sql-template-temporal :as template-temporal]
-            [reactor.sql-resolver :as resolver]
+            ;[reactor.temporal-cache :as tcache]
+            ;[reactor.sql-template :as sql-template]
+            ;[reactor.sql-template-temporal :as template-temporal]
+            ;[reactor.sql-resolver :as resolver]
             [org.httpkit.server :as http-server]
             [clojure.tools.logging :as log]
             [clojure.string :as str]
@@ -157,11 +157,13 @@
   (reset! debounce-delay-ms delay-ms)
   (log/info "Debounce delay set to" delay-ms "ms"))
 
+(def hot-tables #{"reactor_subscriptions" "reactor_events" "reactor_reactions"})
+
 (defn configure-hot-table-debouncing!
   "Configure special debouncing for known hot tables"
   []
   ;; Hot tables that trigger many reactions
-  (def hot-tables #{"reactor_subscriptions" "reactor_events" "reactor_reactions"})
+  
   ;; Could implement per-table delays if needed
   (set-debounce-delay! 200))
 
@@ -731,28 +733,9 @@
                        (let [tx-value (:value record)
                              tx-key (:key record)
                              tx-key-str (when tx-key (String. tx-key "UTF-8"))
-                             now (System/currentTimeMillis)
-                             ;; Check if this is a duplicate transaction
-                             is-duplicate? (when tx-key-str
-                                           (< (- now (get @processed-transactions tx-key-str 0)) 
-                                              tx-dedup-window-ms))]
-                         
-                         ;; Skip duplicate transactions
-                         (if is-duplicate?
-                           (log/debug "[KAFKA-DEDUP] Skipping duplicate transaction:" tx-key-str)
+                             now (System/currentTimeMillis)]
                            
-                           ;; Not a duplicate - process it
                            (when tx-value
-                             ;; Record this transaction to prevent duplicates
-                             (when tx-key-str
-                               (swap! processed-transactions assoc tx-key-str now)
-                               ;; Clean up old entries periodically
-                               (when (> (count @processed-transactions) 1000)
-                                 (swap! processed-transactions 
-                                       #(into {} (filter (fn [[k v]] 
-                                                         (< (- now v) (* 2 tx-dedup-window-ms)))
-                                                       %)))))
-                             
                            ;; Convert just enough to check for table names (first 5KB should be enough)
                            (let [sample-size (min 5000 (count tx-value))
                                  raw-sample (String. (byte-array (take sample-size tx-value)) "ISO-8859-1")
@@ -786,11 +769,16 @@
                                                            "values" "set" "and" "or" "null" "table" "column")
                                                      ;; EXCLUDE SESSION TABLES - they're just UI state
                                                      (disj "rabbit_sessions" "todo_sessions" "sessions")
+                                                     ;; EXCLUDE META-TRACKING TABLES - they shouldn't trigger reactions
+                                                     (disj "reactor_events" "reactor_performance" "reactor_reactions"
+                                                           "reactor_subscriptions")
                                                      ;; Remove any table ending with _sessions
                                                      (->> (remove #(str/ends-with? % "_sessions")))
                                                      (->> (remove #(str/ends-with? % "_subscriptions")))
                                                      (->> (remove #(str/ends-with? % "_taps")))
                                                      (->> (remove #(str/ends-with? % "_reactions")))
+                                                     (->> (remove #(str/ends-with? % "_events")))
+                                                     (->> (remove #(str/ends-with? % "_performance")))
                                                      set)]
                                
                                ;; Debug logging to see what's happening
@@ -809,64 +797,47 @@
                                  nil)
                                
                                (when (seq filtered-tables)
-                                 (log/info "[KAFKA-MUTATION] Tables affected by mutation:" filtered-tables)
-                                 ;; Log detailed subscription info at DEBUG level
-                                 ;; Commented out verbose subscription logging
-                                 #_(log/debug "[KAFKA-MUTATION] Active subscriptions count:" (count @active-subscriptions))
-                                 #_(log/debug "[KAFKA-MUTATION] Table-to-subs for affected tables:")
-                                 #_(doseq [table filtered-tables]
-                                     (let [subs-for-table (get @table-to-subs (str/lower-case table))]
-                                       (log/debug "  Table" table "has" (count subs-for-table) "subscriptions:" subs-for-table)))
-                                 
-                                 ;; Log subscription details at DEBUG level
-                                 (when (pos? (count @active-subscriptions))
-                                   ;; Commented out detailed subscription logging
-                                   #_(log/debug "[KAFKA-MUTATION] Subscription details:")
-                                   #_(doseq [[sub-id sub-info] @active-subscriptions]
-                                       (when (some #(contains? (set (:tables sub-info)) %) filtered-tables)
-                                         (log/debug "  " sub-id "- temporal:" (:temporal? sub-info) 
-                                                   "inert:" (:inert? sub-info)
-                                                   "tables:" (:tables sub-info)))))
-                                 
-                                 ;; Process rules for affected tables
-                                 (try
-                                   (require '[reactor.sql-rules :as rules])
-                                   (when-let [process-fn (resolve 'reactor.sql-rules/process-table-changes)]
-                                     (process-fn @session/default-node filtered-tables tx-key))
-                                   (catch Exception e
-                                     (log/debug "Rules engine not available or failed:" (.getMessage e))))
-                                 
-                                 ;; Handle SQL subscriptions
-                                 (let [affected-subs (find-affected-subscriptions filtered-tables)]
-                                   ;; Only log if there are affected subscriptions
-                                   (when (seq affected-subs)
-                                     (log/debug "[KAFKA-MUTATION] Found" (count affected-subs) "affected subscriptions:"))
-                                   (when (seq affected-subs)
-                                     (log/info "[KAFKA-MUTATION] Triggering" (count affected-subs) "subscriptions for tables:" filtered-tables)
-                                     ;; Log each subscription being triggered at DEBUG level
-                                     (doseq [sub-id affected-subs]
-                                       (let [sub-info (get @active-subscriptions sub-id)
-                                             session-id (:session-id sub-info)
-                                             channels (get @sse-channels session-id [])]
-                                         ;; Commented out per-subscription trigger logging  
-                                         #_(log/debug "[DEBUG-TRIGGER] Requesting re-execution for" sub-id
-                                                     "\n  Session:" session-id
-                                                     "\n  Has channels:" (boolean (seq channels))
-                                                     "\n  Channel count:" (count channels)
-                                                     "\n  Tables:" (:tables sub-info))))
-                                     ;; Use new coordinator to handle table changes
-                                     (doseq [table filtered-tables]
-                                       ;; Track the reaction for monitoring
-                                       (meta/track-reaction! table "mutation" affected-subs)
-                                       ;; Let the coordinator handle finding and re-executing affected subscriptions
+                                 ;; Create a deduplication key based on affected tables
+                                 (let [dedup-key (str (hash filtered-tables))
+                                       last-processed (get @processed-transactions dedup-key 0)
+                                       is-duplicate? (< (- now last-processed) 1000)]  ; 1 second window
+                                   
+                                   (if is-duplicate?
+                                     (log/debug "[KAFKA-DEDUP] Skipping duplicate mutation for tables:" filtered-tables)
+                                     (do
+                                       ;; Record this mutation to prevent duplicates
+                                       (swap! processed-transactions assoc dedup-key now)
+                                       ;; Clean up old entries periodically
+                                       (when (> (count @processed-transactions) 100)
+                                         (let [cutoff (- now 10000)]  ; Keep last 10 seconds
+                                           (swap! processed-transactions 
+                                                  #(into {} (filter (fn [[k v]] (> v cutoff)) %)))))
+                                       
+                                       (log/info "[KAFKA-MUTATION] Tables affected by mutation:" filtered-tables)
+                                       
+                                       ;; Process rules for affected tables
+                                       (try
+                                         (require '[reactor.sql-rules :as rules])
+                                         (when-let [process-fn (resolve 'reactor.sql-rules/process-table-changes)]
+                                           (process-fn @session/default-node filtered-tables tx-key))
+                                         (catch Exception e
+                                           (log/debug "Rules engine not available or failed:" (.getMessage e))))
+                                       
+                                       ;; Handle SQL subscriptions - call coordinator ONCE per table change
                                        (let [coord-ns (require 'reactor.reactive.coordinator)
-                                             handle-fn (ns-resolve 'reactor.reactive.coordinator 'handle-table-change)]
+                                             handle-fn (ns-resolve 'reactor.reactive.coordinator 'handle-tables-change)]
                                          (when handle-fn
-                                           (handle-fn table))))))
-                                 
-                                 ;; Handle keypath subscriptions for todo_sessions
-                                 (doseq [table filtered-tables]
-                                   (trigger-keypath-updates! table))))))) ;; Close all the let blocks and when (added one for dedup check)
+                                           ;; Call handle-tables-change with all affected tables at once
+                                           (handle-fn filtered-tables))
+                                         ;; Track reactions for monitoring
+                                         (doseq [table filtered-tables]
+                                           (let [affected-subs (find-affected-subscriptions [table])]
+                                             (when (seq affected-subs)
+                                               (meta/track-reaction! table "mutation" affected-subs)))))
+                                       
+                                       ;; Handle keypath subscriptions for todo_sessions
+                                       (doseq [table filtered-tables]
+                                         (trigger-keypath-updates! table))))))))) ;; Close all the let blocks and when (added one for dedup check)
                        (catch Exception e
                          (log/error e "Error processing Kafka record")))))
                   (catch Exception e

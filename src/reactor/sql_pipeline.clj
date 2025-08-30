@@ -9,7 +9,7 @@
             [reactor.kafka-reactive :as kafka]
             [reactor.xtdb-store :as xts]
             [reactor.meta-tracking :as meta]
-            [reactor.time-travel-sql :as time-travel]
+            ;[reactor.time-travel-sql :as time-travel]
             [reactor.subscriptions.store :as sub-store]
             [reactor.subscriptions.differ :as differ]
             [reactor.log :as log]
@@ -193,10 +193,11 @@
 ;; ============================================================================
 
 (defn register-subscription
-  "Register subscription with Kafka reactive system - only for queries, not mutations"
+  "Register subscription with Kafka reactive system - only for initial queries, not reactions"
   [ctx]
   (if (or (:error ctx) 
           (:is-mutation? ctx)  ; Don't subscribe to mutations
+          (:is-reaction? ctx)  ; Don't re-register during reactions
           (not (:is-query? ctx))
           (= (:session-id ctx) "session-query"))
     ctx
@@ -376,13 +377,23 @@
   (if (or (:error ctx) 
           (:is-mutation? ctx))
     ctx
-    (let [sub-id (:subscription-id ctx)]
+    (let [sub-id (:subscription-id ctx)
+          current-sql (:sql ctx)
+          current-tables (:tables ctx)]
       (if-let [existing (sub-store/get-subscription sub-id)]
-        ;; Update last accessed time
-        (do
-          (sub-store/update! sub-id {:last-accessed (System/currentTimeMillis)})
+        ;; Check if SQL has changed (for block-based subscriptions)
+        (let [sql-changed? (and current-sql
+                                (not= current-sql (:sql existing)))
+              updates (cond-> {:last-accessed (System/currentTimeMillis)}
+                       sql-changed? (assoc :sql current-sql
+                                          :tables current-tables))]
+          (when sql-changed?
+            (log/info "[PIPELINE] Updating subscription SQL for" sub-id
+                     "\n  Old SQL:" (subs (:sql existing) 0 (min 50 (count (:sql existing))))
+                     "\n  New SQL:" (subs current-sql 0 (min 50 (count current-sql)))))
+          (sub-store/update! sub-id updates)
           (assoc ctx 
-                 :subscription existing
+                 :subscription (sub-store/get-subscription sub-id)
                  :previous-results (:last-results existing)))
         ;; Create new subscription
         (let [new-sub {:id sub-id

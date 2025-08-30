@@ -304,7 +304,7 @@
                               "transparent")
                  :color (themes/get-primary-color)
                  :border (str "1px solid " (themes/get-primary-color))
-                 :border-radius "20px"
+                 :border-radius "10px"
                  :cursor "pointer"
                  :font-family (themes/get-font-family :monospace)
                  :font-size "12px"

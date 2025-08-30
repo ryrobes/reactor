@@ -3,7 +3,7 @@
    Each session gets its own isolated state universe with time-travel."
   (:require [reactor.xtdb-store :as xts]
             [reactor.sql-parser :as sql-parser]
-            [xtdb.api :as xt]
+            ;[xtdb.api :as xt]
             [clojure.string :as str]
             [clojure.walk :as walk]))
 

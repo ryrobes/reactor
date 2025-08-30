@@ -17,6 +17,7 @@
   [subscription]
   (let [sub-id (:id subscription)
         session-id (:session-id subscription)]
+    
     (log/info "[COORDINATOR] Executing reaction for subscription" sub-id
              "Session:" session-id)
     
@@ -71,6 +72,7 @@
   "Execute a subscription and broadcast results"
   [subscription]
   (let [result (execute-subscription-reaction subscription)]
+    ;; Broadcast if successful
     (when (:success result)
       (broadcast-result result))
     result))

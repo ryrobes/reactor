@@ -11,7 +11,7 @@
 ;; Async channel for non-blocking meta-data writes
 ;; Use sliding buffer to drop oldest events when full instead of blocking
 (defonce meta-channel (chan (async/sliding-buffer 5000)))
-(defonce tracking-enabled? (atom true))
+(defonce tracking-enabled? (atom true))  ;; Re-enabled with SQL-based debouncing
 (defonce dropped-events (atom 0))
 
 ;; Forward declarations

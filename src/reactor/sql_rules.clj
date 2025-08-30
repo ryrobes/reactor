@@ -1,11 +1,12 @@
 (ns reactor.sql-rules
   "SQL-based reactive rules engine for XTDB"
   (:require [reactor.xtdb-store :as xts]
-            [reactor.session_simple :as session]
+            ;[reactor.session_simple :as session]
             [reactor.sql-stacks :as stacks]
             [reactor.log :as log]
             [clojure.string :as str]
-            [clojure.core.async :as async])
+            ;[clojure.core.async :as async]
+            )
   (:import [java.util UUID]
            [java.time Instant]))
 

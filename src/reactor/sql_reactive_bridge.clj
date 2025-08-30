@@ -2,7 +2,7 @@
   "Bridge between SQL operations and reactive query system.
    Monitors SQL executions and triggers reactive updates."
   (:require [reactor.kafka-reactive :as kafka]
-            [reactor.xtdb-store :as xts]
+            ;[reactor.xtdb-store :as xts]
             [reactor.session_simple :as session]
             [reactor.meta-tracking :as meta]
             [cheshire.core :as json]
