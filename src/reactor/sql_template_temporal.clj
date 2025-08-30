@@ -22,6 +22,7 @@
   [sql session-state resolved-blocks temporal-timestamp]
   (log/info "[TEMPLATE-TEMPORAL] Resolving templates with temporal support"
            "\n  Has temporal:" (boolean temporal-timestamp)
+           "\n  Timestamp:" temporal-timestamp
            "\n  SQL:" (if (> (count sql) 100)
                        (str (subs sql 0 100) "...")
                        sql))

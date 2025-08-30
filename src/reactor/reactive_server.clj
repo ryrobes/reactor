@@ -13,6 +13,7 @@
             [reactor.sql-pipeline :as pipeline]
             ;[reactor.sql-pipeline-adapter :as adapter]
             [reactor.rabbitize :as rabbitize]
+            [reactor.utils :as ut]
             [org.httpkit.server :as http]
             [cheshire.core :as json]
             [clojure.edn :as edn]
@@ -447,6 +448,9 @@
                                   (get query-params "subscription_id")
                                   (get query-params "subscription-id"))
                 client-id (get query-params "client_id")
+                ;; Handle both hyphenated and underscored versions for as-of (client sends with hyphen)
+                as-of (or (:as-of body)      ; Client sends with hyphen
+                         (:as_of body))       ; Also check underscore for compatibility
                 
                 ;; Execute through the new pipeline
                 result (pipeline/execute-sql
@@ -454,7 +458,7 @@
                          :params (:params body)
                          :session-id session-id
                          :block-id (:block_id body)
-                         :as-of (:as_of body)
+                         :as-of as-of
                          :subscription-id subscription-id
                          :client-id client-id})]
             
@@ -485,11 +489,34 @@
           ;; Query history endpoint for time travel
           "/api/query-history"
           (let [body (json/parse-string (slurp (:body req)) true)
-                sql (:sql body)
+                original-sql (:sql body)
                 limit (or (:limit body) 20)
-                node @session/default-node]
+                ;_ (ut/pp [:get-history body])
+                node @session/default-node
+                ;; Get session state for template resolution
+                session-state (when session-id
+                               (when-let [session (session/get-session session-id)]
+                                 (session/get-state session)))
+                ;; Resolve templates if present
+                resolved-sql (if (and original-sql (re-find #"\{\{[^}]+\.sql\}\}" original-sql))
+                              (try
+                                (require '[reactor.sql-template :as template])
+                                (let [resolver (ns-resolve 'reactor.sql-template 'resolve-sql-templates-with-deps)]
+                                  (:sql (resolver original-sql session-state)))
+                                (catch Exception e
+                                  (log/warn "[QUERY-HISTORY] Failed to resolve templates:" (.getMessage e))
+                                  original-sql))
+                              original-sql)]
             (if node
-              (let [result (time-travel/get-query-history-range node sql limit)]
+              (let [_ (when (not= original-sql resolved-sql)
+                       (log/info "[QUERY-HISTORY] Resolved templates for history"
+                                "\n  Original:" (if (> (count original-sql) 100)
+                                                  (str (subs original-sql 0 100) "...")
+                                                  original-sql)
+                                "\n  Resolved:" (if (> (count resolved-sql) 100)
+                                                  (str (subs resolved-sql 0 100) "...")
+                                                  resolved-sql)))
+                    result (time-travel/get-query-history-range node resolved-sql limit)]
                 {:status 200
                  :headers {"Content-Type" "application/json"
                           "Access-Control-Allow-Origin" "*"}

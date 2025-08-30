@@ -3,6 +3,7 @@
   (:require [reactor.xtdb-store :as xts]
             [reactor.sql-parser :as parser]
             [clojure.string :as cstr]
+            [io.aviso.ansi :as ansi]
             [clojure.tools.logging :as log]))
 
 (defn get-table-history-timestamps
@@ -54,7 +55,12 @@
 (defn get-query-history-range
   "Get the available time range for a SQL query based on its tables and WHERE clause"
   [node sql limit]
+  (log/info "[QUERY-HISTORY] Getting history for " (ansi/yellow (str node)) " SQL:" 
+           (if (> (count sql) 200)
+             (str (subs sql 0 200) "...")
+             sql))
   (let [tables (get-tables-from-sql sql)
+        _ (log/info "[QUERY-HISTORY] Tables extracted:" tables)
         ;; Extract WHERE clause from the original SQL to filter timestamps
         where-clause (parser/extract-where-clause sql)
         #_ (when where-clause
@@ -85,6 +91,7 @@
         final-timestamps (take (dec limit) interpolated-timestamps)
         ;; Ensure chronological order (oldest to newest) with NOW (nil) at the end
         timestamps-with-now (vec (concat final-timestamps [nil]))]
+    (log/info "[QUERY-HISTORY] Returning" (count timestamps-with-now) "timestamps for tables:" tables)
     {:tables tables
      :timestamps timestamps-with-now
      :count (count timestamps-with-now)}))

@@ -44,33 +44,19 @@
       final-sql)))
 
 (defn extract-tables
-  "Extract all table names from a SQL query"
+  "Extract all table names from a SQL query, including from nested subqueries"
   [sql]
-  (try
-    (let [stmt (parse-sql sql)]
-      (cond
-        ;; SELECT statement
-        (instance? Select stmt)
-        (let [select-body (.getSelectBody stmt)
-              tables (atom #{})]
-          (when (instance? PlainSelect select-body)
-            ;; Get FROM table
-            (when-let [from-item (.getFromItem select-body)]
-              (when (instance? Table from-item)
-                (swap! tables conj (str (.getName from-item)))))
-            ;; Get JOIN tables
-            (when-let [joins (.getJoins select-body)]
-              (doseq [join joins]
-                (when-let [right-item (.getRightItem join)]
-                  (when (instance? Table right-item)
-                    (swap! tables conj (str (.getName right-item))))))))
-          @tables)
-        
-        ;; For other statement types, return empty set for now
-        :else #{}))
-    (catch Exception e
-      ;; If parsing fails, fall back to regex extraction
-      (set (map second (re-seq #"(?i)FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)" sql))))))
+  ;; Use regex extraction which handles any level of nesting reliably
+  ;; This approach finds all "FROM table_name" patterns regardless of nesting depth
+  (let [;; First, remove string literals to avoid false matches
+        cleaned-sql (clojure.string/replace sql #"'[^']*'" "")
+        ;; Also remove content inside parentheses that look like function calls
+        ;; but keep subquery parentheses
+        cleaned-sql2 (clojure.string/replace cleaned-sql #"\w+\([^)]*\)" "")
+        ;; Find all FROM table_name patterns (not followed by opening paren to avoid subqueries)
+        ;; This will match: FROM sales, FROM orders, etc. even in nested queries
+        matches (re-seq #"(?i)FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s|,|\)|$)" cleaned-sql2)]
+    (set (map second matches))))
 
 (defn modify-limit
   "Modify or add LIMIT clause to a SQL query"

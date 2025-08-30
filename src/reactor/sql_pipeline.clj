@@ -95,15 +95,27 @@
     ctx
     (let [sql (:sql ctx)
           session-state (:session-state ctx)
-          has-templates? (resolver/has-templates? sql)]
+          has-templates? (resolver/has-templates? sql)
+          as-of (:as-of ctx)]
       
       (if has-templates?
         (try
-          (let [result (template/resolve-sql-templates-with-deps sql session-state)
+          ;; Use temporal template resolver if we have an as-of timestamp
+          (let [result (if as-of
+                        ;; Temporal template resolution - adds FOR SYSTEM_TIME to inner queries
+                        (do
+                          (log/info "[PIPELINE] Using temporal template resolution for as-of:" as-of)
+                          (require '[reactor.sql-template-temporal :as temp-template])
+                          (let [temp-resolver (ns-resolve 'reactor.sql-template-temporal 
+                                                         'resolve-sql-templates-with-deps-and-temporal)]
+                            (temp-resolver sql session-state as-of)))
+                        ;; Regular template resolution
+                        (template/resolve-sql-templates-with-deps sql session-state))
                 resolved-sql (:sql result)
                 dependencies (:dependencies result)]
             
             (log/info "[PIPELINE] Resolved templates"
+                     "\n  Temporal:" (boolean as-of)
                      "\n  Dependencies:" dependencies
                      "\n  Original length:" (count sql)
                      "\n  Resolved length:" (count resolved-sql))
@@ -132,11 +144,23 @@
   (if (or (:error ctx) (not (:as-of ctx)))
     ctx
     (let [resolved-sql (:resolved-sql ctx)
-          as-of (:as-of ctx)]
-      (if (str/includes? resolved-sql "FOR SYSTEM_TIME")
-        ;; Already has temporal clause
-        (assoc ctx :is-temporal? true)
-        ;; Add temporal clause
+          as-of (:as-of ctx)
+          has-templates? (:has-templates? ctx)]
+      (cond
+        ;; Already has temporal clause (from template resolution or manual)
+        (str/includes? resolved-sql "FOR SYSTEM_TIME")
+        (do
+          (log/debug "[PIPELINE] SQL already has temporal clause, skipping addition")
+          (assoc ctx :is-temporal? true))
+        
+        ;; If we had templates, temporal clauses were already added during template resolution
+        has-templates?
+        (do
+          (log/debug "[PIPELINE] Templates were resolved with temporal support, skipping clause addition")
+          (assoc ctx :is-temporal? true))
+        
+        ;; No templates, add temporal clause normally
+        :else
         (let [temporal-sql (parser/add-as-of-clause resolved-sql as-of)]
           (log/debug "[PIPELINE] Added temporal clause"
                     "\n  Timestamp:" as-of)
@@ -379,18 +403,25 @@
     ctx
     (let [sub-id (:subscription-id ctx)
           current-sql (:sql ctx)
-          current-tables (:tables ctx)]
+          current-tables (:tables ctx)
+          current-as-of (:as-of ctx)]
       (if-let [existing (sub-store/get-subscription sub-id)]
-        ;; Check if SQL has changed (for block-based subscriptions)
+        ;; Check if SQL or temporal state has changed (for block-based subscriptions)
         (let [sql-changed? (and current-sql
                                 (not= current-sql (:sql existing)))
+              as-of-changed? (not= current-as-of (:as-of existing))
               updates (cond-> {:last-accessed (System/currentTimeMillis)}
                        sql-changed? (assoc :sql current-sql
-                                          :tables current-tables))]
+                                          :tables current-tables)
+                       as-of-changed? (assoc :as-of current-as-of))]
           (when sql-changed?
             (log/info "[PIPELINE] Updating subscription SQL for" sub-id
                      "\n  Old SQL:" (subs (:sql existing) 0 (min 50 (count (:sql existing))))
                      "\n  New SQL:" (subs current-sql 0 (min 50 (count current-sql)))))
+          (when as-of-changed?
+            (log/info "[PIPELINE] Updating subscription temporal state for" sub-id
+                     "\n  Old as-of:" (:as-of existing)
+                     "\n  New as-of:" current-as-of))
           (sub-store/update! sub-id updates)
           (assoc ctx 
                  :subscription (sub-store/get-subscription sub-id)
@@ -406,6 +437,7 @@
                       :block-id (:block-id ctx)
                       :dependencies (:dependencies ctx)
                       :is-temporal? (:is-temporal? ctx)
+                      :as-of (:as-of ctx)  ; Store the temporal timestamp
                       :created-at (System/currentTimeMillis)}]
           (sub-store/add! new-sub)
           (assoc ctx :subscription new-sub))))))
@@ -469,6 +501,11 @@
 (defn execute-sql
   "Main entry point for SQL execution through the pipeline"
   [{:keys [sql params session-id block-id as-of subscription-id client-id] :as request}]
+  (when as-of
+    (log/info "[PIPELINE] Received temporal query with as-of:" as-of
+             "\n  SQL:" (if (> (count sql) 100) 
+                           (str (subs sql 0 100) "...") 
+                           sql)))
   (let [ctx (create-context request)
         result (execute-pipeline ctx)]
     
@@ -495,6 +532,7 @@
                 :params (:params subscription)
                 :session-id (:session-id subscription)
                 :block-id (:block-id subscription)
+                :as-of (:as-of subscription)  ; Preserve temporal timestamp for reactions
                 :subscription-id subscription-id
                 :client-id (:client-id subscription)
                 :is-reaction? true
