@@ -594,7 +594,7 @@
                                                       " | Type: FULL UPDATE (diff inefficient)"
                                                       " | Previous: " (count previous) " rows"
                                                       " | Current: " (count current) " rows \n"
-                                                      "                               Result size: " (:result-size size-info) " bytes"
+                                                      "                                 Result size: " (:result-size size-info) " bytes"
                                                       " | Diff size: " (:diff-size size-info) " bytes"
                                                       " | Compression: " (format "%.1f%%"
                                                                                  (* 100 (:compression-ratio size-info)))
@@ -608,7 +608,7 @@
                                                       " | Type: " (:type calculated-diff)
                                                       " | Previous: " (count previous) " rows"
                                                       " | Current: " (count current) " rows \n"
-                                                      "                               Result size: " (:result-size size-info) " bytes"
+                                                      "                                 Result size: " (:result-size size-info) " bytes"
                                                       " | Diff size: " (:diff-size size-info) " bytes"
                                                       " | Compression: " (format "%.1f%%"
                                                                                  (* 100 (:compression-ratio size-info)))

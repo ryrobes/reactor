@@ -61,7 +61,7 @@
             ;;    sql) 
             (ansi/yellow (cstr/replace (str sql) #"[\r\n]+" " ")))
   (let [tables (get-tables-from-sql sql)
-        _ (log/info "[QUERY-HISTORY] " (ansi/yellow (str sub-id)) " Tables extracted:" tables)
+        #_ (log/info "[QUERY-HISTORY] " (ansi/yellow (str sub-id)) " Tables extracted:" tables)
         ;; Extract WHERE clause from the original SQL to filter timestamps
         where-clause (parser/extract-where-clause sql)
         #_(when where-clause
@@ -70,7 +70,7 @@
         ;; Request 2x the limit from each table to handle multiple tables
         per-table-limit (* 2 limit)
         ;; Pass WHERE clause to get row-specific timestamps
-        all-timestamps (if where-clause
+        all-timestamps (if false ; where-clause ;; temp, always show all timestamps for the ultimate parent table
                          (mapcat #(get-table-history-timestamps node % per-table-limit where-clause) tables)
                          (mapcat #(get-table-history-timestamps node % per-table-limit) tables))
         ;; Clean timestamps - remove [UTC] suffix but keep the Z
@@ -92,7 +92,7 @@
         final-timestamps (take (dec limit) interpolated-timestamps)
         ;; Ensure chronological order (oldest to newest) with NOW (nil) at the end
         timestamps-with-now (vec (concat final-timestamps [nil]))]
-    (log/info "[QUERY-HISTORY] " (ansi/yellow (str sub-id)) " Returning" (count timestamps-with-now) "timestamps for tables:" tables)
+    ;;(log/info "[QUERY-HISTORY] " (ansi/yellow (str sub-id)) " Returning" (count timestamps-with-now) "timestamps for tables:" tables)
     {:tables tables
      :timestamps timestamps-with-now
      :count (count timestamps-with-now)}))

@@ -314,221 +314,232 @@
      ;; Fixed header and controls container
      [:div.fixed-content
       {:style {:flex-shrink 0}}
-     [:div.block-header
-      {:style {:display "flex"
-               :justify-content "space-between"
-               :margin-bottom "10px"
-               :padding-bottom "5px"
-               :border-bottom (str "1px solid " (themes/get-primary-color) "33")
-               :cursor (if @connection-mode "pointer" "move")}
-       :on-mouse-down (fn [e]
-                        (when-not @connection-mode
-                          (start-drag! id e)))
-       :on-click (fn [e]
-                   (when-let [conn @connection-mode]
-                     (.stopPropagation ^js e)
-                     ;; Update the chart block (conn's source-id) to link to this query block (id)
-                     (r/dispatch! [:update-block (:source-id conn) {:source-id id}])
-                     (reset! connection-mode nil)))}
-      [:div {:style {:display "flex" :align-items "center" :gap "10px"}}
-       [:span {:style {:font-weight "bold" 
-                       :color (themes/get-font-color :block-title)
-                       :font-family (themes/get-font-family :monospace)
-                       :text-transform "uppercase"
-                       :font-size "11px"
-                       :letter-spacing "1px"}} "SQL QUERY"]
-       [:span {:style {:color (themes/get-font-color :block-title-secondary)
-                       :font-family (themes/get-font-family :monospace)
-                       :font-size "9px"
-                       :opacity 0.7}} 
-        (str "#" id)]]
-      [:button {:on-click (fn [e]
-                           (.stopPropagation ^js e)
-                           (rq/unsubscribe-block! id)  ;; Clean up subscription
-                           (r/dispatch! [:delete-block id]))
-                :style {:background "none"
-                        :border "none"
-                        :color (themes/get-primary-color)
-                        :cursor "pointer"
-                        :font-size "20px"
-                        :line-height "20px"}}
-       "×"]]
-     ;; Placeholder area with font size controls
-     [:div {:style {:display "flex"
-                    :justify-content "space-between"
-                    :align-items "center"
-                    :margin-bottom "5px"
-                    :min-height "20px"}}
-      ;; Time travel indicator (left side)
-      (when (and executed-sql (not= executed-sql sql))
-        [:div {:style {:display "flex"
-                       :align-items "center"
-                       :gap "5px"
-                       :padding "2px 8px"
-                       :background (str (themes/get-primary-color) "1A")
-                       :border (str "1px solid " (themes/get-primary-color) "33")
-                       :border-radius "2px"
-                       :font-size "10px"
-                       :font-family (themes/get-font-family :monospace)
-                       :color (themes/get-primary-color)
-                       :cursor "pointer"}
-               :on-click (when (and executed-sql (not= executed-sql sql))
-                          (fn [e]
-                            (.stopPropagation e)
-                            ;; Reset to NOW - re-execute query without time travel
-                            (let [current-sql @local-sql]
-                              (rq/execute-block-query! id current-sql nil nil)
-                              ;; Reset time travel slider to NOW position
-                              (tt/reset-time-travel! id current-sql))))}
-         [:span "⏰"]
-         [:span "TIME TRAVEL MODE - Click to return to NOW"]])
-      ;; Font size controls (right side)
+      [:div.block-header
+       {:style {:display "flex"
+                :justify-content "space-between"
+                :margin-bottom "10px"
+                :padding-bottom "5px"
+                :border-bottom (str "1px solid " (themes/get-primary-color) "33")
+                :cursor (if @connection-mode "pointer" "move")}
+        :on-mouse-down (fn [e]
+                         (when-not @connection-mode
+                           (start-drag! id e)))
+        :on-click (fn [e]
+                    (when-let [conn @connection-mode]
+                      (.stopPropagation ^js e)
+                      ;; Update the chart block (conn's source-id) to link to this query block (id)
+                      (r/dispatch! [:update-block (:source-id conn) {:source-id id}])
+                      (reset! connection-mode nil)))}
+       [:div {:style {:display "flex" :align-items "center" :gap "10px"}}
+        [:span {:style {:font-weight "bold"
+                        :color (themes/get-font-color :block-title)
+                        :font-family (themes/get-font-family :monospace)
+                        :text-transform "uppercase"
+                        :font-size "11px"
+                        :letter-spacing "1px"}} "SQL QUERY"]
+        [:span {:style {:color (themes/get-font-color :block-title-secondary)
+                        :font-family (themes/get-font-family :monospace)
+                        :font-size "9px"
+                        :opacity 0.7}}
+         (str "#" id)]]
+       [:button {:on-click (fn [e]
+                             (.stopPropagation ^js e)
+                             (rq/unsubscribe-block! id)  ;; Clean up subscription
+                             (r/dispatch! [:delete-block id]))
+                 :style {:background "none"
+                         :border "none"
+                         :color (themes/get-primary-color)
+                         :cursor "pointer"
+                         :font-size "20px"
+                         :line-height "20px"}}
+        "×"]]
+      ;; Placeholder area with font size controls
       [:div {:style {:display "flex"
+                     :justify-content "space-between"
                      :align-items "center"
-                     :gap "2px"}}
-       [:button {:style {:background "transparent"
+                     :margin-bottom "5px"
+                     :min-height "20px"}}
+       ;; Time travel indicator (left side)
+       (when (and executed-sql (not= executed-sql sql))
+         [:div {:style {:display "flex"
+                        :align-items "center"
+                        :gap "5px"
+                        :padding "2px 8px"
+                        :background (str (themes/get-primary-color) "1A")
                         :border (str "1px solid " (themes/get-primary-color) "33")
-                        :color (themes/get-primary-color)
-                        :padding "0 6px"
-                        :font-size "12px"
-                        :line-height "16px"
                         :border-radius "2px"
-                        :cursor "pointer"}
-                :on-click (fn [e]
-                           (.stopPropagation e)
-                           (let [new-size (max 8 (dec font-size))
-                                 new-ui (assoc @ui-settings :monaco-font-size new-size)]
-                             (swap! ui-settings assoc :monaco-font-size new-size)
-                             (js/localStorage.setItem "rabbit-monaco-font-size" (str new-size))
-                             (r/dispatch! [:update-canvas-ui new-ui])))}
-        "−"]
-       [:span {:style {:padding "0 4px"
-                      :font-size "10px"
-                      :color (themes/get-primary-color)
-                      :font-family (themes/get-font-family :monospace)}}
-        (str font-size "px")]
-       [:button {:style {:background "transparent"
-                        :border (str "1px solid " (themes/get-primary-color) "33")
+                        :font-size "10px"
+                        :font-family (themes/get-font-family :monospace)
                         :color (themes/get-primary-color)
-                        :padding "0 6px"
-                        :font-size "12px"
-                        :line-height "16px"
-                        :border-radius "2px"
                         :cursor "pointer"}
-                :on-click (fn [e]
-                           (.stopPropagation e)
-                           (let [new-size (min 24 (inc font-size))
-                                 new-ui (assoc @ui-settings :monaco-font-size new-size)]
-                             (swap! ui-settings assoc :monaco-font-size new-size)
-                             (js/localStorage.setItem "rabbit-monaco-font-size" (str new-size))
-                             (r/dispatch! [:update-canvas-ui new-ui])))}
-        "+"]]]
-     ;; SQL Editor with Execute button to the right
-     [:div {:style {:margin "10px 0"
-                    :display "flex"
-                    :gap "10px"}}
-      ;; Editor column
-      [:div {:style {:flex 1}}
-       ;; Always render the container to prevent layout shift
-      ;;  [:div {:style {:background (if (and executed-sql (not= executed-sql sql))
-      ;;                               (str (themes/get-primary-color) "1A")
-      ;;                               "transparent")
-      ;;                 :border (if (and executed-sql (not= executed-sql sql))
-      ;;                          (str "1px solid " (themes/get-primary-color) "4C")
-      ;;                          "1px solid transparent")
-      ;;                 :border-radius "4px 4px 0 0"
-      ;;                 :padding "4px 8px"
-      ;;                 :font-size "10px"
-      ;;                 :font-family (themes/get-font-family :monospace)
-      ;;                 :color (themes/get-primary-color)
-      ;;                 :display "flex"
-      ;;                 :align-items "center"
-      ;;                 :gap "5px"
-      ;;                 :cursor (if (and executed-sql (not= executed-sql sql)) "pointer" "default")
-      ;;                 :transition "all 0.2s"
-      ;;                 :min-height "24px"  ;; Ensure consistent height
-      ;;                 :visibility (if (and executed-sql (not= executed-sql sql)) "visible" "hidden")}
-      ;;         :on-mouse-over (when (and executed-sql (not= executed-sql sql))
-      ;;                         #(set! (.. % -target -style -background) (str (themes/get-primary-color) "33")))
-      ;;         :on-mouse-out (when (and executed-sql (not= executed-sql sql))
-      ;;                        #(set! (.. % -target -style -background) (str (themes/get-primary-color) "1A")))
-      ;;         :on-click (when (and executed-sql (not= executed-sql sql))
-      ;;                    (fn [e]
-      ;;                      (.stopPropagation e)
-      ;;                      ;; Reset to NOW - re-execute query without time travel
-      ;;                      (let [current-sql @local-sql]
-      ;;                        (rq/execute-block-query! id current-sql nil nil)
-      ;;                        ;; Reset time travel slider to NOW position
-      ;;                        (tt/reset-time-travel! id current-sql))))}
-      ;;   [:span "⏰"]
-      ;;   [:span "TIME TRAVEL MODE - Click to return to NOW?"]]
-       [:div {:style {:border (if (and executed-sql (not= executed-sql sql))
-                               (str "1px solid " (themes/get-primary-color) "80")
-                               (str "1px solid " (themes/get-primary-color) "4C"))
-                      :border-radius (if (and executed-sql (not= executed-sql sql))
-                                       "0 0 4px 4px"
-                                       "4px")
-                      :overflow "hidden"
-                      :background (when (and executed-sql (not= executed-sql sql))
-                                    (str (themes/get-primary-color) "0D"))}}
-        [monaco/sql-editor 
-         {:value (or executed-sql @local-sql "SELECT * FROM sales")
-          :on-change #(reset! local-sql %)  ;; Only update local state while typing
-          :height "100px"
-          :width "100%"  ;; Explicitly set width
-          :theme "vs-dark"
-          :font-size font-size
-          :editor-key (str "monaco-query-" id "-" (:width actual-size) "-" font-size)  ;; Include font-size in key
-          :options (when executed-sql
-                     {:readOnly false  ;; Keep editable but show visual indicator
-                      :lineDecorationsWidth 10
-                      :minimap {:enabled false}})}]]]
-      ;; Execute button column
-      [:div {:style {:display "flex"
-                     :flex-direction "column"
-                     :justify-content "flex-end"}}
-       [:button
-        {:style {:padding "8px 12px"
-                 :background (str "linear-gradient(90deg, " (themes/get-primary-color) " 0%, " (themes/get-secondary-color) " 100%)")
-                 :color "#0a0a0a"
-                 :border "none"
-                 :border-radius "4px"
-                 :cursor "pointer"
-                 :font-weight "bold"
-                 :text-transform "uppercase"
-                 :font-size "10px"
-                 :letter-spacing "0.5px"
-                 :writing-mode "vertical-rl"
-                 :text-orientation "mixed"
-                 :height "100px"
-                 :width "32px"
-                 :display "flex"
-                 :align-items "center"
-                 :justify-content "center"}
-         :on-click (fn []
-                     ;; Sync local SQL to global state and execute
-                     (let [current-sql @local-sql]
-                       (r/dispatch! [:update-block id {:sql current-sql}])
-                       ;; Use reactive query that auto-updates
-                       (rq/execute-block-query! id (or current-sql "SELECT * FROM sales") nil as-of)))}
-        "EXECUTE"]]]
-     ;; Time scrubber for this query
-     [:div {:style {:margin "10px 0"
-                    :padding "10px"
-                    :background "rgba(0,0,0,0.01)"
-                    :border-radius "4px"}}
-      ;; Time travel controls
-      [tt/time-travel-controls {:block-id id :sql sql}]]
-     (when error
-       [:div {:style {:margin-top "10px"
+                :on-click (when (and executed-sql (not= executed-sql sql))
+                            (fn [e]
+                              (.stopPropagation e)
+                              ;; Reset to NOW - re-execute query without time travel
+                              (let [current-sql @local-sql]
+                                (rq/execute-block-query! id current-sql nil nil)
+                                ;; Reset time travel slider to NOW position
+                                (tt/reset-time-travel! id current-sql))))}
+          [:span "⏰"]
+          [:span "TIME TRAVEL MODE - Click to return to NOW"]])
+       ;; Font size controls (right side)
+       [:div {:style {:display "flex"
+                      :align-items "center"
+                      :gap "2px"}}
+        [:button {:style {:background "transparent"
+                          :border (str "1px solid " (themes/get-primary-color) "33")
+                          :color (themes/get-primary-color)
+                          :padding "0 6px"
+                          :font-size "12px"
+                          :line-height "16px"
+                          :border-radius "2px"
+                          :cursor "pointer"}
+                  :on-click (fn [e]
+                              (.stopPropagation e)
+                              (let [new-size (max 8 (dec font-size))
+                                    new-ui (assoc @ui-settings :monaco-font-size new-size)]
+                                (swap! ui-settings assoc :monaco-font-size new-size)
+                                (js/localStorage.setItem "rabbit-monaco-font-size" (str new-size))
+                                (r/dispatch! [:update-canvas-ui new-ui])))}
+         "−"]
+        [:span {:style {:padding "0 4px"
+                        :font-size "10px"
+                        :color (themes/get-primary-color)
+                        :font-family (themes/get-font-family :monospace)}}
+         (str font-size "px")]
+        [:button {:style {:background "transparent"
+                          :border (str "1px solid " (themes/get-primary-color) "33")
+                          :color (themes/get-primary-color)
+                          :padding "0 6px"
+                          :font-size "12px"
+                          :line-height "16px"
+                          :border-radius "2px"
+                          :cursor "pointer"}
+                  :on-click (fn [e]
+                              (.stopPropagation e)
+                              (let [new-size (min 24 (inc font-size))
+                                    new-ui (assoc @ui-settings :monaco-font-size new-size)]
+                                (swap! ui-settings assoc :monaco-font-size new-size)
+                                (js/localStorage.setItem "rabbit-monaco-font-size" (str new-size))
+                                (r/dispatch! [:update-canvas-ui new-ui])))}
+         "+"]]]
+      ;; SQL Editor with Execute button to the right
+      [:div {:style {:margin "10px 0"
+                     :display "flex"
+                     :gap "10px"}}
+       ;; Editor column
+       [:div {:style {:flex 1}}
+        ;;;Always render the container to prevent layout shift
+        ;;  [:div {:style {:background (if (and executed-sql (not= executed-sql sql))
+        ;;                               (str (themes/get-primary-color) "1A")
+        ;;                               "transparent")
+        ;;                 :border (if (and executed-sql (not= executed-sql sql))
+        ;;                          (str "1px solid " (themes/get-primary-color) "4C")
+        ;;                          "1px solid transparent")
+        ;;                 :border-radius "4px 4px 0 0"
+        ;;                 :padding "4px 8px"
+        ;;                 :font-size "10px"
+        ;;                 :font-family (themes/get-font-family :monospace)
+        ;;                 :color (themes/get-primary-color)
+        ;;                 :display "flex"
+        ;;                 :align-items "center"
+        ;;                 :gap "5px"
+        ;;                 :cursor (if (and executed-sql (not= executed-sql sql)) "pointer" "default")
+        ;;                 :transition "all 0.2s"
+        ;;                 :min-height "24px"  ;; Ensure consistent height
+        ;;                 :visibility (if (and executed-sql (not= executed-sql sql)) "visible" "hidden")}
+        ;;         :on-mouse-over (when (and executed-sql (not= executed-sql sql))
+        ;;                         #(set! (.. % -target -style -background) (str (themes/get-primary-color) "33")))
+        ;;         :on-mouse-out (when (and executed-sql (not= executed-sql sql))
+        ;;                        #(set! (.. % -target -style -background) (str (themes/get-primary-color) "1A")))
+        ;;         :on-click (when (and executed-sql (not= executed-sql sql))
+        ;;                    (fn [e]
+        ;;                      (.stopPropagation e)
+        ;;                      ;; Reset to NOW - re-execute query without time travel
+        ;;                      (let [current-sql @local-sql]
+        ;;                        (rq/execute-block-query! id current-sql nil nil)
+        ;;                        ;; Reset time travel slider to NOW position
+        ;;                        (tt/reset-time-travel! id current-sql))))}
+        ;;   [:span "⏰"]
+        ;;   [:span "TIME TRAVEL MODE - Click to return to NOW?"]]
+        [:div {:style {:border (if (and executed-sql (not= executed-sql sql))
+                                 (str "1px solid " (themes/get-primary-color) "80")
+                                 (str "1px solid " (themes/get-primary-color) "4C"))
+                       :border-radius (if (and executed-sql (not= executed-sql sql))
+                                        "0 0 4px 4px"
+                                        "4px")
+                       ;:margin-top "-15px"
+                       :overflow "hidden"
+                       :background (when (and executed-sql (not= executed-sql sql))
+                                     (str (themes/get-primary-color) "0D"))}}
+         [monaco/sql-editor
+          {:value (or executed-sql @local-sql "SELECT * FROM sales")
+           :on-change #(reset! local-sql %)  ;; Only update local state while typing
+           :height "100px"
+           :width "100%"  ;; Explicitly set width
+           :theme "vs-dark"
+           :font-size font-size
+           :editor-key (str "monaco-query-" id "-" (:width actual-size) "-" font-size)  ;; Include font-size in key
+           :options (when executed-sql
+                      {:readOnly false  ;; Keep editable but show visual indicator
+                       :lineDecorationsWidth 10
+                       :minimap {:enabled false}})}]]]
+       ;; Execute button column
+       [:div {:style {:display "flex"
+                      :flex-direction "column"
+                      :justify-content "flex-end"}}
+        [:button
+         {:style {:padding "8px 12px"
+                  :background (str "linear-gradient(90deg, " (themes/get-primary-color) " 0%, " (themes/get-secondary-color) " 100%)")
+                  :color "#0a0a0a"
+                  :border "none"
+                  :border-radius "4px"
+                  :cursor "pointer"
+                  :font-weight "bold"
+                  :text-transform "uppercase"
+                  :font-size "10px"
+                  :letter-spacing "0.5px"
+                  :writing-mode "vertical-rl"
+                  :text-orientation "mixed"
+                  :height "100px"
+                  :width "32px"
+                  :display "flex"
+                  :align-items "center"
+                  :justify-content "center"}
+          :on-click (fn []
+                      ;; Sync local SQL to global state and execute
+                      (let [current-sql @local-sql]
+                        (r/dispatch! [:update-block id {:sql current-sql}])
+                        ;; Use reactive query that auto-updates
+                        (rq/execute-block-query! id (or current-sql "SELECT * FROM sales") nil as-of)))}
+         "EXECUTE"]]]
+      ;; Time scrubber for this query
+      [:div {:style {:margin "10px 0"
                      :padding "10px"
-                     :background "rgba(255,0,0,0.1)"
-                     :border "1px solid rgba(255,0,0,0.3)"
-                     :border-radius "4px"
-                     :color "#ff6b6b"
-                     :font-family (themes/get-font-family :monospace)
-                     :font-size "11px"}}
-        error])]  ;; Close fixed-content div
+                     :background "rgba(0,0,0,0.01)"
+                     :border-radius "4px"}}
+       ;; Time travel controls
+       [tt/time-travel-controls {:block-id id :sql sql}]
+       (when (> (count results) 1)
+         [:div {:style {:font-size "11px"
+                        :opacity 0.8
+                        ;:margin-left "10px"
+                        :position "absolute"
+                        :right 30
+                        ;:margin-bottom "-20px"
+                        :margin-top "-12px"}}
+          (str (.format (js/Intl.NumberFormat. "en-US") (or (count results) 0)) " rows")])]
+      (when error
+        [:div {:style {:margin-top "10px"
+                       :padding "10px"
+                       :background "rgba(255,0,0,0.1)"
+                       :border "1px solid rgba(255,0,0,0.3)"
+                       :border-radius "4px"
+                       :color "#ff6b6b"
+                       :font-family (themes/get-font-family :monospace)
+                       :font-size "11px"}}
+         error])
+      ]  ;; Close fixed-content div
      (when results
        (let [;; Check if this is a single value result (1 row, 1 column)
              is-single-value? (and (= 1 (count results))
@@ -552,11 +563,13 @@
            [:div.single-value-result
             {:style {:flex 1
                      :display "flex"
+                     ;:height "120%"
                      :align-items "center"
                      :justify-content "center"
-                     :margin-top "10px"
+                     ;:margin-top "10px"
+                     :margin-top "-26px"
                      :background "rgba(0,0,0,0.01)"
-                     :border (str "1px solid " (themes/get-primary-color) "33")
+                     ;:border (str "1px solid " (themes/get-primary-color) "33")
                      :padding "20px"
                      :overflow "hidden"}}
             [:div {:style {:color (themes/get-primary-color)
@@ -575,7 +588,7 @@
            ;; Render as virtual grid for multiple rows/columns
            [:div.results
             {:style {:flex 1
-                     :margin-top "10px"
+                     ;:margin-top "10px"
                      :min-height 0  ;; Important for flex children to shrink properly
                      :display "flex"
                      :flex-direction "column"}}

@@ -474,10 +474,10 @@
                                                     :edit-mode true})))}
             "EDIT"]]
           (when (seq data)
-            [:span {:style {:color (themes/get-chart-color)
+            [:span {:style {:color (themes/get-primary-color) ;(themes/get-chart-color)
                            :font-family fonts ;"'JetBrains Mono', monospace"
-                           :font-size "10px"
-                           :opacity 0.7}}
+                           :font-size "11px"
+                           :opacity 0.8}}
              (str (count data) " rows")])]
          
          ;; Content area - use conditional rendering to avoid duplicate divs

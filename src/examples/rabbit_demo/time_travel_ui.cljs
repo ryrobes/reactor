@@ -243,14 +243,17 @@
           (when (seq timestamps)
             [:div {:ref #(reset! container-ref %)
                    :style {:margin "10px 0"
-                          :padding "10px"
+                           :padding "10px"
                           ;:background "rgba(0,0,0,0.3)"
-                          :border-radius "4px"}}
+                          ;:border-radius "4px"
+                           ;:border "1px solid lime"
+                           }}
        ;; Header with TIME TRAVEL label and link button
        [:div {:style {:display "flex"
                       :align-items "center"
                       :gap "10px"
-                      :margin-bottom "8px"}}
+                      :margin-bottom "3px"
+                      }}
         ;; Link toggle button
         (let [table-name (get @block-tables block-id-str)
               is-linked (get @linked-blocks block-id-str false)
@@ -435,9 +438,9 @@
              ;; Row count area chart overlay
              (when sql
                [:div {:style {:position "absolute"
-                             :width "100%"
-                             :height "100%"
-                             :pointer-events "none"}}
+                              :width "100%"
+                              :height "100%"
+                              :pointer-events "none"}}
                 [rcv/row-count-overlay 
                  {:sql sql
                   :timestamps (filter some? timestamps)  ; Filter out nil (NOW) markers
@@ -499,6 +502,7 @@
                          :-webkit-appearance "none"
                          :appearance "none"
                          :height "20px"
+                        ; :margin-bottom "-10px"
                          :cursor "pointer"
                          :outline "none"}
                  :on-mouse-move (fn [e]
@@ -601,7 +605,8 @@
                             :font-size "10px"
                             :font-family (themes/get-font-family :monospace)}
                     :on-click #(fetch-query-history! block-id sql)}
-            "LOAD HISTORY"])]))})))
+            "LOAD HISTORY"])
+         ]))})))
 
 (defn reset-time-travel!
   "Reset time travel to current time (NOW)"
