@@ -428,54 +428,73 @@
             ;; GET request establishes SSE connection
             :get
             (do
-              (log/info "[REACTIVE-SERVER] SSE connection request from session:" session-id)
-              ;; Only clean up orphaned subscriptions from OTHER sessions that have no active SSE channels
-              ;; Don't clean up subscriptions for THIS session - they were likely just created
-              (let [orphaned-subs (filter (fn [[sub-id sub-info]]
-                                           (let [sub-session (:session-id sub-info)]
-                                             (and (not= sub-session session-id)  ; Don't clean up current session
-                                                  (empty? (get @kafka/sse-channels sub-session)))))
-                                         @kafka/active-subscriptions)]
-                (when (seq orphaned-subs)
-                  (log/info "[REACTIVE-SERVER] Cleaning up" (count orphaned-subs) "orphaned subscriptions from other sessions")
-                  (doseq [[sub-id _] orphaned-subs]
-                    (kafka/unsubscribe-query! sub-id))))
-              
-              ;; Log active subscriptions for this session
-              (let [active-subs (filter (fn [[sub-id sub-info]]
-                                          (= (:session-id sub-info) session-id))
-                                        @kafka/active-subscriptions)]
-                (log/info "[REACTIVE-SERVER] Session" session-id "has" (count active-subs) "active subscriptions"))
-              
-              (http/with-channel req channel
-                ;; Set up SSE headers
-                (http/send! channel {:status 200
-                                   :headers {"Content-Type" "text/event-stream"
-                                           "Cache-Control" "no-cache"
-                                           "Access-Control-Allow-Origin" "*"}} false)
+              (let [;; Get unique client ID from query params (browser tab identifier)
+                    client-id (get-in req [:query-params "client_id"])
+                    connection-id (get-in req [:query-params "connection"])]
                 
-                ;; Register the SSE channel for this session
-                (kafka/register-sse-channel! session-id channel)
-                (log/info "[REACTIVE-SERVER] SSE channel registered for session:" session-id)
+                (log/info "[REACTIVE-SERVER] SSE connection request from session:" session-id
+                         "| Client ID:" client-id
+                         "| Connection ID:" connection-id)
                 
-                ;; Send initial connection message
-                (http/send! channel 
-                          (str "data: " 
-                               (json/generate-string {:type :connected
-                                                     :session-id session-id})
-                               "\n\n")
-                          false)
+                ;; If we have a client ID, close any existing channels for this client
+                ;; This handles browser refresh - the new connection replaces the old one
+                (when client-id
+                  (let [existing-channels (get @kafka/sse-channels session-id #{})]
+                    (doseq [old-channel existing-channels]
+                      ;; Check if this is an old channel from the same client
+                      ;; In a real implementation, you'd track client-id per channel
+                      ;; For now, we'll be conservative and just log
+                      (log/debug "[REACTIVE-SERVER] Existing channel found for session" session-id
+                                "- will be replaced by new connection"))))
                 
-                ;; Clean up on channel close
-                (http/on-close channel
-                             (fn [status]
-                               (log/info "[REACTIVE-SERVER] SSE channel closed for session" session-id "status:" status)
-                               ;; Clean up ALL subscriptions for this session
-                               (doseq [[sub-id sub-info] @kafka/active-subscriptions]
-                                 (when (= (:session-id sub-info) session-id)
-                                   (log/info "[REACTIVE-SERVER] Cleaning up subscription" sub-id "for disconnected session")
-                                   (kafka/unsubscribe-query! sub-id)))
-                               (kafka/unregister-sse-channel! session-id channel)))))
+                ;; Only clean up orphaned subscriptions from OTHER sessions that have no active SSE channels
+                ;; Don't clean up subscriptions for THIS session - they were likely just created
+                (let [orphaned-subs (filter (fn [[sub-id sub-info]]
+                                             (let [sub-session (:session-id sub-info)]
+                                               (and (not= sub-session session-id)  ; Don't clean up current session
+                                                    (empty? (get @kafka/sse-channels sub-session)))))
+                                           @kafka/active-subscriptions)]
+                  (when (seq orphaned-subs)
+                    (log/info "[REACTIVE-SERVER] Cleaning up" (count orphaned-subs) "orphaned subscriptions from other sessions")
+                    (doseq [[sub-id _] orphaned-subs]
+                      (kafka/unsubscribe-query! sub-id))))
+                
+                ;; Log active subscriptions for this session
+                (let [active-subs (filter (fn [[sub-id sub-info]]
+                                            (= (:session-id sub-info) session-id))
+                                          @kafka/active-subscriptions)]
+                  (log/info "[REACTIVE-SERVER] Session" session-id "has" (count active-subs) "active subscriptions"))
+                
+                (http/with-channel req channel
+                  ;; Set up SSE headers
+                  (http/send! channel {:status 200
+                                     :headers {"Content-Type" "text/event-stream"
+                                             "Cache-Control" "no-cache"
+                                             "Access-Control-Allow-Origin" "*"}} false)
+                  
+                  ;; Register the SSE channel for this session
+                  (kafka/register-sse-channel! session-id channel)
+                  (log/info "[REACTIVE-SERVER] SSE channel registered for session:" session-id)
+                  
+                  ;; Send initial connection message
+                  (http/send! channel 
+                            (str "data: " 
+                                 (json/generate-string {:type :connected
+                                                       :session-id session-id
+                                                       :client-id client-id})
+                                 "\n\n")
+                            false)
+                  
+                  ;; Clean up on channel close
+                  (http/on-close channel
+                               (fn [status]
+                                 (log/info "[REACTIVE-SERVER] SSE channel closed for session" session-id "status:" status)
+                                 ;; Clean up ALL subscriptions for this session
+                                 (doseq [[sub-id sub-info] @kafka/active-subscriptions]
+                                   (when (= (:session-id sub-info) session-id)
+                                     (log/info "[REACTIVE-SERVER] Cleaning up subscription" sub-id "for disconnected session")
+                                     (kafka/unsubscribe-query! sub-id)))
+                                 (kafka/unregister-sse-channel! session-id channel))))))
             
             ;; POST request registers a SQL subscription
             :post
@@ -511,13 +530,18 @@
           
           ;; Unsubscribe endpoint
           "/api/unsubscribe-sql"
-          (let [body (json/parse-string (slurp (:body req)) true)
-                sub-id (:subscription-id body)]
-            (kafka/unsubscribe-query! sub-id)
-            {:status 200
+          (if-let [body-stream (:body req)]
+            (let [body (json/parse-string (slurp body-stream) true)
+                  sub-id (:subscription-id body)]
+              (kafka/unsubscribe-query! sub-id)
+              {:status 200
+               :headers {"Content-Type" "application/json"
+                        "Access-Control-Allow-Origin" "*"}
+               :body (json/generate-string {:success true})})
+            {:status 400
              :headers {"Content-Type" "application/json"
                       "Access-Control-Allow-Origin" "*"}
-             :body (json/generate-string {:success true})})
+             :body (json/generate-string {:error "Request body required"})})
           
           ;; List active subscriptions (for debugging)
           "/api/subscriptions"
@@ -593,8 +617,9 @@
           
           ;; Query history endpoint for time travel
           "/api/query-history"
-          (let [body (json/parse-string (slurp (:body req)) true)
-                original-sql (:sql body)
+          (if-let [body-stream (:body req)]
+            (let [body (json/parse-string (slurp body-stream) true)
+                  original-sql (:sql body)
                 limit (or (:limit body) 20)
                 ;_ (ut/pp [:get-history body])
                 node @session/default-node
@@ -652,6 +677,11 @@
                :headers {"Content-Type" "application/json"
                         "Access-Control-Allow-Origin" "*"}
                :body (json/generate-string {:error "No XTDB node available"})}))
+            ;; No body provided
+            {:status 400
+             :headers {"Content-Type" "application/json"
+                      "Access-Control-Allow-Origin" "*"}
+             :body (json/generate-string {:error "Request body required"})})
           
           ;; Debug endpoint to inspect block SQL cache
           "/api/debug/block-cache"
@@ -674,10 +704,11 @@
           
           ;; SQL Transform endpoint for creating derived queries
           "/api/sql-transform"
-          (let [body (json/parse-string (slurp (:body req)) true)
-                transform-type (keyword (:type body))
-                source-sql (:source_sql body)
-                source-block-id (:source_block_id body)
+          (if-let [body-stream (:body req)]
+            (let [body (json/parse-string (slurp body-stream) true)
+                  transform-type (keyword (:type body))
+                  source-sql (:source_sql body)
+                  source-block-id (:source_block_id body)
                 column-name (:column_name body)
                 cell-value (:cell_value body)
                 column-type (when (:column_type body) (keyword (:column_type body)))]
@@ -700,6 +731,11 @@
                :headers {"Content-Type" "application/json"
                         "Access-Control-Allow-Origin" "*"}
                :body (json/generate-string {:error "Failed to transform SQL"})}))
+            ;; No body provided for sql-transform
+            {:status 400
+             :headers {"Content-Type" "application/json"
+                      "Access-Control-Allow-Origin" "*"}
+             :body (json/generate-string {:error "Request body required"})})
           
           ;; Test endpoint to manually create subscription
           "/api/test-subscription"
@@ -764,8 +800,9 @@
           (case method
             :post
             ;; Save a snapshot
-            (let [body (json/parse-string (slurp (:body req)) true)
-                  node @session/default-node]
+            (if-let [body-stream (:body req)]
+              (let [body (json/parse-string (slurp body-stream) true)
+                    node @session/default-node]
               (if node
                 (try
                   (let [snapshot-id (or (:snapshot_id body) 
@@ -797,6 +834,11 @@
                  :headers {"Content-Type" "application/json"
                           "Access-Control-Allow-Origin" "*"}
                  :body (json/generate-string {:error "No XTDB node available"})}))
+              ;; No body provided for snapshot POST
+              {:status 400
+               :headers {"Content-Type" "application/json"
+                        "Access-Control-Allow-Origin" "*"}
+               :body (json/generate-string {:error "Request body required"})})
             
             :get
             ;; Load a snapshot  
@@ -966,7 +1008,7 @@
                       "Access-Control-Allow-Origin" "*"}
              :body (json/generate-string {:error "Method not allowed"})})
           
-          ;; Fall back to base handler
+          ;; Default case - fall back to base handler for unmatched paths
           (base-handler req)))))))))
 
 (defn start-reactive!

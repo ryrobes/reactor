@@ -5,7 +5,7 @@
             ;[jackdaw.client.log :as jcl]
             ;[taoensso.nippy :as nippy]
             [io.aviso.ansi :as ansi]
-            [cheshire.core]
+            [cheshire.core :as json]
             ;[reactor.xtdb-store :as xts]
             [reactor.meta-tracking :as meta]
             [reactor.session_simple :as session]
@@ -22,6 +22,9 @@
             [clojure.core.async :as async :refer [go go-loop chan <! >! close! timeout]]
             ;[reactor.reactive.coordinator :as coordinator]
             ))
+
+;; Forward declarations for functions referenced before definition
+(declare unregister-sse-channel! unsubscribe-query!)
 
 ;; ============================================================================
 ;; Configuration
@@ -62,6 +65,16 @@
 (defonce sse-channels
   ;; Map of session-id -> #{channel}
   (atom {}))
+
+;; Track channel health: channel -> {:last-heartbeat timestamp, :session-id session-id}
+(defonce channel-health (atom {}))
+
+;; Heartbeat configuration
+(def heartbeat-interval-ms 30000)  ; Send heartbeat every 30 seconds
+(def heartbeat-timeout-ms 60000)   ; Consider channel dead after 60 seconds
+
+;; Heartbeat executor
+(defonce heartbeat-executor (atom nil))
 
 (defonce subscription-dependencies
   ;; Map of parent-block-id -> #{subscription-ids that depend on it}
@@ -665,6 +678,99 @@
   (log/info "Kafka consumer stopped"))
 
 ;; ============================================================================
+;; SSE Channel Heartbeat System
+;; ============================================================================
+
+(declare start-heartbeat!)
+
+(defn send-heartbeat!
+  "Send heartbeat to a specific channel"
+  [channel]
+  (try
+    ;; Send SSE heartbeat message
+    (org.httpkit.server/send! channel 
+                              (str "data: " 
+                                   (json/generate-string {:type :heartbeat
+                                                         :timestamp (System/currentTimeMillis)})
+                                   "\n\n")
+                              false)
+    ;; Update last heartbeat time on success
+    (swap! channel-health update channel 
+           assoc :last-heartbeat (System/currentTimeMillis))
+    true
+    (catch Exception e
+      ;; Channel is likely dead
+      (log/debug "[HEARTBEAT] Failed to send heartbeat to channel:" (.getMessage e))
+      false)))
+
+(defn cleanup-dead-channels!
+  "Remove channels that haven't responded to heartbeats"
+  []
+  (let [now (System/currentTimeMillis)
+        dead-channels (atom [])]
+    ;; Find dead channels
+    (doseq [[channel health-info] @channel-health]
+      (let [last-heartbeat (:last-heartbeat health-info)
+            time-since-heartbeat (- now last-heartbeat)]
+        (when (> time-since-heartbeat heartbeat-timeout-ms)
+          (swap! dead-channels conj [channel (:session-id health-info)]))))
+    
+    ;; Clean up dead channels
+    (doseq [[channel session-id] @dead-channels]
+      (log/info "[HEARTBEAT] Removing dead channel for session:" session-id 
+               "| Last seen:" (- now (:last-heartbeat (get @channel-health channel))) "ms ago")
+      (unregister-sse-channel! session-id channel)
+      ;; Also clean up subscriptions for dead session if no more channels
+      (when (empty? (get @sse-channels session-id))
+        (log/info "[HEARTBEAT] No more channels for session" session-id ", cleaning up subscriptions")
+        (doseq [[sub-id sub-info] @active-subscriptions]
+          (when (= (:session-id sub-info) session-id)
+            (log/debug "[HEARTBEAT] Cleaning up subscription" sub-id "for dead session")
+            (unsubscribe-query! sub-id)))))))
+
+(defn heartbeat-loop!
+  "Main heartbeat loop that sends heartbeats and cleans up dead channels"
+  []
+  (try
+    ;; Send heartbeats to all channels
+    (let [all-channels (reduce into #{} (vals @sse-channels))]
+      (log/debug "[HEARTBEAT] Sending heartbeats to" (count all-channels) "channels")
+      (doseq [channel all-channels]
+        (when-not (send-heartbeat! channel)
+          ;; Mark as potentially dead if heartbeat fails
+          (when-let [health-info (get @channel-health channel)]
+            (log/debug "[HEARTBEAT] Channel appears dead for session:" (:session-id health-info))))))
+    
+    ;; Clean up channels that haven't had successful heartbeats
+    (cleanup-dead-channels!)
+    
+    (catch Exception e
+      (log/error e "[HEARTBEAT] Error in heartbeat loop"))))
+
+(defn start-heartbeat!
+  "Start the heartbeat executor if not already running"
+  []
+  (when-not @heartbeat-executor
+    (log/info "[HEARTBEAT] Starting SSE channel heartbeat system"
+             "| Interval:" heartbeat-interval-ms "ms"
+             "| Timeout:" heartbeat-timeout-ms "ms")
+    (let [executor (java.util.concurrent.Executors/newScheduledThreadPool 1)]
+      (reset! heartbeat-executor executor)
+      (.scheduleAtFixedRate executor
+                           heartbeat-loop!
+                           heartbeat-interval-ms  ; initial delay
+                           heartbeat-interval-ms  ; period
+                           java.util.concurrent.TimeUnit/MILLISECONDS))))
+
+(defn stop-heartbeat!
+  "Stop the heartbeat executor"
+  []
+  (when-let [executor @heartbeat-executor]
+    (log/info "[HEARTBEAT] Stopping SSE channel heartbeat system")
+    (.shutdown executor)
+    (reset! heartbeat-executor nil)))
+
+;; ============================================================================
 ;; SSE Integration
 ;; ============================================================================
 
@@ -673,7 +779,13 @@
   "Register an SSE channel for a session."
   [session-id channel]
   (swap! sse-channels update session-id (fnil conj #{}) channel)
-  (log/debug "Registered SSE channel for session" session-id))
+  ;; Track channel health
+  (swap! channel-health assoc channel 
+         {:last-heartbeat (System/currentTimeMillis)
+          :session-id session-id})
+  (log/debug "Registered SSE channel for session" session-id)
+  ;; Start heartbeat if not running
+  (start-heartbeat!))
 
 (defn unregister-sse-channel!
   "Unregister an SSE channel."
@@ -682,6 +794,8 @@
   ;; Clean up empty sets
   (when (empty? (get @sse-channels session-id))
     (swap! sse-channels dissoc session-id))
+  ;; Remove from health tracking
+  (swap! channel-health dissoc channel)
   (log/debug "Unregistered SSE channel for session" session-id))
 
 (defn push-to-session
@@ -706,13 +820,14 @@
                        "\n  First update:" (when-let [first-update (first (get-in realized-data [:diff :updated]))]
                                           (str "\n    ID:" (:id first-update)
                                                "\n    Field changes keys:" (keys (:field-changes first-update))))))
-          message (str "data: " (cheshire.core/generate-string realized-data) "\n\n")]
+          message (str "data: " (json/generate-string realized-data) "\n\n")]
       (log/info "[KAFKA-REACTIVE] Sending update to" (count channels) "channel(s) for session" session-id)
       (log/info "[KAFKA-REACTIVE] Update type:" (:type data) "subscription-id:" (:subscription-id data))
       (doseq [channel channels]
         (try
           (http-server/send! channel message false)
-          (log/info "[KAFKA-REACTIVE] Successfully pushed update to channel for session" session-id)
+          (log/info "[KAFKA-REACTIVE] Successfully pushed update to channel for session" 
+                    session-id (str channel))
           (catch Exception e
             (log/error e "[KAFKA-REACTIVE] Error sending to SSE channel - channel might be closed")
             ;; Clean up dead channel
@@ -802,9 +917,11 @@
   "Shutdown the reactive system."
   []
   (stop-consumer!)
+  (stop-heartbeat!)
   (reset! active-subscriptions {})
   (reset! table-to-subs {})
-  (reset! sse-channels {}))
+  (reset! sse-channels {})
+  (reset! channel-health {}))
 
 ;; ============================================================================
 ;; Example Usage

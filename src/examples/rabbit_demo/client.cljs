@@ -109,12 +109,13 @@
       (swap! local-positions assoc block-id {:x x :y y})
       
       ;; Debounce the server update (increased to 300ms since we guarantee final update)
-      (when @pending-update
-        (js/clearTimeout @pending-update))
-      (reset! pending-update
-              (js/setTimeout
-               #(r/dispatch! [:move-block block-id {:x x :y y}])
-               300)))))
+      ;; (when @pending-update
+      ;;   (js/clearTimeout @pending-update))
+      ;; (reset! pending-update
+      ;;         (js/setTimeout
+      ;;          #(r/dispatch! [:move-block block-id {:x x :y y}])
+      ;;          300))
+      )))
 
 (defn stop-drag! []
   ;; Cancel any pending update FIRST to prevent race conditions
@@ -158,12 +159,13 @@
       (swap! local-sizes assoc block-id {:width new-width :height new-height})
       
       ;; Debounce the server update (increased to 300ms since we guarantee final update)
-      (when @pending-update
-        (js/clearTimeout @pending-update))
-      (reset! pending-update
-              (js/setTimeout
-               #(r/dispatch! [:resize-block block-id {:width new-width :height new-height}])
-               300)))))
+      ;; (when @pending-update
+      ;;   (js/clearTimeout @pending-update))
+      ;; (reset! pending-update
+      ;;         (js/setTimeout
+      ;;          #(r/dispatch! [:resize-block block-id {:width new-width :height new-height}])
+      ;;          1300))
+      )))
 
 (defn stop-resize! []
   ;; Cancel any pending update FIRST to prevent race conditions
