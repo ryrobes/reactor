@@ -54,16 +54,17 @@
 
 (defn get-query-history-range
   "Get the available time range for a SQL query based on its tables and WHERE clause"
-  [node sql limit]
-  (log/info "[QUERY-HISTORY] Getting history for " (ansi/yellow (str node)) " SQL:" 
-           (if (> (count sql) 200)
-             (str (subs sql 0 200) "...")
-             sql))
+  [node sql limit sub-id]
+  (log/info "[QUERY-HISTORY] " (ansi/yellow (str sub-id)) " Getting history for SQL:"
+            ;;  (if (> (count sql) 200)
+            ;;    (str (subs sql 0 200) "...")
+            ;;    sql) 
+            (ansi/yellow (cstr/replace (str sql) #"[\r\n]+" " ")))
   (let [tables (get-tables-from-sql sql)
-        _ (log/info "[QUERY-HISTORY] Tables extracted:" tables)
+        _ (log/info "[QUERY-HISTORY] " (ansi/yellow (str sub-id)) " Tables extracted:" tables)
         ;; Extract WHERE clause from the original SQL to filter timestamps
         where-clause (parser/extract-where-clause sql)
-        #_ (when where-clause
+        #_(when where-clause
             (log/info "[TIME-TRAVEL] Using WHERE clause for timestamp filtering:" where-clause))
         ;; Get more timestamps from each table to ensure we capture recent changes
         ;; Request 2x the limit from each table to handle multiple tables
@@ -74,10 +75,10 @@
                          (mapcat #(get-table-history-timestamps node % per-table-limit) tables))
         ;; Clean timestamps - remove [UTC] suffix but keep the Z
         clean-timestamps (->> all-timestamps
-                              (map (fn [ts] 
-                                    (when ts
-                                      (-> ts
-                                          (clojure.string/replace #"\[.*\]$" "")))))  ; Only remove [UTC], keep the Z
+                              (map (fn [ts]
+                                     (when ts
+                                       (-> ts
+                                           (clojure.string/replace #"\[.*\]$" "")))))  ; Only remove [UTC], keep the Z
                               (filter some?)  ; Remove nils
                               distinct
                               sort)  ; Sort chronologically (oldest first)
@@ -91,7 +92,7 @@
         final-timestamps (take (dec limit) interpolated-timestamps)
         ;; Ensure chronological order (oldest to newest) with NOW (nil) at the end
         timestamps-with-now (vec (concat final-timestamps [nil]))]
-    (log/info "[QUERY-HISTORY] Returning" (count timestamps-with-now) "timestamps for tables:" tables)
+    (log/info "[QUERY-HISTORY] " (ansi/yellow (str sub-id)) " Returning" (count timestamps-with-now) "timestamps for tables:" tables)
     {:tables tables
      :timestamps timestamps-with-now
      :count (count timestamps-with-now)}))

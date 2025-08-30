@@ -9,6 +9,7 @@
             [reactor.kafka-reactive :as kafka]
             [reactor.xtdb-store :as xts]
             [reactor.meta-tracking :as meta]
+            [reactor.temporal-cache :as cache]
             ;[reactor.time-travel-sql :as time-travel]
             [reactor.subscriptions.store :as sub-store]
             [reactor.subscriptions.differ :as differ]
@@ -262,8 +263,21 @@
 (defn execute-query
   "Execute the SQL query against the database"
   [ctx]
-  (if (:error ctx)
+  (cond
+    ;; Skip if there's an error
+    (:error ctx)
     ctx
+    
+    ;; Skip if results were cached
+    (:skip-remaining-stages? ctx)
+    (do
+      (log/debug "[PIPELINE] Skipping DB execution - using cached results")
+      (assoc ctx
+             :result {:results (:results ctx)}
+             :execution-time 0))  ; No DB time for cached results
+    
+    ;; Normal execution
+    :else
     (try
       (let [node @session/default-node
             sql (:resolved-sql ctx)
@@ -290,6 +304,7 @@
         
         (assoc ctx
                :result result
+               :results (:results result)  ; Extract results for caching
                :execution-time execution-time))
       (catch Exception e
         (log/error "Query execution failed:" e)
@@ -484,10 +499,12 @@
       resolve-templates
       add-temporal-clause
       extract-metadata
+      cache/check-temporal-cache     ; NEW: Check cache for temporal queries
       generate-subscription-id
       load-or-create-subscription   ; NEW: Manage subscription lifecycle
       register-subscription         ; Register with Kafka (if needed)
       execute-query
+      cache/cache-temporal-results   ; NEW: Cache results if temporal
       calculate-diff                ; NEW: Calculate diff for subscriptions
       update-subscription-state     ; NEW: Update subscription state
       trigger-reactive-updates      ; For mutations
@@ -516,6 +533,7 @@
        :subscription-id (:subscription-id result)
        :results (get-in result [:result :results] [])
        :diff (:diff result)  ; Include diff if available
+       :from-cache? (:from-cache? result)  ; Include cache hit flag
        :execution-time (:execution-time result)
        :has-templates? (:has-templates? result)
        :dependencies (:dependencies result)

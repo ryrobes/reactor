@@ -207,6 +207,7 @@
         sub-info {:query sql
                   :params params
                   :tables tables
+                  :sub-id sub-id
                   :callback callback
                   :session-id session-id
                   :client-id client-id

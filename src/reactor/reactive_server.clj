@@ -516,7 +516,7 @@
                                 "\n  Resolved:" (if (> (count resolved-sql) 100)
                                                   (str (subs resolved-sql 0 100) "...")
                                                   resolved-sql)))
-                    result (time-travel/get-query-history-range node resolved-sql limit)]
+                    result (time-travel/get-query-history-range node resolved-sql limit (get body :sub-id))]
                 {:status 200
                  :headers {"Content-Type" "application/json"
                           "Access-Control-Allow-Origin" "*"}
@@ -586,6 +586,51 @@
                         "Access-Control-Allow-Origin" "*"}
                :body (json/generate-string {:test-id test-id
                                            :active-count (count @kafka/active-subscriptions)})}))
+          
+          ;; Test endpoint for temporal cache
+          "/api/test-temporal-cache"
+          (let [body (json/parse-string (slurp (:body req)) true)
+                sql (or (:sql body) "SELECT * FROM sales LIMIT 5")
+                as-of (or (:as-of body) "2024-01-01T00:00:00Z")
+                enable-cache (:enable-cache body true)]
+            (log/info "[TEMPORAL-CACHE-TEST] Testing cache with" 
+                     "\n  SQL:" sql
+                     "\n  Timestamp:" as-of
+                     "\n  Cache enabled:" enable-cache)
+            
+            ;; Set cache state
+            (require '[reactor.temporal-cache :as cache])
+            ((resolve 'reactor.temporal-cache/set-cache-enabled!) enable-cache)
+            
+            ;; Execute query twice to test cache hit
+            (let [result1 (pipeline/execute-sql
+                          {:sql sql
+                           :as-of as-of
+                           :session-id session-id})
+                  from-cache1? (:from-cache? result1)
+                  
+                  result2 (pipeline/execute-sql
+                          {:sql sql
+                           :as-of as-of
+                           :session-id session-id})
+                  from-cache2? (:from-cache? result2)
+                  
+                  ;; Get cache stats
+                  cache-stats ((resolve 'reactor.temporal-cache/cache-stats))]
+              
+              (log/info "[TEMPORAL-CACHE-TEST] Results:"
+                       "\n  First query from cache:" from-cache1?
+                       "\n  Second query from cache:" from-cache2?
+                       "\n  Cache stats:" cache-stats)
+              
+              {:status 200
+               :headers {"Content-Type" "application/json"
+                        "Access-Control-Allow-Origin" "*"}
+               :body (json/generate-string 
+                      {:first-from-cache from-cache1?
+                       :second-from-cache from-cache2?
+                       :cache-stats cache-stats
+                       :results-match (= (:results result1) (:results result2))})}))
           
           ;; Snapshot endpoints for saving/loading app-db states
           "/api/snapshot"
