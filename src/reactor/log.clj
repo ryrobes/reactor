@@ -12,7 +12,7 @@
 
 (def ^:dynamic *enable-colors* true)
 (def ^:dynamic *enable-sql-logging* true)
-(def ^:dynamic *log-level* :warn)  ; Changed from :info to reduce logging
+(def ^:dynamic *log-level* :info)  ; Set to :info to see diff messages
 
 (def log-levels {:trace 0 :debug 1 :info 2 :warn 3 :error 4 :fatal 5})
 

@@ -9,7 +9,6 @@
             ;[reactor.xtdb-store :as xts]
             [reactor.meta-tracking :as meta]
             [reactor.session_simple :as session]
-            [reactor.structural-diff :as sdiff]
             ;[reactor.temporal-cache :as tcache]
             ;[reactor.sql-template :as sql-template]
             ;[reactor.sql-template-temporal :as template-temporal]
@@ -295,66 +294,6 @@
 ;; {[session-id subscription-id] -> {:results [...] :structure {...} :checksum ... :timestamp ...}}
 (defonce client-result-cache (atom {}))
 
-;; Configuration for diff mode
-(defonce diff-config 
-  (atom {:enabled true
-         :field-based? true  ; Enable field-level diffing (renamed for consistency)
-         :structural-diff? true   ; Enable deep structural diffing for EDN fields
-         :edn-fields #{:state :app_state :app-state "app_state"}  ; Fields known to contain EDN strings (multiple formats)
-         :max-result-size 1000  ; Don't diff if more than N rows
-         :min-compression-ratio 0.7  ; Send full if diff > 70% of original
-         :structure-check true  ; Verify structure before diffing
-         :debug-logging true    ; Enable detailed debug logging
-         :temporal-always-diff true  ; Always try to diff temporal queries (they're great candidates!)
-         :temporal-max-size 5000}))  ; Higher limit for temporal queries
-
-;; ============================================================================
-;; Diff Configuration Management
-;; ============================================================================
-
-(defn set-diff-mode!
-  "Configure diff mode - :none, :row, :field, or :structural"
-  [mode]
-  (case mode
-    :none (swap! diff-config assoc 
-                :enabled false
-                :field-based? false
-                :structural-diff? false)
-    :row (swap! diff-config assoc
-               :enabled true
-               :field-based? false
-               :structural-diff? false)
-    :field (swap! diff-config assoc
-                 :enabled true
-                 :field-based? true
-                 :structural-diff? false)
-    :structural (swap! diff-config assoc
-                      :enabled true
-                      :field-based? true
-                      :structural-diff? true)
-    (log/warn "[DIFF-CONFIG] Unknown diff mode:" mode))
-  (log/info "[DIFF-CONFIG] Diff mode set to:" mode 
-           "\n  Current config:" @diff-config)
-  mode)
-
-(defn get-diff-stats
-  "Get statistics about diff performance"
-  []
-  (let [cache-entries @client-result-cache
-        total-entries (count cache-entries)
-        with-diffs (filter #(contains? (val %) :last-diff-type) cache-entries)
-        field-diffs (filter #(= :field-diff (:last-diff-type (val %))) cache-entries)
-        row-diffs (filter #(= :row-diff (:last-diff-type (val %))) cache-entries)]
-    {:total-cached total-entries
-     :with-diffs (count with-diffs)
-     :field-diffs (count field-diffs)
-     :row-diffs (count row-diffs)
-     :current-mode (cond
-                    (not (:enabled @diff-config)) :none
-                    (:structural-diff? @diff-config) :structural
-                    (:field-based? @diff-config) :field
-                    :else :row)}))
-
 (defn normalize-temporal-query
   "Extract base query and timestamp from temporal queries for better caching"
   [query]
@@ -393,172 +332,7 @@
            (= (:fields old-structure) (:fields new-structure))
            (= (:field-count old-structure) (:field-count new-structure)))))
 
-(defn compute-field-diff
-  "Compute field-level differences between two rows"
-  [old-row new-row & {:keys [structural-diff? edn-fields]
-                      :or {structural-diff? true
-                           edn-fields #{}}}]
-  (let [result (if structural-diff?
-                 ;; Use enhanced structural diffing
-                 (sdiff/compute-enhanced-field-diff old-row new-row 
-                                                    :deep-diff? true
-                                                    :edn-fields edn-fields)
-                 ;; Use basic field diffing
-                 (let [all-keys (set/union (set (keys old-row)) (set (keys new-row)))
-                       changed-fields (reduce (fn [acc k]
-                                               (let [old-val (get old-row k ::not-found)
-                                                     new-val (get new-row k ::not-found)]
-                                                 (cond
-                                                   ;; Field added
-                                                   (= old-val ::not-found)
-                                                   (assoc acc k {:op :add :value new-val})
-                                                   
-                                                   ;; Field removed
-                                                   (= new-val ::not-found) 
-                                                   (assoc acc k {:op :remove})
-                                                   
-                                                   ;; Field changed
-                                                   (not= old-val new-val)
-                                                   (assoc acc k {:op :update :value new-val})
-                                                   
-                                                   ;; Field unchanged - don't include
-                                                   :else acc)))
-                                             {}
-                                             all-keys)]
-                   (when (seq changed-fields)
-                     changed-fields)))]
-    ;; Debug logging for field diffing
-    (when (and result (:debug-logging @diff-config))
-      (let [field-breakdown (reduce (fn [acc [k v]]
-                                      (update acc (:op v) (fnil inc 0)))
-                                    {}
-                                    result)
-            structural-fields (filter #(= :structural-update (:op (get result %))) 
-                                     (keys result))
-            edn-detected (filter #(and (contains? edn-fields %)
-                                       (contains? result %))
-                                 (keys result))]
-        (log/info "[FIELD-DIFF] Row changes detected:"
-                  "\n  Changed fields:" (keys result)
-                  "\n  Breakdown:" field-breakdown
-                  (when (seq structural-fields)
-                    (str "\n  Structural diffs on: " structural-fields))
-                  (when (seq edn-detected)
-                    (str "\n  EDN fields detected: " edn-detected))
-                  (when structural-diff?
-                    "\n  Structural diffing: ENABLED")
-                  (when (seq edn-fields)
-                    (str "\n  Configured EDN fields: " edn-fields)))))
-    result))
 
-(defn compute-row-diff
-  "Compute diff between old and new SQL results
-   Returns nil if diff is not efficient"
-  [old-results new-results & {:keys [field-based? query] :or {field-based? true}}]
-  (try
-    (let [;; Find the ID column - prefer _id, id, or first column
-          id-key (or (some #{:_id :id "_id" "id"} (keys (first new-results)))
-                     (first (keys (first new-results))))
-          ;; Index by ID
-          old-by-id (if id-key
-                      (into {} (map (juxt id-key identity) old-results))
-                      {})
-          new-by-id (if id-key
-                      (into {} (map (juxt id-key identity) new-results))
-                      {})
-          old-ids (set (keys old-by-id))
-          new-ids (set (keys new-by-id))
-          ;; Compute changes
-          added-ids (set/difference new-ids old-ids)
-          removed-ids (set/difference old-ids new-ids)
-          updated-ids (for [id (set/intersection old-ids new-ids)
-                           :let [old-row (old-by-id id)
-                                 new-row (new-by-id id)]
-                           :when (not= old-row new-row)]
-                       id)
-          ;; Build diff - use field-based diffing for updates if enabled
-          updated-entries (if field-based?
-                           (let [entries (for [id updated-ids
-                                              :let [old-row (old-by-id id)
-                                                    new-row (new-by-id id)
-                                                    field-changes (compute-field-diff old-row new-row 
-                                                                                     :structural-diff? (:structural-diff? @diff-config true)
-                                                                                     :edn-fields (:edn-fields @diff-config #{}))]
-                                              :when field-changes]
-                                          {:id id 
-                                           :field-changes field-changes})]
-                             ;; Log field-based metrics
-                             (when (and (:debug-logging @diff-config) (seq entries))
-                               (let [total-fields-changed (reduce + 0 (map #(count (:field-changes %)) entries))
-                                     avg-fields (if (pos? (count entries))
-                                                 (/ total-fields-changed (count entries))
-                                                 0)]
-                                 (log/debug "[FIELD-METRICS] Updated" (count entries) "rows"
-                                           "| Total fields changed:" total-fields-changed
-                                           "| Avg fields/row:" (format "%.1f" (double avg-fields)))))
-                             entries)
-                           ;; Fall back to full row updates
-                           (for [id updated-ids]
-                             {:id id 
-                              :new-values (new-by-id id)}))
-          diff {:type (if field-based? :field-diff :row-diff)
-                :id-key id-key
-                :added (map new-by-id added-ids)
-                :removed removed-ids
-                :updated updated-entries
-                ;; Include order only if it changed
-                :order (let [old-order (mapv id-key old-results)
-                            new-order (mapv id-key new-results)]
-                        (when (not= old-order new-order)
-                          new-order))}
-          ;; Calculate efficiency for field-based diff
-          field-change-count (if field-based?
-                               (reduce + 0 (map #(count (:field-changes %)) updated-entries))
-                               (count updated-ids))
-          total-field-count (if field-based?
-                             (* (count new-results) 
-                                (if (seq new-results)
-                                  (count (keys (first new-results)))
-                                  0))
-                             (count new-results))
-          diff-size (+ (count added-ids)
-                      (count removed-ids)
-                      field-change-count)
-          total-size total-field-count
-          has-changes? (pos? diff-size)
-          compression-ratio (if (zero? total-size)
-                             1.0  ; Empty result set - use full update
-                             (/ diff-size total-size))]
-      
-      (log/info (ansi/bold-blue "[DIFF-ANALYSIS] ") (str/replace query #"[\r\n]+" "") "\n" 
-               "\n  Mode:" (if field-based? "FIELD-BASED" "ROW-BASED")
-               "\n  Added rows:" (count added-ids) 
-               "\n  Removed rows:" (count removed-ids)
-               "\n  Updated rows:" (count updated-ids)
-               (when field-based? 
-                 (str "\n  Total field changes: " field-change-count
-                      " across " (count updated-ids) " rows"
-                      " (avg " (if (pos? (count updated-ids))
-                                 (format "%.1f" (/ (double field-change-count) (double (count updated-ids))))
-                                 "0")
-                      " fields/row)"))
-               "\n  Original size:" total-size (if field-based? "fields" "rows")
-               "\n  Diff size:" diff-size
-               "\n  Compression ratio:" (format "%.2f" (double compression-ratio))
-               " (" (format "%.0f%%" (* (double compression-ratio) 100)) " of original)"
-               "\n  Will send:" (if (and has-changes?
-                                       (< compression-ratio (:min-compression-ratio @diff-config)))
-                                 "DIFF" 
-                                 "FULL UPDATE"))
-      
-      ;; Return diff only if it's efficient AND there are actual changes
-      ;; Don't send empty diffs (compression 0)
-      (when (and has-changes?
-                (< compression-ratio (:min-compression-ratio @diff-config)))
-        (assoc diff :compression-ratio compression-ratio)))
-    (catch Exception e
-      (log/warn "Failed to compute diff:" e)
-      nil)))
 
 (defn cleanup-metrics-cache!
   "Remove old entries from metrics cache (older than 1 hour)"
@@ -839,6 +613,15 @@
                                            (let [affected-subs (find-affected-subscriptions [table])]
                                              (when (seq affected-subs)
                                                (meta/track-reaction! table "mutation" affected-subs)))))
+                                       
+                                       ;; Invalidate query-history cache for affected tables
+                                       (try
+                                         (require '[reactor.reactive-server :as reactive-server])
+                                         (when-let [invalidate-fn (ns-resolve 'reactor.reactive-server 'on-tables-changed!)]
+                                           (invalidate-fn filtered-tables))
+                                         (catch Exception e
+                                           ;; Silently ignore if reactive-server not loaded
+                                           nil))
                                        
                                        ;; Handle keypath subscriptions for todo_sessions
                                        (doseq [table filtered-tables]

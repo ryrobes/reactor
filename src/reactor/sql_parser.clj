@@ -1,5 +1,6 @@
 (ns reactor.sql-parser
   "SQL parsing and manipulation using JSqlParser"
+  (:require [clojure.string :as cstr])
   (:import [net.sf.jsqlparser.parser CCJSqlParserUtil]
            [net.sf.jsqlparser.statement.select Select PlainSelect]
            [net.sf.jsqlparser.expression.operators.relational EqualsTo]
@@ -28,19 +29,20 @@
     ;; For XTDB 2.0, we need to inject FOR SYSTEM_TIME AS OF after the table name
     ;; XTDB expects ISO-8601 format with Z suffix
     (let [clean-timestamp (if (string? as-of-timestamp)
-                           (let [no-bracket (clojure.string/replace as-of-timestamp #"\[.*\]$" "")]
-                             ;; Ensure it ends with Z
-                             (if (clojure.string/ends-with? no-bracket "Z")
-                               no-bracket
-                               (str no-bracket "Z")))
-                           as-of-timestamp)
+                            (let [no-bracket (cstr/replace as-of-timestamp #"\[.*\]$" "")]
+                              ;; Ensure it ends with Z
+                              (if (cstr/ends-with? no-bracket "Z")
+                                no-bracket
+                                (str no-bracket "Z")))
+                            as-of-timestamp)
           ;; Insert FOR SYSTEM_TIME AS OF after the table name in FROM clause with line breaks
           ;; Match: FROM table_name (with optional schema prefix and alias)
-          final-sql (clojure.string/replace 
+          final-sql (cstr/replace
                      sql
                      #"(?i)(FROM\s+)([a-zA-Z_][a-zA-Z0-9_\.]*)"
                      (str "$1$2 \nFOR SYSTEM_TIME AS OF TIMESTAMP '" clean-timestamp "'\n"))]
-      (println "[SQL-PARSER] Adding AS OF clause. Original SQL:" sql "Timestamp:" as-of-timestamp "Final SQL:" final-sql)
+      (println "[SQL-PARSER] Adding AS OF clause. Original SQL:" (cstr/replace (str sql) #"[\r\n]+" " ")
+               "Timestamp:" as-of-timestamp "Final SQL:" (cstr/replace (str final-sql) #"[\r\n]+" " "))
       final-sql)))
 
 (defn extract-tables
@@ -49,10 +51,10 @@
   ;; Use regex extraction which handles any level of nesting reliably
   ;; This approach finds all "FROM table_name" patterns regardless of nesting depth
   (let [;; First, remove string literals to avoid false matches
-        cleaned-sql (clojure.string/replace sql #"'[^']*'" "")
+        cleaned-sql (cstr/replace sql #"'[^']*'" "")
         ;; Also remove content inside parentheses that look like function calls
         ;; but keep subquery parentheses
-        cleaned-sql2 (clojure.string/replace cleaned-sql #"\w+\([^)]*\)" "")
+        cleaned-sql2 (cstr/replace cleaned-sql #"\w+\([^)]*\)" "")
         ;; Find all FROM table_name patterns (not followed by opening paren to avoid subqueries)
         ;; This will match: FROM sales, FROM orders, etc. even in nested queries
         matches (re-seq #"(?i)FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)(?:\s|,|\)|$)" cleaned-sql2)]
@@ -74,7 +76,7 @@
     (catch Exception e
       ;; Fallback: simple regex replacement
       (if (re-find #"(?i)\s+LIMIT\s+\d+" sql)
-        (clojure.string/replace sql #"(?i)(\s+LIMIT\s+)\d+" (str "$1" new-limit))
+        (cstr/replace sql #"(?i)(\s+LIMIT\s+)\d+" (str "$1" new-limit))
         (str sql " LIMIT " new-limit)))))
 
 (defn extract-where-clause
@@ -90,7 +92,7 @@
     (catch Exception e
       ;; Fallback: regex extraction
       (when-let [match (re-find #"(?i)(WHERE\s+.+?)(?:\s+ORDER\s+BY|\s+GROUP\s+BY|\s+LIMIT|\s+FOR\s+|$)" sql)]
-        (clojure.string/trim (second match))))))
+        (cstr/trim (second match))))))
 
 (defn remove-where-clause
   "Remove WHERE clause from a SQL query"
@@ -104,21 +106,21 @@
       (.toString stmt))
     (catch Exception e
       ;; Fallback: regex removal
-      (clojure.string/replace sql #"(?i)\s+WHERE\s+.*?(?=\s+ORDER\s+BY|\s+GROUP\s+BY|\s+LIMIT|$)" ""))))
+      (cstr/replace sql #"(?i)\s+WHERE\s+.*?(?=\s+ORDER\s+BY|\s+GROUP\s+BY|\s+LIMIT|$)" ""))))
 
 (defn get-query-type
   "Determine the type of SQL query (SELECT, INSERT, UPDATE, DELETE, etc.)"
   [sql]
-  (let [trimmed (clojure.string/trim sql)
-        upper (clojure.string/upper-case trimmed)]
+  (let [trimmed (cstr/trim sql)
+        upper (cstr/upper-case trimmed)]
     (cond
-      (clojure.string/starts-with? upper "SELECT") :select
-      (clojure.string/starts-with? upper "INSERT") :insert
-      (clojure.string/starts-with? upper "UPDATE") :update
-      (clojure.string/starts-with? upper "DELETE") :delete
-      (clojure.string/starts-with? upper "CREATE") :create
-      (clojure.string/starts-with? upper "DROP") :drop
-      (clojure.string/starts-with? upper "ALTER") :alter
+      (cstr/starts-with? upper "SELECT") :select
+      (cstr/starts-with? upper "INSERT") :insert
+      (cstr/starts-with? upper "UPDATE") :update
+      (cstr/starts-with? upper "DELETE") :delete
+      (cstr/starts-with? upper "CREATE") :create
+      (cstr/starts-with? upper "DROP") :drop
+      (cstr/starts-with? upper "ALTER") :alter
       :else :unknown)))
 
 (comment

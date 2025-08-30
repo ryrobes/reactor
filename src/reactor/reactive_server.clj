@@ -29,6 +29,111 @@
 ;; Feature flag to enable new pipeline
 (defonce use-new-pipeline? (atom false))
 
+;; ============================================================================
+;; Query History Cache - Table-change driven invalidation
+;; ============================================================================
+
+;; Cache structure: {cache-key -> {:resolved-sql "...", :tables [...], :result [...], :timestamp ms}}
+;; cache-key = [session-id original-sql]
+(defonce query-history-cache (atom {}))
+
+;; Index: table-name -> #{cache-keys that use this table}
+(defonce query-history-table-index (atom {}))
+
+(defn extract-tables-from-sql
+  "Extract table names from SQL query"
+  [sql]
+  (try
+    (require '[reactor.sql-parser :as parser])
+    (let [extract-fn (ns-resolve 'reactor.sql-parser 'extract-tables)]
+      (set (map str/lower-case (extract-fn sql))))
+    (catch Exception e
+      (log/warn "[QUERY-HISTORY] Failed to extract tables from SQL:" (.getMessage e))
+      #{})))
+
+(defn update-table-index!
+  "Update the table -> cache-keys index"
+  [cache-key tables operation]
+  (case operation
+    :add
+    (doseq [table tables]
+      (swap! query-history-table-index update table (fnil conj #{}) cache-key))
+    
+    :remove
+    (doseq [table tables]
+      (swap! query-history-table-index update table disj cache-key))))
+
+(defn get-cached-query-history
+  "Get cached query history if still valid"
+  [session-id original-sql resolved-sql]
+  (let [cache-key [session-id original-sql]
+        cached (get @query-history-cache cache-key)]
+    (when (and cached
+               ;; Check if resolved SQL matches
+               (= (:resolved-sql cached) resolved-sql))
+      ;; (log/info (str "[QUERY-HISTORY] Cache HIT for session: " session-id 
+      ;;               " | Tables: " (:tables cached)
+      ;;               " | No table changes detected"))
+      (:result cached))))
+
+(defn cache-query-history!
+  "Cache query history result with table tracking"
+  [session-id original-sql resolved-sql result]
+  (let [cache-key [session-id original-sql]
+        tables (extract-tables-from-sql resolved-sql)
+        ;; Remove old entry from index if it exists
+        old-entry (get @query-history-cache cache-key)]
+    (when old-entry
+      (update-table-index! cache-key (:tables old-entry) :remove))
+    ;; Add new entry
+    (swap! query-history-cache assoc cache-key 
+           {:resolved-sql resolved-sql
+            :tables tables
+            :result result
+            :timestamp (System/currentTimeMillis)})
+    ;; Update index
+    (update-table-index! cache-key tables :add)
+    (log/debug (str "[QUERY-HISTORY] Cached history for session: " session-id 
+                   " | Tables: " tables))))
+
+(defn invalidate-query-history-for-table!
+  "Invalidate all cache entries that use a specific table"
+  [table-name]
+  (let [table-key (str/lower-case table-name)
+        affected-keys (get @query-history-table-index table-key #{})]
+    (when (seq affected-keys)
+      (log/info (str "[QUERY-HISTORY] Table '" table-name 
+                    "' changed, invalidating " (count affected-keys) " cached queries"))
+      ;; Get all tables used by affected cache entries before removing them
+      (let [all-tables-to-clean (reduce (fn [tables cache-key]
+                                          (if-let [entry (get @query-history-cache cache-key)]
+                                            (into tables (:tables entry))
+                                            tables))
+                                        #{}
+                                        affected-keys)]
+        ;; Remove from cache
+        (swap! query-history-cache 
+               (fn [cache]
+                 (apply dissoc cache affected-keys)))
+        ;; Clean up index for all affected tables
+        (doseq [table all-tables-to-clean]
+          (swap! query-history-table-index update table 
+                 (fn [keys] (apply disj keys affected-keys))))))))
+
+(defn invalidate-query-history-for-tables!
+  "Invalidate cache entries for multiple tables"
+  [table-names]
+  (doseq [table table-names]
+    (invalidate-query-history-for-table! table)))
+
+;; Hook to be called by Kafka when tables change
+(defn on-tables-changed!
+  "Called by Kafka reactive system when tables are mutated"
+  [tables]
+  (when (seq tables)
+    (log/debug (str "[QUERY-HISTORY] Tables changed via Kafka: " tables))
+    (invalidate-query-history-for-tables! tables)))
+
 (defn enable-new-pipeline! []
   (reset! use-new-pipeline? true)
   (log/info "[REACTIVE-SERVER] New SQL pipeline ENABLED"))
@@ -508,19 +613,41 @@
                                   original-sql))
                               original-sql)]
             (if node
-              (let [_ (when (not= original-sql resolved-sql)
-                       (log/info "[QUERY-HISTORY] Resolved templates for history"
-                                "\n  Original:" (if (> (count original-sql) 100)
-                                                  (str (subs original-sql 0 100) "...")
-                                                  original-sql)
-                                "\n  Resolved:" (if (> (count resolved-sql) 100)
-                                                  (str (subs resolved-sql 0 100) "...")
-                                                  resolved-sql)))
-                    result (time-travel/get-query-history-range node resolved-sql limit (get body :sub-id))]
+              ;; Check cache first
+              (if-let [cached-result (get-cached-query-history session-id original-sql resolved-sql)]
+                ;; Return cached result
                 {:status 200
                  :headers {"Content-Type" "application/json"
                           "Access-Control-Allow-Origin" "*"}
-                 :body (json/generate-string result)})
+                 :body (json/generate-string cached-result)}
+                ;; Cache miss or resolved SQL changed - fetch new history
+                (let [_ (when (not= original-sql resolved-sql)
+                         (log/info (str "[QUERY-HISTORY] Resolved templates for history"
+                                        "\n  Original:" (if (> (count original-sql) 100)
+                                                          (str (subs original-sql 0 100) "...")
+                                                          original-sql)
+                                        "\n  Resolved:" (if (> (count resolved-sql) 100)
+                                                          (str (subs resolved-sql 0 100) "...")
+                                                          resolved-sql))))
+                      _ (cond
+                         ;; Never cached before
+                         (nil? (get @query-history-cache [session-id original-sql]))
+                         (log/info "[QUERY-HISTORY] First time fetching history for this query")
+                         
+                         ;; Cached but resolved SQL changed
+                         (not= (:resolved-sql (get @query-history-cache [session-id original-sql])) resolved-sql)
+                         (log/info "[QUERY-HISTORY] Template values changed, fetching new history")
+                         
+                         ;; Must have been invalidated by table change
+                         :else
+                         (log/info "[QUERY-HISTORY] Cache was invalidated by table change, fetching new history"))
+                      result (time-travel/get-query-history-range node resolved-sql limit (get body :sub-id))
+                      ;; Cache the result
+                      _ (cache-query-history! session-id original-sql resolved-sql result)]
+                  {:status 200
+                   :headers {"Content-Type" "application/json"
+                            "Access-Control-Allow-Origin" "*"}
+                   :body (json/generate-string result)}))
               {:status 500
                :headers {"Content-Type" "application/json"
                         "Access-Control-Allow-Origin" "*"}

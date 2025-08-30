@@ -10,11 +10,14 @@
             [reactor.xtdb-store :as xts]
             [reactor.meta-tracking :as meta]
             [reactor.temporal-cache :as cache]
+            [io.aviso.ansi :as ansi]
             ;[reactor.time-travel-sql :as time-travel]
             [reactor.subscriptions.store :as sub-store]
             [reactor.subscriptions.differ :as differ]
+            [reactor.structural-diff :as sdiff]
             [reactor.log :as log]
             [clojure.string :as str]
+            [clojure.set :as set]
             [clojure.core.async :as async]))
 
 ;; ============================================================================
@@ -182,9 +185,17 @@
           tables (if (str/blank? sql)
                   []
                   (kafka/extract-tables-from-sql sql))
-          is-query? (and sql 
-                        (str/starts-with? (str/lower-case (str/trim sql)) "select"))
-          is-mutation? (and sql (not is-query?))]
+          trimmed-sql (when sql (str/trim sql))
+          lower-sql (when trimmed-sql (str/lower-case trimmed-sql))
+          is-query? (and lower-sql 
+                        (str/starts-with? lower-sql "select"))
+          is-mutation? (and sql (not is-query?))
+          _ (log/debug (str "[METADATA] SQL analysis:"
+                           "\n  Original SQL (first 100 chars): " (when sql (subs sql 0 (min 100 (count sql))))
+                           "\n  Trimmed/lower (first 20 chars): " (when lower-sql (subs lower-sql 0 (min 20 (count lower-sql))))
+                           "\n  is-query?: " is-query?
+                           "\n  is-mutation?: " is-mutation?
+                           "\n  Tables: " tables))]
       (assoc ctx
              :tables tables
              :is-query? is-query?
@@ -457,18 +468,156 @@
           (sub-store/add! new-sub)
           (assoc ctx :subscription new-sub))))))
 
+(defn detect-edn-fields
+  "Detect which fields contain EDN data based on content"
+  [rows]
+  (when-let [sample-row (first rows)]
+    (into #{}
+          (filter (fn [field-key]
+                    (let [value (get sample-row field-key)]
+                      (and (string? value)
+                           (or (str/starts-with? value "{")
+                               (str/starts-with? value "[")
+                               (str/starts-with? value "(")
+                               (str/starts-with? value "#{")))))
+                  (keys sample-row)))))
+
+(defn calculate-diff-size
+  "Calculate approximate size of diff vs full results"
+  [diff results]
+  (let [result-size (* (count results) 
+                      (if (empty? results) 0 (count (pr-str (first results)))))
+        diff-size (count (pr-str diff))]
+    {:result-size result-size
+     :diff-size diff-size
+     :compression-ratio (if (zero? result-size) 
+                         1.0 
+                         (float (/ diff-size result-size)))}))
+
 (defn calculate-diff
-  "Calculate diff between previous and current results"
+  "Calculate diff between previous and current results with smart mode selection"
   [ctx]
+  (log/debug (str "[DIFF] calculate-diff called"
+                 "\n  has-error? " (boolean (:error ctx))
+                 "\n  is-mutation? " (:is-mutation? ctx)
+                 "\n  is-query? " (:is-query? ctx)
+                 "\n  has-previous? " (boolean (:previous-results ctx))
+                 "\n  previous-count: " (count (:previous-results ctx))
+                 "\n  current-count: " (count (get-in ctx [:result :results] []))))
   (if (or (:error ctx)
           (:is-mutation? ctx)
           (not (:is-query? ctx)))
     ctx
     (let [previous (:previous-results ctx)
           current (get-in ctx [:result :results] [])
-          ;; Use field-level diff by default
+          ;; Skip diff if no previous results
+          _ (when-not previous
+              (log/info "[DIFF] No previous results, skipping diff calculation"))
           diff (when previous
-                (differ/calculate-diff previous current {:mode :field}))]
+                (let [;; Detect EDN fields in the data
+                      edn-fields (detect-edn-fields current)
+                      _ (when (seq edn-fields)
+                          (log/debug "[DIFF] Detected EDN fields:" edn-fields))
+                      
+                      ;; Determine diff mode
+                      mode (cond
+                            ;; Use structural diff if EDN fields detected
+                            (seq edn-fields) :structural
+                            ;; Use field diff for smaller result sets
+                            (< (count current) 100) :field
+                            ;; Use row diff for larger sets
+                            :else :row)
+                      
+                      ;; Calculate the appropriate diff
+                      calculated-diff (case mode
+                                       :structural
+                                       ;; Use field diff but with structural support for EDN fields
+                                       (let [id-key (differ/get-id-key previous current)
+                                             prev-by-id (differ/identify-by id-key previous)
+                                             curr-by-id (differ/identify-by id-key current)
+                                             prev-ids (set (keys prev-by-id))
+                                             curr-ids (set (keys curr-by-id))
+                                             added-ids (set/difference curr-ids prev-ids)
+                                             removed-ids (set/difference prev-ids curr-ids)
+                                             common-ids (set/intersection prev-ids curr-ids)
+                                             ;; Calculate structural diffs for common rows
+                                             updated-entries (keep 
+                                                            (fn [id]
+                                                              (let [old-row (prev-by-id id)
+                                                                    new-row (curr-by-id id)
+                                                                    changes (sdiff/compute-enhanced-field-diff 
+                                                                           old-row new-row
+                                                                           :deep-diff? true
+                                                                           :edn-fields edn-fields)]
+                                                                (when changes
+                                                                  {:id id :field-changes changes})))
+                                                            common-ids)]
+                                         {:type :field-diff
+                                          :mode :structural
+                                          :id-key id-key
+                                          :added (mapv curr-by-id added-ids)
+                                          :removed (mapv prev-by-id removed-ids)
+                                          :updated updated-entries})
+                                       
+                                       :field
+                                       (differ/calculate-diff previous current {:mode :field})
+                                       
+                                       :row
+                                       (differ/calculate-diff previous current {:mode :row}))
+                      
+                      ;; Check if we should use the diff or send full update
+                      ;; For structural mode, we need to check the threshold ourselves
+                      final-diff (if (= mode :structural)
+                                  (let [size-info (calculate-diff-size calculated-diff current)
+                                        compression-ratio (:compression-ratio size-info)
+                                        threshold 0.7]
+                                    (if (> compression-ratio threshold)
+                                      ;; Diff is too large, use full update
+                                      {:type :full
+                                       :results current
+                                       :rejected-reason :too-large
+                                       :compression-ratio compression-ratio}
+                                      ;; Use the diff
+                                      calculated-diff))
+                                  ;; For field and row modes, differ already checked threshold
+                                  calculated-diff)
+                      
+                      ;; Calculate size metrics for logging
+                      size-info (when calculated-diff 
+                                 (calculate-diff-size calculated-diff current))
+                      
+                      ;; Log diff information
+                      _ (when calculated-diff
+                          (if (= (:type final-diff) :full)
+                            ;; Log that we're using full update
+                            (log/info (ansi/cyan (str "[DIFF] Mode: " mode
+                                                      " | Type: FULL UPDATE (diff inefficient)"
+                                                      " | Previous: " (count previous) " rows"
+                                                      " | Current: " (count current) " rows \n"
+                                                      "                               Result size: " (:result-size size-info) " bytes"
+                                                      " | Diff size: " (:diff-size size-info) " bytes"
+                                                      " | Compression: " (format "%.1f%%"
+                                                                                 (* 100 (:compression-ratio size-info)))
+                                                      " | Savings: " (format "%.1f%%"
+                                                                             (* 100 (- 1 (:compression-ratio size-info))))
+                                                      " | SENDING FULL RESULTS (diff "
+                                                      (format "%.0f%%" (* 100 (:compression-ratio size-info)))
+                                                      " of original)")))
+                            ;; Log normal diff usage
+                            (log/info (ansi/cyan (str "[DIFF] Mode: " mode
+                                                      " | Type: " (:type calculated-diff)
+                                                      " | Previous: " (count previous) " rows"
+                                                      " | Current: " (count current) " rows \n"
+                                                      "                               Result size: " (:result-size size-info) " bytes"
+                                                      " | Diff size: " (:diff-size size-info) " bytes"
+                                                      " | Compression: " (format "%.1f%%"
+                                                                                 (* 100 (:compression-ratio size-info)))
+                                                      " | Savings: " (format "%.1f%%"
+                                                                             (* 100 (- 1 (:compression-ratio size-info))))
+                                                      (when (seq edn-fields)
+                                                        (str " | EDN fields: " edn-fields))
+                                                      " | USING DIFF")))))]
+                  final-diff))]
       (assoc ctx :diff diff))))
 
 (defn update-subscription-state
