@@ -87,7 +87,7 @@
                       :error-callback (fn [error]
                                        (r/dispatch! [:update-block block-id 
                                                    {:error (str error)
-                                                    :loading false}]))}))))
+                                                    :loading false}]))})))
 
 (defn reactive-query-block
   "Enhanced query block with reactive subscriptions"

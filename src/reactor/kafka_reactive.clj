@@ -14,12 +14,15 @@
             ;[reactor.sql-template :as sql-template]
             ;[reactor.sql-template-temporal :as template-temporal]
             ;[reactor.sql-resolver :as resolver]
+            [reactor.utils :as ut]
             [org.httpkit.server :as http-server]
             [clojure.tools.logging :as log]
             [clojure.string :as str]
             [clojure.set :as set]
             [clojure.walk :as walk]
-            [clojure.core.async :as async :refer [go go-loop chan <! >! close! timeout]]))
+            [clojure.core.async :as async :refer [go go-loop chan <! >! close! timeout]]
+            ;[reactor.reactive.coordinator :as coordinator]
+            ))
 
 ;; ============================================================================
 ;; Configuration
@@ -210,15 +213,15 @@
                   :temporal? is-temporal?  ;; Mark temporal queries (for logging/debugging)
                   :inert? false             ;; NO LONGER INERT - all queries participate in reactive cycle
                   :parent-blocks parent-block-ids}]  ;; Track which blocks this subscription depends on
-    
+
     ;; If updating existing subscription, first clean up old table mappings
     (when existing-sub
       (doseq [old-table (:tables existing-sub)]
         (swap! table-to-subs update (str/lower-case old-table) disj sub-id)))
-    
+
     ;; Register the subscription
     (swap! active-subscriptions assoc sub-id sub-info)
-    
+
     ;; Add new table mappings (idempotent - uses sets)
     (doseq [table tables]
       (swap! table-to-subs update (str/lower-case table) (fnil conj #{}) sub-id))
@@ -228,9 +231,10 @@
         (swap! subscription-dependencies update parent-id (fnil conj #{}) sub-id)))
     (log/info "Registered" (if is-temporal? "TEMPORAL (reactive)" "REACTIVE")
               "subscription" (ansi/yellow (str sub-id)) "for tables:" tables "- will react to changes \n"
-              "client-id: " client-id " session-id: " session-id " is-temporal?: " is-temporal? " parent-block-ids: " 
+              "client-id: " client-id " session-id: " session-id " is-temporal?: " is-temporal? " parent-block-ids: "
               (str "[" (str/join ", " (for [p parent-block-ids] (ansi/red (str p)))) "]") "\n"
               (ansi/yellow (str sub-id)) " SQL: " (ansi/cyan (str/replace (str sql) #"[\r\n]+" " ")))
+    (ut/pp [:sub-info sub-info])
     ;; Track subscription creation
     (meta/track-subscription-created! sub-id session-id sql tables)
     sub-id))

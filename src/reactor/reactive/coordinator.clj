@@ -5,7 +5,11 @@
             [reactor.subscriptions.store :as sub-store]
             [reactor.kafka-reactive :as kafka]
             [clojure.tools.logging :as log]
-            [clojure.core.async :as async :refer [go go-loop chan <! >! timeout]]))
+            ;[puget.printer :as puget]
+            [reactor.utils :as ut]
+            [clojure.core.async :as async :refer [go go-loop chan <! >! timeout]])
+  ;(:import [jline TerminalFactory])
+  )
 
 ;; ============================================================================
 ;; Reaction Execution
@@ -16,12 +20,14 @@
    Returns the result with subscription metadata."
   [subscription]
   (let [sub-id (:id subscription)
-        session-id (:session-id subscription)]
-    
-    (log/info "[COORDINATOR] Executing reaction for subscription" sub-id
-             "Session:" session-id)
-    
-    ;; Execute through the pipeline - it handles everything!
+        session-id (:session-id subscription)
+        last-results-row (first (get subscription :last-results []))]
+
+    (log/info "[COORDINATOR] Executing reaction for subscription" sub-id "Session:" session-id)
+    (ut/pp [["[COORDINATOR] Executing reaction for subscription" sub-id "Session:" session-id]
+         (assoc (dissoc subscription :last-results) :last-results-1-row last-results-row)])
+
+    ;; Execute through the common query/sub pipeline - handles everything
     (let [result (pipeline/execute-reaction sub-id)]
       (assoc result
              :session-id session-id

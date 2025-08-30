@@ -25,6 +25,7 @@ todo-out
 .directory
 resources/public/js/compiled
 resources/public/js/rabbit.js
+rabbit.js
 resources/public/js/magic.js
 resources/public/js/main.js
 resources/public/js/todo.js

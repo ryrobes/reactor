@@ -80,12 +80,12 @@
                    (js/console.log "🌖 [REACTIVE-QUERIES] Block" (str block-id) 
                                    "got update:" (strunc (str (get new-val :data)) 100) "for:" (strunc (str sql) 100))
                    ;; Store results in our separate atom, not in app state
-                   (swap! block-results assoc block-id 
+                   (swap! block-results assoc block-id
                           (if (:error new-val)
-                            {:error (:error new-val) 
+                            {:error (:error new-val)
                              :results nil
                              :executed-sql (:executed-sql new-val)}
-                            {:results (:data new-val) 
+                            {:results (:data new-val)
                              :error nil
                              :executed-sql (:executed-sql new-val)}))
                    ;; Trigger any registered hooks (for time travel refresh)

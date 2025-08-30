@@ -22,6 +22,8 @@
                  [org.clojure/tools.logging "1.2.4"]
                  [ch.qos.logback/logback-classic "1.4.11"]
                  [io.aviso/pretty "1.4.4"]
+                 [com.ryrobes/puget "1.3.5-SNAPSHOT"]
+                 [jline "2.14.6"] ;; to detect console width
                  ;; Kafka integration for XTDB transaction log
                  [fundingcircle/jackdaw "0.9.12"] ;;  :exclusions [org.apache.kafka/kafka-streams-test-utils]
                  [com.taoensso/nippy "3.3.0"]
